@@ -1,0 +1,171 @@
+/**
+ * GuardClaw Types
+ * 
+ * Core type definitions for the GuardClaw plugin.
+ */
+
+export type SensitivityLevel = "S1" | "S2" | "S3";
+
+export type SensitivityLevelNumeric = 1 | 2 | 3;
+
+export type DetectorType = "ruleDetector" | "localModelDetector";
+
+export type Checkpoint = "onUserMessage" | "onToolCallProposed" | "onToolCallExecuted";
+
+export type PrivacyConfig = {
+  enabled?: boolean;
+  /** S2 handling: "proxy" strips PII via local HTTP proxy (default), "local" routes to local model */
+  s2Policy?: "proxy" | "local";
+  /** Port for the privacy proxy server (default: 8403) */
+  proxyPort?: number;
+  checkpoints?: {
+    onUserMessage?: DetectorType[];
+    onToolCallProposed?: DetectorType[];
+    onToolCallExecuted?: DetectorType[];
+  };
+  rules?: {
+    keywords?: {
+      S2?: string[];
+      S3?: string[];
+    };
+    /** Regex patterns for matching sensitive content (strings are compiled to RegExp) */
+    patterns?: {
+      S2?: string[];
+      S3?: string[];
+    };
+    tools?: {
+      S2?: {
+        tools?: string[];
+        paths?: string[];
+      };
+      S3?: {
+        tools?: string[];
+        paths?: string[];
+      };
+    };
+  };
+  localModel?: {
+    enabled?: boolean;
+    provider?: string;
+    model?: string;
+    endpoint?: string;
+  };
+  guardAgent?: {
+    id?: string;
+    workspace?: string;
+    model?: string;
+  };
+  session?: {
+    isolateGuardHistory?: boolean;
+    /** Base directory for session histories (default: ~/.openclaw) */
+    baseDir?: string;
+  };
+};
+
+export type DetectionContext = {
+  checkpoint: Checkpoint;
+  message?: string;
+  toolName?: string;
+  toolParams?: Record<string, unknown>;
+  toolResult?: unknown;
+  sessionKey?: string;
+  agentId?: string;
+  recentContext?: string[];
+  /** Pre-read file content for file-reference messages (used for classification) */
+  fileContentSnippet?: string;
+};
+
+export type DetectionResult = {
+  level: SensitivityLevel;
+  levelNumeric: SensitivityLevelNumeric;
+  reason?: string;
+  detectorType: DetectorType;
+  confidence?: number;
+};
+
+// ── Router Pipeline Types ───────────────────────────────────────────────
+
+export type RouterAction = "passthrough" | "redirect" | "transform" | "block";
+
+export type RouterDecision = {
+  level: SensitivityLevel;
+  action?: RouterAction;
+  target?: { provider: string; model: string };
+  /** When action is "transform", the transformed prompt content */
+  transformedContent?: string;
+  reason?: string;
+  confidence?: number;
+  routerId?: string;
+};
+
+/**
+ * Interface for pluggable routers.
+ * The built-in "privacy" router wraps the existing detector + desensitization logic.
+ * Users can implement custom routers (cost optimization, content filtering, etc.)
+ * and register them in the pipeline config.
+ */
+export interface GuardClawRouter {
+  id: string;
+  detect(
+    context: DetectionContext,
+    config: Record<string, unknown>,
+  ): Promise<RouterDecision>;
+}
+
+export type RouterRegistration = {
+  enabled?: boolean;
+  /** "builtin" for privacy/rules, "custom" for user modules */
+  type?: "builtin" | "custom";
+  /** Path to custom router module (type="custom" only) */
+  module?: string;
+  /** Arbitrary config passed to the router's detect() */
+  options?: Record<string, unknown>;
+};
+
+export type PipelineConfig = {
+  onUserMessage?: string[];
+  onToolCallProposed?: string[];
+  onToolCallExecuted?: string[];
+};
+
+// ── Session / History Types ─────────────────────────────────────────────
+
+export type SessionPrivacyState = {
+  sessionKey: string;
+  isPrivate: boolean;
+  highestLevel: SensitivityLevel;
+  detectionHistory: Array<{
+    timestamp: number;
+    level: SensitivityLevel;
+    checkpoint: Checkpoint;
+    reason?: string;
+  }>;
+};
+
+export function levelToNumeric(level: SensitivityLevel): SensitivityLevelNumeric {
+  switch (level) {
+    case "S1":
+      return 1;
+    case "S2":
+      return 2;
+    case "S3":
+      return 3;
+  }
+}
+
+export function numericToLevel(numeric: SensitivityLevelNumeric): SensitivityLevel {
+  switch (numeric) {
+    case 1:
+      return "S1";
+    case 2:
+      return "S2";
+    case 3:
+      return "S3";
+  }
+}
+
+export function maxLevel(...levels: SensitivityLevel[]): SensitivityLevel {
+  const numeric = levels.map(levelToNumeric);
+  const max = Math.max(...numeric) as SensitivityLevelNumeric;
+  return numericToLevel(max);
+}

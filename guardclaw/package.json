@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/guardclaw",
+  "version": "2026.3.0",
+  "description": "Privacy-aware plugin with sensitivity detection, guard agent support, and built-in privacy proxy",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
