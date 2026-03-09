@@ -20,9 +20,9 @@ import { tokenSaverRouter } from "./src/routers/token-saver.js";
 import type { PrivacyConfig, PipelineConfig, RouterRegistration } from "./src/types.js";
 import type { ProxyHandle } from "./src/privacy-proxy.js";
 
-function getPrivacyConfig(pluginConfig: Record<string, unknown> | undefined): PrivacyConfig & typeof defaultPrivacyConfig {
+function getPrivacyConfig(pluginConfig: Record<string, unknown> | undefined): PrivacyConfig {
   const userConfig = (pluginConfig?.privacy ?? {}) as PrivacyConfig;
-  return { ...defaultPrivacyConfig, ...userConfig };
+  return { ...defaultPrivacyConfig, ...userConfig } as PrivacyConfig;
 }
 
 const plugin = {

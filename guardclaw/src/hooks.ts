@@ -162,7 +162,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // S2-proxy path
       if (decision.level === "S2" && decision.target?.provider === "guardclaw-privacy") {
         markSessionAsPrivate(sessionKey, "S2");
-        const defaultProvider = api.config.agents?.defaults?.provider ?? "openai";
+        const defaultProvider = (api.config.agents?.defaults as Record<string, unknown> | undefined)?.provider as string ?? "openai";
         const providerConfig = api.config.models?.providers?.[defaultProvider];
         if (providerConfig) {
           stashOriginalProvider(sessionKey, {

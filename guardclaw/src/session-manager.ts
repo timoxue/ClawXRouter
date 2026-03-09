@@ -194,7 +194,7 @@ export class DualSessionManager {
     agentId: string = "main",
     historyType?: "full" | "clean"
   ): Promise<void> {
-    const types = historyType ? [historyType] : ["full", "clean"];
+    const types: Array<"full" | "clean"> = historyType ? [historyType] : ["full", "clean"];
 
     for (const type of types) {
       try {

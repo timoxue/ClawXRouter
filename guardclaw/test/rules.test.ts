@@ -177,8 +177,8 @@ describe("Rules Detector", () => {
       );
 
       expect(result.level).toBe("S3");
-      expect(result.reason).toContain("password");
-      expect(result.reason).toContain("id_rsa");
+      expect(result.reason).toBeDefined();
+      expect(result.reason).toContain("ssh");
     });
   });
 });

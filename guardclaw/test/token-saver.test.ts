@@ -252,8 +252,8 @@ describe("Token-Saver Router", () => {
       );
 
       const callArgs = mockCallChat.mock.calls[0];
-      const messages = callArgs[2] as Array<{ content: string }>;
-      const userMessage = messages.find((m) => (m as { role: string }).role === "user");
+      const messages = callArgs[2] as Array<{ role: string; content: string }>;
+      const userMessage = messages.find((m) => m.role === "user");
       expect(userMessage?.content).toHaveLength(1000);
     });
   });
