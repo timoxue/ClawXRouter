@@ -29,13 +29,19 @@ export async function callChatCompletion(
     maxTokens?: number;
     stop?: string[];
     frequencyPenalty?: number;
+    apiKey?: string;
   },
 ): Promise<string> {
   const url = `${endpoint}/v1/chat/completions`;
 
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (options?.apiKey) {
+    headers["Authorization"] = `Bearer ${options.apiKey}`;
+  }
+
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({
       model,
       messages,
@@ -272,7 +278,7 @@ async function callLocalModel(
       { role: "system", content: systemPrompt },
       { role: "user", content: finalUser },
     ],
-    { temperature: 0.1, maxTokens: 800 },
+    { temperature: 0.1, maxTokens: 800, apiKey: config.localModel?.apiKey },
   );
 }
 
@@ -296,7 +302,7 @@ export async function desensitizeWithLocalModel(
     const model = config.localModel?.model ?? "openbmb/minicpm4.1";
 
     // Step 1: Ask the model to identify PII as JSON
-    const piiItems = await extractPiiWithModel(endpoint, model, content);
+    const piiItems = await extractPiiWithModel(endpoint, model, content, config.localModel?.apiKey);
 
     if (piiItems.length === 0) {
       return { desensitized: content, wasModelUsed: true };
@@ -391,6 +397,7 @@ async function extractPiiWithModel(
   endpoint: string,
   model: string,
   content: string,
+  apiKey?: string,
 ): Promise<Array<{ type: string; value: string }>> {
   const textSnippet = content.slice(0, 3000);
 
@@ -413,7 +420,7 @@ async function extractPiiWithModel(
       { role: "system", content: systemPrompt },
       { role: "user", content: userMessage },
     ],
-    { temperature: 0.0, maxTokens: 2500, stop: ["Input:", "Task:"] },
+    { temperature: 0.0, maxTokens: 2500, stop: ["Input:", "Task:"], apiKey },
   );
 
   return parsePiiJson(raw);
@@ -550,7 +557,7 @@ function parseModelResponse(response: string): {
 export async function callLocalModelDirect(
   systemPrompt: string,
   userMessage: string,
-  config: { endpoint?: string; model?: string },
+  config: { endpoint?: string; model?: string; apiKey?: string },
 ): Promise<string> {
   const endpoint = config.endpoint ?? "http://localhost:11434";
   const model = config.model ?? "openbmb/minicpm4.1";
@@ -567,6 +574,7 @@ export async function callLocalModelDirect(
       maxTokens: 1500,
       frequencyPenalty: 0.5,
       stop: ["[message_id:", "[Message_id:", "[system:", "Instructions:", "Data:"],
+      apiKey: config.apiKey,
     },
   );
 

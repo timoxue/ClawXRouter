@@ -46,15 +46,30 @@ export const guardClawPrivacyProvider = {
  * without needing to know which provider owns the model at registration time.
  */
 export function mirrorAllProviderModels(
-  config: { models?: { providers?: Record<string, { models?: Record<string, unknown> }> } },
-): Record<string, unknown> {
-  const mirrored: Record<string, unknown> = {};
+  config: { models?: { providers?: Record<string, { models?: unknown }> } },
+): unknown[] {
+  const seen = new Set<string>();
+  const mirrored: unknown[] = [];
   const providers = config.models?.providers ?? {};
 
   for (const providerConfig of Object.values(providers)) {
     if (!providerConfig.models) continue;
-    for (const [modelId, modelDef] of Object.entries(providerConfig.models)) {
-      mirrored[modelId] = modelDef;
+    const models = providerConfig.models;
+    if (Array.isArray(models)) {
+      for (const m of models) {
+        const id = (m as Record<string, unknown>)?.id as string | undefined;
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          mirrored.push(m);
+        }
+      }
+    } else if (typeof models === "object" && models !== null) {
+      for (const [modelId, modelDef] of Object.entries(models as Record<string, unknown>)) {
+        if (!seen.has(modelId)) {
+          seen.add(modelId);
+          mirrored.push({ id: modelId, ...(typeof modelDef === "object" && modelDef !== null ? modelDef as Record<string, unknown> : {}) });
+        }
+      }
     }
   }
 

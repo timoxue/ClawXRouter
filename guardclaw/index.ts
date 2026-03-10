@@ -54,7 +54,7 @@ const plugin = {
       baseUrl: `http://127.0.0.1:${proxyPort}/v1`,
       api: "openai-completions",
       apiKey: "guardclaw-proxy-handles-auth",
-      models: mirrorAllProviderModels(api.config as { models?: { providers?: Record<string, { models?: Record<string, unknown> }> } }),
+      models: mirrorAllProviderModels(api.config as { models?: { providers?: Record<string, { models?: unknown }> } }),
     };
 
     // Set default provider target for the proxy

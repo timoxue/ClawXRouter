@@ -49,6 +49,7 @@ export type PrivacyConfig = {
     provider?: string;
     model?: string;
     endpoint?: string;
+    apiKey?: string;
   };
   guardAgent?: {
     id?: string;

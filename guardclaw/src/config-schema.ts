@@ -71,6 +71,7 @@ export const guardClawConfigSchema = Type.Object({
           provider: Type.Optional(Type.String()),
           model: Type.Optional(Type.String()),
           endpoint: Type.Optional(Type.String()),
+          apiKey: Type.Optional(Type.String()),
         }),
       ),
       guardAgent: Type.Optional(
