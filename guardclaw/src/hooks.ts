@@ -162,7 +162,9 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // S2-proxy path
       if (decision.level === "S2" && decision.target?.provider === "guardclaw-privacy") {
         markSessionAsPrivate(sessionKey, "S2");
-        const defaultProvider = (api.config.agents?.defaults as Record<string, unknown> | undefined)?.provider as string ?? "openai";
+        const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
+        const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
+        const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
         const providerConfig = api.config.models?.providers?.[defaultProvider];
         if (providerConfig) {
           stashOriginalProvider(sessionKey, {
@@ -213,8 +215,16 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       const privacyConfig = getPrivacyConfigFromApi(api);
 
-      // S3 or S2-local: inject guard agent system prompt
-      if (pending.level === "S3" || (pending.level === "S2" && (privacyConfig.s2Policy ?? "proxy") === "local")) {
+      // S3: keep original agent system prompt and skills — only inject file content if pre-read
+      if (pending.level === "S3") {
+        if (pending.preReadFileContent) {
+          return { prependContext: `[File content for analysis]\n\`\`\`\n${pending.preReadFileContent}\n\`\`\`` };
+        }
+        return;
+      }
+
+      // S2-local: inject guard agent system prompt
+      if (pending.level === "S2" && (privacyConfig.s2Policy ?? "proxy") === "local") {
         const guardPrompt = getGuardAgentSystemPrompt();
         return {
           prependSystemContext: guardPrompt,
@@ -480,7 +490,9 @@ export function registerHooks(api: OpenClawPluginApi): void {
         api.pluginConfig ?? {},
       );
 
-      if (decision.level === "S3" || decision.action === "block") {
+      // S3: subagent keeps original system prompt and skills (already routed to local model)
+      // Only block if the action explicitly requires it
+      if (decision.action === "block") {
         return {
           systemPrompt:
             `[PRIVACY GUARD] This task contains ${decision.level}-level content (${decision.reason ?? "sensitive data"}). ` +

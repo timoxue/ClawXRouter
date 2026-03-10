@@ -57,10 +57,10 @@ const plugin = {
       models: mirrorAllProviderModels(api.config as { models?: { providers?: Record<string, { models?: unknown }> } }),
     };
 
-    // Set default provider target for the proxy
-    const defaultProvider = (api.config.agents as Record<string, unknown> | undefined)?.defaults
-      ? ((api.config.agents as Record<string, unknown>).defaults as Record<string, unknown>)?.provider as string ?? "openai"
-      : "openai";
+    // Set default provider target for the proxy — extract provider from model.primary
+    const agentDefaults = (api.config.agents as Record<string, unknown> | undefined)?.defaults as Record<string, unknown> | undefined;
+    const primaryModelStr = (agentDefaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
+    const defaultProvider = (agentDefaults?.provider as string) || primaryModelStr.split("/")[0] || "openai";
     const providerConfig = models.providers?.[defaultProvider] as Record<string, unknown> | undefined;
     if (providerConfig) {
       setDefaultProviderTarget({

@@ -121,6 +121,14 @@ export type RouterRegistration = {
   module?: string;
   /** Arbitrary config passed to the router's detect() */
   options?: Record<string, unknown>;
+  /**
+   * Merge weight (0–100, default 50). Higher weight wins when multiple routers
+   * produce non-passthrough decisions at the same sensitivity level.
+   * Safety routers (privacy) should use high weights; optimization routers
+   * (token-saver) should use lower weights so they only take effect when
+   * safety routers pass through.
+   */
+  weight?: number;
 };
 
 export type PipelineConfig = {
