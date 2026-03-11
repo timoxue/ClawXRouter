@@ -23,20 +23,27 @@ export function getActiveProxy(): ProxyHandle | null {
 }
 
 /**
- * Provider plugin definition for the privacy proxy.
+ * Build the provider plugin definition for the privacy proxy.
  *
- * Follows the same structure as ClawRouter's blockrunProvider:
- *   - id / label / aliases
- *   - auth: [] (proxy handles auth transparently)
- *   - models: dynamically mirrored from the user's real providers
+ * Accepts the full ModelProviderConfig so that models are available
+ * at registration time — openclaw's model resolver reads the provider's
+ * models from the registered object, not from api.config injection.
  */
-export const guardClawPrivacyProvider = {
-  id: "guardclaw-privacy",
-  label: "GuardClaw Privacy Proxy",
-  aliases: [] as string[],
-  envVars: [] as string[],
-  auth: [] as never[],
-};
+export function buildPrivacyProvider(modelsConfig?: {
+  baseUrl: string;
+  api: string;
+  apiKey: string;
+  models: unknown[];
+}) {
+  return {
+    id: "guardclaw-privacy",
+    label: "GuardClaw Privacy Proxy",
+    aliases: [] as string[],
+    envVars: [] as string[],
+    auth: [] as never[],
+    ...(modelsConfig ? { models: modelsConfig } : {}),
+  };
+}
 
 /**
  * Mirror all model definitions from every configured provider.

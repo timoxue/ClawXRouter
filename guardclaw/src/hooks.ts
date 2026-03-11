@@ -125,7 +125,18 @@ export function registerHooks(api: OpenClawPluginApi): void {
       );
 
       recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason);
-      if (decision.level === "S1" && decision.action === "passthrough") return;
+      if (decision.level === "S1" && decision.action === "passthrough") {
+        // Restore real provider so the session doesn't persist "guardclaw-privacy"
+        const agentDefaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
+        const primaryRef = (agentDefaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
+        const [realProvider, realModel] = primaryRef.includes("/")
+          ? [primaryRef.slice(0, primaryRef.indexOf("/")), primaryRef.slice(primaryRef.indexOf("/") + 1)]
+          : [undefined, undefined];
+        if (realProvider) {
+          return { providerOverride: realProvider, ...(realModel ? { modelOverride: realModel } : {}) };
+        }
+        return;
+      }
 
       // Desensitize for S2 (needed for both proxy markers and local prompt)
       let desensitized: string | undefined;
@@ -163,10 +174,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
         const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
         const providerConfig = api.config.models?.providers?.[defaultProvider];
         if (providerConfig) {
+          const pc = providerConfig as Record<string, unknown>;
           stashOriginalProvider(sessionKey, {
-            baseUrl: (providerConfig as Record<string, unknown>).baseUrl as string ?? "https://api.openai.com/v1",
-            apiKey: (providerConfig as Record<string, unknown>).apiKey as string ?? "",
+            baseUrl: (pc.baseUrl as string) ?? "https://api.openai.com/v1",
+            apiKey: (pc.apiKey as string) ?? "",
             provider: defaultProvider,
+            api: (pc.api as string) ?? undefined,
           });
         }
         api.logger.info(`[GuardClaw] S2 — routing through privacy proxy [${decision.routerId}]`);
@@ -193,6 +206,11 @@ export function registerHooks(api: OpenClawPluginApi): void {
           modelOverride: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
         };
       }
+
+      // Default: no override — let the original provider handle the request
+      // so provider-specific sanitization (Google turn ordering, tool schema
+      // cleaning, transcript policy) in openclaw core still triggers correctly.
+      return;
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in before_model_resolve hook: ${String(err)}`);
     }

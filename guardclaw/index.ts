@@ -13,7 +13,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { join } from "node:path";
 import { guardClawConfigSchema, defaultPrivacyConfig } from "./src/config-schema.js";
 import { registerHooks } from "./src/hooks.js";
-import { guardClawPrivacyProvider, setActiveProxy, mirrorAllProviderModels } from "./src/provider.js";
+import { buildPrivacyProvider, setActiveProxy, mirrorAllProviderModels } from "./src/provider.js";
 import { startPrivacyProxy, setDefaultProviderTarget } from "./src/privacy-proxy.js";
 import { RouterPipeline, setGlobalPipeline } from "./src/router-pipeline.js";
 import { privacyRouter } from "./src/routers/privacy.js";
@@ -27,6 +27,32 @@ import type { ProxyHandle } from "./src/privacy-proxy.js";
 function getPrivacyConfig(pluginConfig: Record<string, unknown> | undefined): PrivacyConfig {
   const userConfig = (pluginConfig?.privacy ?? {}) as PrivacyConfig;
   return { ...defaultPrivacyConfig, ...userConfig } as PrivacyConfig;
+}
+
+/**
+ * Determine the API type to register for the guardclaw-privacy provider.
+ *
+ * The proxy is a transparent HTTP relay, so we need the SDK to send requests
+ * in a format that both the proxy can parse and the downstream provider accepts.
+ *
+ * - For Google-native APIs: use "openai-completions" since most Google gateways
+ *   accept OpenAI format, and Google's native SDK may bypass the HTTP proxy.
+ * - For Anthropic: use "anthropic-messages" so the SDK sends the right format
+ *   and auth scheme. The proxy handles forwarding transparently.
+ * - For everything else: use the original API type (usually "openai-completions").
+ */
+function resolveProxyApi(originalApi: string): string {
+  const api = originalApi.toLowerCase();
+  // Google native SDKs construct their own URLs and may bypass the HTTP proxy;
+  // fall back to openai-completions which Google gateways typically accept.
+  if (api.includes("google") || api.includes("gemini")) {
+    return "openai-completions";
+  }
+  // Anthropic's native API is proxy-friendly (standard HTTP POST to /v1/messages)
+  if (api === "anthropic-messages") {
+    return "anthropic-messages";
+  }
+  return originalApi;
 }
 
 const plugin = {
@@ -44,33 +70,46 @@ const plugin = {
       return;
     }
 
-    // ── Step 1: Register provider ──
-    api.registerProvider(guardClawPrivacyProvider as Parameters<typeof api.registerProvider>[0]);
-
-    // ── Step 2: Runtime config injection ──
+    // ── Step 1 + 2: Register provider with mirrored models ──
     const proxyPort = privacyConfig.proxyPort ?? 8403;
     if (!api.config.models) {
       (api.config as Record<string, unknown>).models = { providers: {} };
     }
     const models = api.config.models as { providers?: Record<string, unknown> };
     if (!models.providers) models.providers = {};
-    models.providers["guardclaw-privacy"] = {
-      baseUrl: `http://127.0.0.1:${proxyPort}/v1`,
-      api: "openai-completions",
-      apiKey: "guardclaw-proxy-handles-auth",
-      models: mirrorAllProviderModels(api.config as { models?: { providers?: Record<string, { models?: unknown }> } }),
-    };
 
-    // Set default provider target for the proxy — extract provider from model.primary
+    // Detect the default provider's API type so the proxy can adapt
     const agentDefaults = (api.config.agents as Record<string, unknown> | undefined)?.defaults as Record<string, unknown> | undefined;
     const primaryModelStr = (agentDefaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
     const defaultProvider = (agentDefaults?.provider as string) || primaryModelStr.split("/")[0] || "openai";
     const providerConfig = models.providers?.[defaultProvider] as Record<string, unknown> | undefined;
+    const originalApi = (providerConfig?.api as string) ?? "openai-completions";
+
+    // Use openai-completions for the proxy provider: the proxy acts as a transparent
+    // HTTP relay and most providers (including Google gateways) accept OpenAI format.
+    // For Anthropic-native, we match the API so the SDK sends the right format.
+    const proxyApi = resolveProxyApi(originalApi);
+
+    const mirroredModels = mirrorAllProviderModels(api.config as { models?: { providers?: Record<string, { models?: unknown }> } });
+    const proxyModelsConfig = {
+      baseUrl: `http://127.0.0.1:${proxyPort}/v1`,
+      api: proxyApi,
+      apiKey: "guardclaw-proxy-handles-auth",
+      models: mirroredModels,
+    };
+
+    api.registerProvider(
+      buildPrivacyProvider(proxyModelsConfig) as Parameters<typeof api.registerProvider>[0],
+    );
+    models.providers["guardclaw-privacy"] = proxyModelsConfig;
+
+    // Set default provider target for the proxy
     if (providerConfig) {
       setDefaultProviderTarget({
         baseUrl: (providerConfig.baseUrl as string) ?? "https://api.openai.com/v1",
         apiKey: (providerConfig.apiKey as string) ?? "",
         provider: defaultProvider,
+        api: originalApi,
       });
     }
 
