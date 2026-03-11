@@ -46,6 +46,8 @@ import {
   stashOriginalProvider,
 } from "./privacy-proxy.js";
 import { getGlobalPipeline } from "./router-pipeline.js";
+import { getGlobalCollector } from "./token-stats.js";
+import { getLiveConfig } from "./live-config.js";
 
 const DEFAULT_GUARD_AGENT_SYSTEM_PROMPT = `You are a privacy-aware analyst. Analyze the data the user provides. Do your job.
 
@@ -431,13 +433,34 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const memMgr = getDefaultMemoryManager();
       const privacyConfig = getPrivacyConfigFromApi(api);
       await memMgr.syncAllMemoryToClean(privacyConfig);
+
+      const collector = getGlobalCollector();
+      if (collector) await collector.flush();
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in session_end hook: ${String(err)}`);
     }
   });
 
   // =========================================================================
-  // Hook 8: message_sending — Outbound message guard (via pipeline)
+  // Hook 8: llm_output — Token usage tracking
+  // =========================================================================
+  api.on("llm_output", async (event, ctx) => {
+    try {
+      const collector = getGlobalCollector();
+      if (!collector) return;
+      collector.record({
+        sessionKey: ctx.sessionKey ?? event.sessionId ?? "",
+        provider: event.provider ?? "unknown",
+        model: event.model ?? "unknown",
+        usage: event.usage,
+      });
+    } catch (err) {
+      api.logger.error(`[GuardClaw] Error in llm_output hook: ${String(err)}`);
+    }
+  });
+
+  // =========================================================================
+  // Hook 9: message_sending — Outbound message guard (via pipeline)
   // =========================================================================
   api.on("message_sending", async (event, _ctx) => {
     try {
@@ -526,24 +549,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
 // Helpers
 // ==========================================================================
 
-function getPrivacyConfigFromApi(api: OpenClawPluginApi): PrivacyConfig {
-  const userConfig = (api.pluginConfig?.privacy as PrivacyConfig) ?? {};
-  return {
-    ...defaultPrivacyConfig,
-    ...userConfig,
-    checkpoints: { ...defaultPrivacyConfig.checkpoints, ...userConfig.checkpoints },
-    rules: {
-      keywords: { ...defaultPrivacyConfig.rules.keywords, ...userConfig.rules?.keywords },
-      patterns: { ...defaultPrivacyConfig.rules.patterns, ...userConfig.rules?.patterns },
-      tools: {
-        S2: { ...defaultPrivacyConfig.rules.tools.S2, ...userConfig.rules?.tools?.S2 },
-        S3: { ...defaultPrivacyConfig.rules.tools.S3, ...userConfig.rules?.tools?.S3 },
-      },
-    },
-    localModel: { ...defaultPrivacyConfig.localModel, ...userConfig.localModel },
-    guardAgent: { ...defaultPrivacyConfig.guardAgent, ...userConfig.guardAgent },
-    session: { ...defaultPrivacyConfig.session, ...userConfig.session },
-  };
+function getPrivacyConfigFromApi(_api: OpenClawPluginApi): PrivacyConfig {
+  return getLiveConfig();
 }
 
 function shouldSkipMessage(msg: string): boolean {

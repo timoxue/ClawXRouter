@@ -205,6 +205,7 @@ function mergeWithDefaults(
       provider: userConfig.localModel?.provider ?? defaults.localModel?.provider,
       model: userConfig.localModel?.model ?? defaults.localModel?.model,
       endpoint: userConfig.localModel?.endpoint ?? defaults.localModel?.endpoint,
+      apiKey: userConfig.localModel?.apiKey ?? defaults.localModel?.apiKey,
     },
     guardAgent: {
       id: userConfig.guardAgent?.id ?? defaults.guardAgent?.id,
