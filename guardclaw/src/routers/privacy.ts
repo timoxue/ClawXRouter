@@ -38,12 +38,13 @@ function detectionToDecision(
 
   if (level === "S3") {
     const guardCfg = getGuardAgentConfig(privacyConfig);
+    const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
     return {
       level: "S3",
       action: "redirect",
       target: {
-        provider: guardCfg?.provider ?? "ollama",
-        model: guardCfg?.modelName ?? "openbmb/minicpm4.1",
+        provider: guardCfg?.provider ?? defaultProvider,
+        model: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
       },
       reason,
     };
@@ -53,12 +54,13 @@ function detectionToDecision(
   const s2Policy = privacyConfig.s2Policy ?? "proxy";
   if (s2Policy === "local") {
     const guardCfg = getGuardAgentConfig(privacyConfig);
+    const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
     return {
       level: "S2",
       action: "redirect",
       target: {
-        provider: guardCfg?.provider ?? "ollama",
-        model: guardCfg?.modelName ?? "openbmb/minicpm4.1",
+        provider: guardCfg?.provider ?? defaultProvider,
+        model: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
       },
       reason,
     };

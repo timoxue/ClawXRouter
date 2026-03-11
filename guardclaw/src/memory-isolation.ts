@@ -268,6 +268,14 @@ export class MemoryIsolationManager {
   }
 
   /**
+   * PII redaction: prefer local model, fall back to regex.
+   * Public alias for use by hooks that need redaction outside the sync flow.
+   */
+  async redactContentPublic(text: string, privacyConfig?: PrivacyConfig): Promise<string> {
+    return this.redactContent(text, privacyConfig);
+  }
+
+  /**
    * Shared PII redaction: prefer local model, fall back to regex.
    */
   private async redactContent(text: string, privacyConfig?: PrivacyConfig): Promise<string> {

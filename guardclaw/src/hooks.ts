@@ -8,18 +8,19 @@
  * Architecture:
  *   before_model_resolve  → pipeline.run("onUserMessage") → RouterDecision
  *   before_prompt_build   → reads stashed decision → inject prompt/markers
- *   before_tool_call      → pipeline.run("onToolCallProposed") → block/allow
- *   after_tool_call       → pipeline.run("onToolCallExecuted") → mark session
+ *   before_tool_call      → pipeline + memory_get path redirect (dual-track)
+ *   after_tool_call       → pipeline + memory dual-write sync
+ *   tool_result_persist   → PII redaction + memory_search result filtering
  *   before_message_write  → sanitize transcript based on stashed decision
+ *   after_compaction      → full memory sync (FULL → clean)
+ *   before_reset          → full memory sync before session clear
  *   + session_end, message_sending, before_agent_start, message_received
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { execSync } from "node:child_process";
-import { resolve } from "node:path";
-import type { PrivacyConfig, RouterDecision } from "./types.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { PrivacyConfig } from "./types.js";
 import { defaultPrivacyConfig } from "./config-schema.js";
 import {
   getGuardAgentConfig,
@@ -33,13 +34,11 @@ import {
   markSessionAsPrivate,
   recordDetection,
   isSessionMarkedPrivate,
-  markPreReadFiles,
-  isFilePreRead,
   stashDetection,
   getPendingDetection,
   consumeDetection,
 } from "./session-state.js";
-import { isProtectedMemoryPath } from "./utils.js";
+import { isProtectedMemoryPath, redactSensitiveInfo } from "./utils.js";
 import {
   GUARDCLAW_S2_OPEN,
   GUARDCLAW_S2_CLOSE,
@@ -71,6 +70,9 @@ You MUST:
 3. NEVER include [REDACTED:xxx] tags in your response — use natural language
 4. Reply in the same language as the user.`;
 
+// Workspace dir cache — set from first hook that has PluginHookAgentContext
+let _cachedWorkspaceDir: string | undefined;
+
 export function registerHooks(api: OpenClawPluginApi): void {
   const memoryManager = getDefaultMemoryManager();
   memoryManager.initializeDirectories().catch((err) => {
@@ -97,17 +99,13 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return;
       }
 
+      if (ctx.workspaceDir) _cachedWorkspaceDir = ctx.workspaceDir;
+
       const msgStr = String(prompt);
       if (shouldSkipMessage(msgStr)) return;
 
-      // Pre-read referenced files
-      const workspaceDir = ctx.workspaceDir ?? process.cwd();
-      let preReadFileContent: string | undefined;
-      try {
-        preReadFileContent = await tryReadReferencedFile(msgStr, workspaceDir);
-      } catch { /* ignore */ }
-
-      // Run the router pipeline
+      // Run the router pipeline (text-based detection only; file content
+      // is intercepted later via tool_result_persist when tools read them)
       const pipeline = getGlobalPipeline();
       if (!pipeline) {
         api.logger.warn("[GuardClaw] Router pipeline not initialized");
@@ -121,7 +119,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
           message: prompt,
           sessionKey,
           agentId: ctx.agentId,
-          fileContentSnippet: preReadFileContent?.slice(0, 800),
         },
         api.pluginConfig ?? {},
       );
@@ -132,8 +129,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // Desensitize for S2 (needed for both proxy markers and local prompt)
       let desensitized: string | undefined;
       if (decision.level === "S2") {
-        const content = preReadFileContent ?? msgStr;
-        const { desensitized: d } = await desensitizeWithLocalModel(content, privacyConfig);
+        const { desensitized: d } = await desensitizeWithLocalModel(msgStr, privacyConfig);
         desensitized = d;
       }
 
@@ -142,7 +138,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
         level: decision.level,
         reason: decision.reason,
         desensitized,
-        preReadFileContent,
         originalPrompt: msgStr,
         timestamp: Date.now(),
       });
@@ -173,7 +168,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
             provider: defaultProvider,
           });
         }
-        if (preReadFileContent) markPreReadFiles(sessionKey, msgStr);
         api.logger.info(`[GuardClaw] S2 — routing through privacy proxy [${decision.routerId}]`);
         return { providerOverride: "guardclaw-privacy" };
       }
@@ -187,14 +181,15 @@ export function registerHooks(api: OpenClawPluginApi): void {
         };
       }
 
-      // Block action at model resolve level → route to local as safeguard
+      // Block action at model resolve level → route to edge model as safeguard
       if (decision.action === "block") {
         markSessionAsPrivate(sessionKey, decision.level);
         const guardCfg = getGuardAgentConfig(privacyConfig);
-        api.logger.warn(`[GuardClaw] ${decision.level} BLOCK — redirecting to local model [${decision.routerId}]`);
+        const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
+        api.logger.warn(`[GuardClaw] ${decision.level} BLOCK — redirecting to edge model [${decision.routerId}]`);
         return {
-          providerOverride: guardCfg?.provider ?? "ollama",
-          modelOverride: guardCfg?.modelName ?? "openbmb/minicpm4.1",
+          providerOverride: guardCfg?.provider ?? defaultProvider,
+          modelOverride: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
         };
       }
     } catch (err) {
@@ -215,46 +210,22 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       const privacyConfig = getPrivacyConfigFromApi(api);
 
-      // S3: keep original agent system prompt and skills — only inject file content if pre-read
+      // S3: keep original agent system prompt and skills — tool results
+      // will be intercepted by tool_result_persist before reaching the LLM
       if (pending.level === "S3") {
-        if (pending.preReadFileContent) {
-          return { prependContext: `[File content for analysis]\n\`\`\`\n${pending.preReadFileContent}\n\`\`\`` };
-        }
         return;
       }
 
       // S2-local: inject guard agent system prompt
       if (pending.level === "S2" && (privacyConfig.s2Policy ?? "proxy") === "local") {
         const guardPrompt = getGuardAgentSystemPrompt();
-        return {
-          prependSystemContext: guardPrompt,
-          ...(pending.preReadFileContent
-            ? { prependContext: `[File content for analysis]\n\`\`\`\n${pending.preReadFileContent}\n\`\`\`` }
-            : {}),
-        };
+        return { prependSystemContext: guardPrompt };
       }
 
       // S2-proxy: inject markers for privacy-proxy to strip
       if (pending.level === "S2" && pending.desensitized) {
-        const isChinese = /[\u4e00-\u9fff]/.test(pending.originalPrompt ?? "");
-        const filePathPattern = /(?:[\w./-]+\/)?[\w\u4e00-\u9fff._-]+\.(?:xlsx|xls|csv|txt|docx|json|md)/g;
-        const taskDescription = (pending.originalPrompt ?? "")
-          .replace(filePathPattern, "")
-          .replace(/\s{2,}/g, " ")
-          .trim();
-
-        let desensitizedPrompt: string;
-        if (pending.preReadFileContent) {
-          const langInstruction = isChinese
-            ? "请仅根据上方已脱敏的内容完成任务。不要读取任何文件——内容已经提供。回复中不得出现 [REDACTED:xxx] 标记，用自然语言概括即可。"
-            : "Complete the task based ONLY on the desensitized content above. Do NOT read any files. Your reply must NOT contain any [REDACTED:xxx] tags.";
-          desensitizedPrompt = `${taskDescription}\n\n--- FILE CONTENT ---\n${pending.desensitized}\n--- END FILE CONTENT ---\n\n${langInstruction}`;
-        } else {
-          desensitizedPrompt = pending.desensitized;
-        }
-
         return {
-          prependContext: `${GUARDCLAW_S2_OPEN}\n${desensitizedPrompt}\n${GUARDCLAW_S2_CLOSE}`,
+          prependContext: `${GUARDCLAW_S2_OPEN}\n${pending.desensitized}\n${GUARDCLAW_S2_CLOSE}`,
           appendSystemContext: PRIVACY_S2_SYSTEM_INSTRUCTION,
         };
       }
@@ -287,11 +258,14 @@ export function registerHooks(api: OpenClawPluginApi): void {
         }
       }
 
-      // Pre-read file guard
-      if (toolName === "read" || toolName === "read_file" || toolName === "cat") {
-        const filePath = String(typedParams?.path ?? typedParams?.file ?? typedParams?.target ?? "");
-        if (filePath && isFilePreRead(sessionKey, filePath)) {
-          return { block: true, blockReason: "File content has already been provided in the conversation (desensitized for privacy)." };
+      // Memory read routing: private sessions read from MEMORY-FULL.md / memory-full/
+      if (toolName === "memory_get" && isSessionMarkedPrivate(sessionKey)) {
+        const p = String(typedParams.path ?? "");
+        if (p === "MEMORY.md" || p === "memory.md") {
+          return { params: { ...typedParams, path: "MEMORY-FULL.md" } };
+        }
+        if (p.startsWith("memory/")) {
+          return { params: { ...typedParams, path: p.replace(/^memory\//, "memory-full/") } };
         }
       }
 
@@ -347,7 +321,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 4: after_tool_call — Run pipeline at onToolCallExecuted
+  // Hook 4: after_tool_call — Pipeline detection + memory dual-write sync
   // =========================================================================
   api.on("after_tool_call", async (event, ctx) => {
     try {
@@ -355,18 +329,31 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const sessionKey = ctx.sessionKey ?? "";
       if (!toolName) return;
 
+      // Pipeline detection
       const pipeline = getGlobalPipeline();
-      if (!pipeline) return;
+      if (pipeline) {
+        const decision = await pipeline.run(
+          "onToolCallExecuted",
+          { checkpoint: "onToolCallExecuted", toolName, toolResult: result, sessionKey, agentId: ctx.agentId },
+          api.pluginConfig ?? {},
+        );
+        recordDetection(sessionKey, decision.level, "onToolCallExecuted", decision.reason);
 
-      const decision = await pipeline.run(
-        "onToolCallExecuted",
-        { checkpoint: "onToolCallExecuted", toolName, toolResult: result, sessionKey, agentId: ctx.agentId },
-        api.pluginConfig ?? {},
-      );
-      recordDetection(sessionKey, decision.level, "onToolCallExecuted", decision.reason);
+        if (decision.level === "S3" || decision.level === "S2") {
+          markSessionAsPrivate(sessionKey, decision.level);
+        }
+      }
 
-      if (decision.level === "S3" || decision.level === "S2") {
-        markSessionAsPrivate(sessionKey, decision.level);
+      // Memory dual-write: when Agent writes to memory files, sync the other track
+      if (toolName === "write" || toolName === "write_file") {
+        const writePath = String(event.params?.path ?? "");
+        if (writePath && isMemoryWritePath(writePath)) {
+          const workspaceDir = _cachedWorkspaceDir ?? process.cwd();
+          const privacyConfig = getPrivacyConfigFromApi(api);
+          syncMemoryWrite(writePath, workspaceDir, privacyConfig, api.logger).catch((err) => {
+            api.logger.warn(`[GuardClaw] Memory dual-write sync failed: ${String(err)}`);
+          });
+        }
       }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in after_tool_call hook: ${String(err)}`);
@@ -374,19 +361,49 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 5: tool_result_persist — Dual history persistence
+  // Hook 5: tool_result_persist — PII detection, memory_search filtering
   // =========================================================================
   api.on("tool_result_persist", (event, ctx) => {
     try {
       const sessionKey = ctx.sessionKey ?? "";
-      if (!isSessionMarkedPrivate(sessionKey) || !sessionKey) return;
+      if (!sessionKey) return;
 
-      const sessionManager = getDefaultSessionManager();
-      const msgText = typeof event.message === "string" ? event.message : JSON.stringify(event.message);
-      const sessionMessage: SessionMessage = { role: "tool", content: msgText, timestamp: Date.now(), sessionKey };
-      sessionManager.persistMessage(sessionKey, sessionMessage).catch((err) => {
-        console.error("[GuardClaw] Failed to persist tool result to dual history:", err);
-      });
+      const msg = event.message;
+      if (!msg) return;
+
+      // ── memory_search result filtering ──
+      // QMD indexes both MEMORY.md and MEMORY-FULL.md (via extraPaths).
+      // Filter out the wrong track so each session type only sees its own.
+      if (ctx.toolName === "memory_search") {
+        const filtered = filterMemorySearchResults(msg, isSessionMarkedPrivate(sessionKey));
+        if (filtered) return { message: filtered };
+        return;
+      }
+
+      // ── PII detection & redaction on all other tool results ──
+      const textContent = extractMessageText(msg);
+      if (!textContent || textContent.length < 10) return;
+
+      // Rule-based PII redaction (sync — tool_result_persist cannot be async)
+      const redacted = redactSensitiveInfo(textContent);
+      const wasRedacted = redacted !== textContent;
+
+      if (wasRedacted) {
+        markSessionAsPrivate(sessionKey, "S2");
+        api.logger.info(`[GuardClaw] PII redacted in tool result (tool=${ctx.toolName ?? "unknown"})`);
+        const modified = replaceMessageText(msg, redacted);
+        if (modified) return { message: modified };
+      }
+
+      // Persist to dual history if session is private
+      if (isSessionMarkedPrivate(sessionKey)) {
+        const sessionManager = getDefaultSessionManager();
+        const msgText = typeof msg === "string" ? msg : JSON.stringify(msg);
+        const sessionMessage: SessionMessage = { role: "tool", content: msgText, timestamp: Date.now(), sessionKey };
+        sessionManager.persistMessage(sessionKey, sessionMessage).catch((err) => {
+          console.error("[GuardClaw] Failed to persist tool result to dual history:", err);
+        });
+      }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in tool_result_persist hook: ${String(err)}`);
     }
@@ -437,7 +454,37 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 8: message_sending — Outbound message guard (via pipeline)
+  // Hook 8: after_compaction — Full memory sync
+  // =========================================================================
+  api.on("after_compaction", async (_event, ctx) => {
+    try {
+      if (ctx.workspaceDir) _cachedWorkspaceDir = ctx.workspaceDir;
+      const memMgr = getDefaultMemoryManager();
+      const privacyConfig = getPrivacyConfigFromApi(api);
+      await memMgr.syncAllMemoryToClean(privacyConfig);
+      api.logger.info("[GuardClaw] Memory synced after compaction");
+    } catch (err) {
+      api.logger.error(`[GuardClaw] Error in after_compaction hook: ${String(err)}`);
+    }
+  });
+
+  // =========================================================================
+  // Hook 9: before_reset — Full memory sync before session clear
+  // =========================================================================
+  api.on("before_reset", async (_event, ctx) => {
+    try {
+      if (ctx.workspaceDir) _cachedWorkspaceDir = ctx.workspaceDir;
+      const memMgr = getDefaultMemoryManager();
+      const privacyConfig = getPrivacyConfigFromApi(api);
+      await memMgr.syncAllMemoryToClean(privacyConfig);
+      api.logger.info("[GuardClaw] Memory synced before reset");
+    } catch (err) {
+      api.logger.error(`[GuardClaw] Error in before_reset hook: ${String(err)}`);
+    }
+  });
+
+  // =========================================================================
+  // Hook 10: message_sending — Outbound message guard (via pipeline)
   // =========================================================================
   api.on("message_sending", async (event, _ctx) => {
     try {
@@ -470,7 +517,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 9: before_agent_start — Subagent guard (via pipeline)
+  // Hook 11: before_agent_start — Subagent guard (via pipeline)
   // =========================================================================
   api.on("before_agent_start", async (event, ctx) => {
     try {
@@ -509,7 +556,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 10: message_received — Observational logging
+  // Hook 12: message_received — Observational logging
   // =========================================================================
   api.on("message_received", async (event, _ctx) => {
     try {
@@ -519,7 +566,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
     } catch { /* observational only */ }
   });
 
-  api.logger.info("[GuardClaw] All hooks registered (10 hooks, pipeline-driven)");
+  api.logger.info("[GuardClaw] All hooks registered (12 hooks, pipeline-driven)");
 }
 
 // ==========================================================================
@@ -543,6 +590,10 @@ function getPrivacyConfigFromApi(api: OpenClawPluginApi): PrivacyConfig {
     localModel: { ...defaultPrivacyConfig.localModel, ...userConfig.localModel },
     guardAgent: { ...defaultPrivacyConfig.guardAgent, ...userConfig.guardAgent },
     session: { ...defaultPrivacyConfig.session, ...userConfig.session },
+    localProviders: [
+      ...defaultPrivacyConfig.localProviders,
+      ...(userConfig.localProviders ?? []),
+    ],
   };
 }
 
@@ -567,41 +618,160 @@ function extractPathValuesFromParams(params: Record<string, unknown>): string[] 
   return paths;
 }
 
-async function tryReadReferencedFile(message: string, workspaceDir: string): Promise<string | undefined> {
-  const filePattern = /(?:^|\s)((?:[\w./-]+\/)?[\w\u4e00-\u9fff._-]+\.(?:xlsx|xls|csv|txt|docx|json|md))\b/g;
-  const matches: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = filePattern.exec(message)) !== null) matches.push(m[1]);
-  if (matches.length === 0) return undefined;
+/**
+ * Extract text from an AgentMessage (supports string content and content arrays).
+ */
+function extractMessageText(msg: unknown): string {
+  if (typeof msg === "string") return msg;
+  if (!msg || typeof msg !== "object") return "";
+  const m = msg as Record<string, unknown>;
 
-  const cwd = process.cwd();
-  const baseDirs = [workspaceDir, cwd, resolve(cwd, "..")].filter(Boolean);
+  if (typeof m.content === "string") return m.content;
 
-  for (const filePath of matches) {
-    try {
-      let absPath = "";
-      for (const base of baseDirs) {
-        const candidate = resolve(base, filePath);
-        if (existsSync(candidate)) { absPath = candidate; break; }
-      }
-      if (!absPath && existsSync(filePath)) absPath = resolve(filePath);
-      if (!absPath) continue;
-
-      const ext = filePath.split(".").pop()?.toLowerCase();
-      if (ext === "xlsx" || ext === "xls") {
-        try { return `[Converted from ${filePath}]\n${execSync(`xlsx2csv "${absPath}"`, { encoding: "utf-8", timeout: 10000 })}`; } catch {
-          try { return `[Converted from ${filePath}]\n${execSync(`python3 -c "import openpyxl; wb=openpyxl.load_workbook('${absPath}'); ws=wb.active; [print(','.join(str(c.value or '') for c in row)) for row in ws.iter_rows()]"`, { encoding: "utf-8", timeout: 10000 })}`; } catch { return undefined; }
+  if (Array.isArray(m.content)) {
+    return m.content
+      .map((part: unknown) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string") {
+          return (part as Record<string, unknown>).text as string;
         }
-      } else if (ext === "docx") {
-        const pyCmd = `"from docx import Document; d=Document('${absPath}'); print('\\n'.join(p.text for p in d.paragraphs))"`;
-        for (const py of ["python3", `${process.env.HOME}/miniconda3/bin/python3`]) {
-          try { return `[Extracted from ${filePath}]\n${execSync(`${py} -c ${pyCmd}`, { encoding: "utf-8", timeout: 10000 })}`; } catch { continue; }
-        }
-        return undefined;
-      } else {
-        return `[Content of ${filePath}]\n${(await readFile(absPath, "utf-8")).slice(0, 10000)}`;
-      }
-    } catch { continue; }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
   }
-  return undefined;
+
+  return "";
+}
+
+/**
+ * Replace text content in an AgentMessage, preserving the message structure.
+ */
+function replaceMessageText(msg: unknown, newText: string): unknown | null {
+  if (typeof msg === "string") return newText;
+  if (!msg || typeof msg !== "object") return null;
+  const m = { ...(msg as Record<string, unknown>) };
+
+  if (typeof m.content === "string") {
+    return { ...m, content: newText };
+  }
+
+  if (Array.isArray(m.content)) {
+    return { ...m, content: [{ type: "text", text: newText }] };
+  }
+
+  return null;
+}
+
+// ── Memory dual-write helpers ─────────────────────────────────────────────
+
+const MEMORY_WRITE_PATTERNS = [
+  /^MEMORY\.md$/,
+  /^memory\.md$/,
+  /^memory\//,
+];
+
+function isMemoryWritePath(writePath: string): boolean {
+  const rel = writePath.replace(/^\.\//, "");
+  return MEMORY_WRITE_PATTERNS.some((p) => p.test(rel));
+}
+
+/**
+ * After Agent writes to a memory file, dual-write to the other track:
+ *   MEMORY.md written → read content → write full to MEMORY-FULL.md, redact to MEMORY.md
+ *   memory/X.md written → read → write full to memory-full/X.md, redact to memory/X.md
+ */
+async function syncMemoryWrite(
+  writePath: string,
+  workspaceDir: string,
+  privacyConfig: PrivacyConfig,
+  logger: { info: (msg: string) => void; warn: (msg: string) => void },
+): Promise<void> {
+  const rel = writePath.replace(/^\.\//, "");
+  const absPath = path.isAbsolute(writePath)
+    ? writePath
+    : path.resolve(workspaceDir, rel);
+
+  let content: string;
+  try {
+    content = await fs.promises.readFile(absPath, "utf-8");
+  } catch {
+    return;
+  }
+
+  if (!content.trim()) return;
+
+  // Determine the counterpart path
+  let fullRelPath: string;
+  if (rel === "MEMORY.md" || rel === "memory.md") {
+    fullRelPath = "MEMORY-FULL.md";
+  } else if (rel.startsWith("memory/")) {
+    fullRelPath = rel.replace(/^memory\//, "memory-full/");
+  } else {
+    return;
+  }
+
+  const fullAbsPath = path.resolve(workspaceDir, fullRelPath);
+
+  // Ensure directory exists for daily memory files
+  await fs.promises.mkdir(path.dirname(fullAbsPath), { recursive: true });
+
+  // Write the original (unredacted) content to FULL
+  await fs.promises.writeFile(fullAbsPath, content, "utf-8");
+
+  // Redact PII and overwrite the clean version
+  const memMgr = getDefaultMemoryManager();
+  const redacted = await memMgr.redactContentPublic(content, privacyConfig);
+  if (redacted !== content) {
+    await fs.promises.writeFile(absPath, redacted, "utf-8");
+    logger.info(`[GuardClaw] Memory dual-write: ${rel} → ${fullRelPath} (redacted clean copy)`);
+  } else {
+    logger.info(`[GuardClaw] Memory dual-write: ${rel} → ${fullRelPath} (no PII found)`);
+  }
+}
+
+/**
+ * Filter memory_search results: strip results from the wrong memory track.
+ * Cloud sessions should not see MEMORY-FULL.md / memory-full/ results.
+ * Private sessions should not see MEMORY.md / memory/ results (prefer full).
+ */
+function filterMemorySearchResults(msg: unknown, isPrivate: boolean): unknown | null {
+  if (!msg || typeof msg !== "object") return null;
+  const m = msg as Record<string, unknown>;
+
+  const textContent = extractMessageText(msg);
+  if (!textContent) return null;
+
+  try {
+    const parsed = JSON.parse(textContent);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const results = (parsed as Record<string, unknown>).results;
+    if (!Array.isArray(results)) return null;
+
+    const filtered = results.filter((r: unknown) => {
+      if (!r || typeof r !== "object") return true;
+      const rPath = String((r as Record<string, unknown>).path ?? "");
+      if (isPrivate) {
+        // Private session: exclude clean-track results (prefer full)
+        if (rPath === "MEMORY.md" || rPath === "memory.md" || rPath.startsWith("memory/")) {
+          return false;
+        }
+      } else {
+        // Cloud session: exclude full-track results
+        if (rPath === "MEMORY-FULL.md" || rPath.startsWith("memory-full/")) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (filtered.length === results.length) return null;
+
+    const newParsed = { ...parsed as Record<string, unknown>, results: filtered };
+    const newText = JSON.stringify(newParsed);
+    return replaceMessageText(msg, newText);
+  } catch {
+    return null;
+  }
 }

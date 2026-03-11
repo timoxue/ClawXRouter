@@ -39,8 +39,80 @@
         }
       }
     },
+
+    "_comment_localModel": "Edge provider examples — pick ONE of the configurations below",
+
+    "_example_ollama": {
+      "localModel": {
+        "enabled": true,
+        "type": "openai-compatible",
+        "provider": "ollama",
+        "model": "llama3.2:3b",
+        "endpoint": "http://localhost:11434"
+      },
+      "guardAgent": { "model": "ollama/llama3.2:3b" }
+    },
+
+    "_example_ollama_native": {
+      "localModel": {
+        "enabled": true,
+        "type": "ollama-native",
+        "provider": "ollama",
+        "model": "qwen2.5:7b",
+        "endpoint": "http://localhost:11434"
+      },
+      "guardAgent": { "model": "ollama/qwen2.5:7b" }
+    },
+
+    "_example_vllm": {
+      "localModel": {
+        "enabled": true,
+        "type": "openai-compatible",
+        "provider": "vllm",
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "endpoint": "http://localhost:8000"
+      },
+      "guardAgent": { "model": "vllm/Qwen/Qwen2.5-7B-Instruct" }
+    },
+
+    "_example_lmstudio": {
+      "localModel": {
+        "enabled": true,
+        "type": "openai-compatible",
+        "provider": "lmstudio",
+        "model": "lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF",
+        "endpoint": "http://localhost:1234"
+      },
+      "guardAgent": { "model": "lmstudio/lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF" }
+    },
+
+    "_example_sglang": {
+      "localModel": {
+        "enabled": true,
+        "type": "openai-compatible",
+        "provider": "sglang",
+        "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "endpoint": "http://localhost:30000"
+      },
+      "guardAgent": { "model": "sglang/meta-llama/Meta-Llama-3.1-8B-Instruct" }
+    },
+
+    "_example_custom": {
+      "localModel": {
+        "enabled": true,
+        "type": "custom",
+        "provider": "my-inference",
+        "model": "my-model",
+        "endpoint": "http://localhost:9999",
+        "module": "./my-edge-provider.js"
+      },
+      "localProviders": ["my-inference"],
+      "guardAgent": { "model": "my-inference/my-model" }
+    },
+
     "localModel": {
       "enabled": false,
+      "type": "openai-compatible",
       "provider": "ollama",
       "model": "llama3.2:3b",
       "endpoint": "http://localhost:11434"
@@ -50,6 +122,7 @@
       "workspace": "~/.openclaw/workspace-guard",
       "model": "ollama/llama3.2:3b"
     },
+    "localProviders": [],
     "session": {
       "isolateGuardHistory": true,
       "baseDir": "~/.openclaw"

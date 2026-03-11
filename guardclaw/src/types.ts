@@ -12,6 +12,14 @@ export type DetectorType = "ruleDetector" | "localModelDetector";
 
 export type Checkpoint = "onUserMessage" | "onToolCallProposed" | "onToolCallExecuted";
 
+/**
+ * Edge provider API protocol type.
+ *   - "openai-compatible": POST /v1/chat/completions (Ollama, vLLM, LiteLLM, LocalAI, LMStudio, SGLang …)
+ *   - "ollama-native":     POST /api/chat (Ollama native API, supports streaming natively)
+ *   - "custom":            User-supplied module exporting a callChat function
+ */
+export type EdgeProviderType = "openai-compatible" | "ollama-native" | "custom";
+
 export type PrivacyConfig = {
   enabled?: boolean;
   /** S2 handling: "proxy" strips PII via local HTTP proxy (default), "local" routes to local model */
@@ -46,14 +54,20 @@ export type PrivacyConfig = {
   };
   localModel?: {
     enabled?: boolean;
+    /** API protocol type (default: "openai-compatible") */
+    type?: EdgeProviderType;
+    /** Provider name for OpenClaw routing (e.g. "ollama", "vllm", "lmstudio") */
     provider?: string;
     model?: string;
     endpoint?: string;
     apiKey?: string;
+    /** Path to custom provider module (type="custom" only). Must export callChat(). */
+    module?: string;
   };
   guardAgent?: {
     id?: string;
     workspace?: string;
+    /** Full model reference in "provider/model" format (e.g. "ollama/llama3.2:3b", "vllm/qwen2.5:7b") */
     model?: string;
   };
   session?: {
@@ -61,6 +75,12 @@ export type PrivacyConfig = {
     /** Base directory for session histories (default: ~/.openclaw) */
     baseDir?: string;
   };
+  /**
+   * Additional provider names to treat as "local" (safe for S3 routing).
+   * Built-in local providers: ollama, llama.cpp, localai, llamafile, lmstudio, vllm, mlx, sglang, tgi.
+   * Add custom entries here if you run your own inference backend.
+   */
+  localProviders?: string[];
 };
 
 export type DetectionContext = {
@@ -72,8 +92,6 @@ export type DetectionContext = {
   sessionKey?: string;
   agentId?: string;
   recentContext?: string[];
-  /** Pre-read file content for file-reference messages (used for classification) */
-  fileContentSnippet?: string;
 };
 
 export type DetectionResult = {

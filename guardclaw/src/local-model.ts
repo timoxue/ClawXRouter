@@ -1,36 +1,95 @@
 /**
  * GuardClaw Local Model Detector
  *
- * Local model-based sensitivity detection via OpenAI-compatible chat completions API.
- * Works with any backend that exposes /v1/chat/completions (Ollama, vLLM, LiteLLM, etc.).
+ * Provider-agnostic edge model integration supporting multiple API protocols:
+ *   - "openai-compatible": /v1/chat/completions (Ollama, vLLM, LiteLLM, LocalAI, LMStudio, SGLang, TGI …)
+ *   - "ollama-native":     /api/chat (Ollama native API)
+ *   - "custom":            User-supplied module with callChat() export
  */
 
 import type {
   DetectionContext,
   DetectionResult,
+  EdgeProviderType,
   PrivacyConfig,
   SensitivityLevel,
 } from "./types.js";
 import { loadPrompt, loadPromptWithVars } from "./prompt-loader.js";
 import { levelToNumeric } from "./types.js";
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+export type ChatCompletionOptions = {
+  temperature?: number;
+  maxTokens?: number;
+  stop?: string[];
+  frequencyPenalty?: number;
+  apiKey?: string;
+};
 
 /**
- * Unified OpenAI-compatible chat completions call.
- * Sends POST to ${endpoint}/v1/chat/completions — works with Ollama, vLLM, LiteLLM, etc.
+ * Custom edge provider module interface.
+ * Users implementing type="custom" must export a module matching this shape.
+ */
+export interface CustomEdgeProvider {
+  callChat(
+    endpoint: string,
+    model: string,
+    messages: ChatMessage[],
+    options?: ChatCompletionOptions,
+  ): Promise<string>;
+}
+
+let _customProviderCache: Map<string, CustomEdgeProvider> = new Map();
+
+async function loadCustomProvider(modulePath: string): Promise<CustomEdgeProvider> {
+  const cached = _customProviderCache.get(modulePath);
+  if (cached) return cached;
+  const mod = await import(modulePath) as CustomEdgeProvider;
+  if (typeof mod.callChat !== "function") {
+    throw new Error(`Custom edge provider at "${modulePath}" must export a callChat() function`);
+  }
+  _customProviderCache.set(modulePath, mod);
+  return mod;
+}
+
+/**
+ * Dispatch a chat completion call based on the configured edge provider type.
+ * This is the single entry point for all edge model calls.
  */
 export async function callChatCompletion(
   endpoint: string,
   model: string,
   messages: ChatMessage[],
-  options?: {
-    temperature?: number;
-    maxTokens?: number;
-    stop?: string[];
-    frequencyPenalty?: number;
-    apiKey?: string;
-  },
+  options?: ChatCompletionOptions & { providerType?: EdgeProviderType; customModule?: string },
+): Promise<string> {
+  const providerType = options?.providerType ?? "openai-compatible";
+
+  switch (providerType) {
+    case "ollama-native":
+      return callOllamaNative(endpoint, model, messages, options);
+    case "custom": {
+      if (!options?.customModule) {
+        throw new Error("Custom edge provider requires a 'module' path in localModel config");
+      }
+      const provider = await loadCustomProvider(options.customModule);
+      return provider.callChat(endpoint, model, messages, options);
+    }
+    case "openai-compatible":
+    default:
+      return callOpenAICompatible(endpoint, model, messages, options);
+  }
+}
+
+/**
+ * OpenAI-compatible chat completions call.
+ * POST ${endpoint}/v1/chat/completions — works with Ollama, vLLM, LiteLLM, LocalAI, LMStudio, SGLang, TGI, etc.
+ */
+async function callOpenAICompatible(
+  endpoint: string,
+  model: string,
+  messages: ChatMessage[],
+  options?: ChatCompletionOptions,
 ): Promise<string> {
   const url = `${endpoint}/v1/chat/completions`;
 
@@ -61,6 +120,47 @@ export async function callChatCompletion(
     choices?: Array<{ message?: { content?: string } }>;
   };
   let result = data.choices?.[0]?.message?.content ?? "";
+
+  result = stripThinkingTags(result);
+  return result;
+}
+
+/**
+ * Ollama native API call.
+ * POST ${endpoint}/api/chat — Ollama's own protocol (non-streaming).
+ */
+async function callOllamaNative(
+  endpoint: string,
+  model: string,
+  messages: ChatMessage[],
+  options?: ChatCompletionOptions,
+): Promise<string> {
+  const url = `${endpoint}/api/chat`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: false,
+      options: {
+        temperature: options?.temperature ?? 0.1,
+        num_predict: options?.maxTokens ?? 800,
+        ...(options?.stop ? { stop: options.stop } : {}),
+        ...(options?.frequencyPenalty != null ? { repeat_penalty: 1.0 + (options.frequencyPenalty ?? 0) } : {}),
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama native API error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = (await response.json()) as {
+    message?: { content?: string };
+  };
+  let result = data.message?.content ?? "";
 
   result = stripThinkingTags(result);
   return result;
@@ -99,21 +199,8 @@ export async function detectByLocalModel(
     const response = await callLocalModel(system, user, config);
     const parsed = parseModelResponse(response);
 
-    let { level } = parsed;
-
-    // If the LLM says S1 but we have file content with obvious PII, bump to S2.
-    // This handles cases where the message itself is innocent but the file has PII.
-    if (level === "S1" && context.fileContentSnippet) {
-      const piiLevel = quickPiiScan(context.fileContentSnippet);
-      if (piiLevel !== "S1") {
-        console.log(`[GuardClaw] LLM said S1 but file PII scan found ${piiLevel} — bumping`);
-        level = piiLevel;
-        parsed.reason = `${parsed.reason ?? ""}; file content contains PII (auto-bumped to ${piiLevel})`;
-      }
-    }
-
     return {
-      level,
+      level: parsed.level,
       levelNumeric: levelToNumeric(level),
       reason: parsed.reason,
       detectorType: "localModelDetector",
@@ -130,49 +217,6 @@ export async function detectByLocalModel(
       confidence: 0,
     };
   }
-}
-
-/**
- * Quick regex-based PII scan for file content.
- * Not used for primary detection — only as a safety net when the LLM says S1
- * but the file content clearly contains PII that should be at least S2.
- */
-function quickPiiScan(content: string): SensitivityLevel {
-  const s3Patterns = [
-    /\bpassword\s*[:=]/i,
-    /\b密码\s*[:：]/,
-    /\bAPI[_\s]?key\s*[:=]/i,
-    /\bsecret\s*[:=]/i,
-    /\btoken\s*[:=]/i,
-    /\bprivate[_\s]?key/i,
-    /\bid_rsa\b/i,
-  ];
-  for (const p of s3Patterns) {
-    if (p.test(content)) return "S3";
-  }
-
-  let piiHits = 0;
-  const s2Patterns = [
-    /\(\d{3}\)\s?\d{3}-\d{4}/, // US phone (415) 867-5321
-    /\b1[3-9]\d{9}\b/, // CN mobile 13867554321
-    /\b\d{3}-\d{2}-\d{4}\b/, // US SSN 518-73-6294
-    /\b\d{6}(?:19|20)\d{8}\b/, // CN ID 330106196208158821
-    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i, // email
-    /\b\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b/, // card number
-    /\b(?:gate|door|access)\s*code\s*[:：]?\s*\S+/i, // gate code
-    /门禁码\s*[:：]?\s*\S+/, // CN gate code
-    /\b(?:tracking|单号)\s*[:：]?\s*\S+/i, // tracking number
-    /\b(?:license\s*plate|车牌号?)\s*[:：]?\s*\S+/i, // license plate
-    /\b[沪京粤苏浙鲁豫川闽湘鄂]\w[·]?\w{4,5}\b/, // CN license plate
-    /\b\d{1,5}\s+\w+\s+(?:St|Street|Ave|Avenue|Blvd|Dr|Drive|Rd|Road|Ln|Lane)\b/i, // US address
-    /(?:路|街|弄|号|巷|村)\d+/, // CN address
-  ];
-  for (const p of s2Patterns) {
-    if (p.test(content)) piiHits++;
-  }
-
-  // Need at least 2 PII pattern matches to classify as S2
-  return piiHits >= 2 ? "S2" : "S1";
 }
 
 /** Default detection system prompt (fallback if prompts/detection-system.md is missing) */
@@ -256,8 +300,8 @@ function buildDetectionMessages(context: DetectionContext): { system: string; us
 }
 
 /**
- * Call local model via OpenAI-compatible chat completions API.
- * Provider-agnostic: works with any backend exposing /v1/chat/completions.
+ * Call local/edge model via the configured provider protocol.
+ * Dispatches to the correct API based on localModel.type.
  */
 async function callLocalModel(
   systemPrompt: string,
@@ -266,6 +310,7 @@ async function callLocalModel(
 ): Promise<string> {
   const model = config.localModel?.model ?? "openbmb/minicpm4.1";
   const endpoint = config.localModel?.endpoint ?? "http://localhost:11434";
+  const providerType = config.localModel?.type ?? "openai-compatible";
 
   // Qwen3: prefix user content with /no_think to suppress chain-of-thought output
   const modelLower = model.toLowerCase();
@@ -278,7 +323,13 @@ async function callLocalModel(
       { role: "system", content: systemPrompt },
       { role: "user", content: finalUser },
     ],
-    { temperature: 0.1, maxTokens: 800, apiKey: config.localModel?.apiKey },
+    {
+      temperature: 0.1,
+      maxTokens: 800,
+      apiKey: config.localModel?.apiKey,
+      providerType,
+      customModule: config.localModel?.module,
+    },
   );
 }
 
@@ -300,9 +351,15 @@ export async function desensitizeWithLocalModel(
   try {
     const endpoint = config.localModel?.endpoint ?? "http://localhost:11434";
     const model = config.localModel?.model ?? "openbmb/minicpm4.1";
+    const providerType = config.localModel?.type ?? "openai-compatible";
+    const customModule = config.localModel?.module;
 
     // Step 1: Ask the model to identify PII as JSON
-    const piiItems = await extractPiiWithModel(endpoint, model, content, config.localModel?.apiKey);
+    const piiItems = await extractPiiWithModel(endpoint, model, content, {
+      apiKey: config.localModel?.apiKey,
+      providerType,
+      customModule,
+    });
 
     if (piiItems.length === 0) {
       return { desensitized: content, wasModelUsed: true };
@@ -397,7 +454,7 @@ async function extractPiiWithModel(
   endpoint: string,
   model: string,
   content: string,
-  apiKey?: string,
+  opts?: { apiKey?: string; providerType?: EdgeProviderType; customModule?: string },
 ): Promise<Array<{ type: string; value: string }>> {
   const textSnippet = content.slice(0, 3000);
 
@@ -420,7 +477,14 @@ async function extractPiiWithModel(
       { role: "system", content: systemPrompt },
       { role: "user", content: userMessage },
     ],
-    { temperature: 0.0, maxTokens: 2500, stop: ["Input:", "Task:"], apiKey },
+    {
+      temperature: 0.0,
+      maxTokens: 2500,
+      stop: ["Input:", "Task:"],
+      apiKey: opts?.apiKey,
+      providerType: opts?.providerType,
+      customModule: opts?.customModule,
+    },
   );
 
   return parsePiiJson(raw);
@@ -551,13 +615,17 @@ function parseModelResponse(response: string): {
 }
 
 /**
- * Call local model directly for an S3 analysis task, bypassing the full agent pipeline.
- * Uses OpenAI-compatible chat completions API with frequency_penalty to reduce repetition.
+ * Raw edge model call for internal GuardClaw use only (detection, PII extraction,
+ * desensitization, token-saver). S3 content routing uses providerOverride instead.
+ *
+ * Not part of the public plugin API — OpenClaw Plugin SDK has no native model
+ * completion API yet. If upstream adds PluginRuntime.models.chatComplete(),
+ * this helper should migrate to that.
  */
-export async function callLocalModelDirect(
+export async function _callEdgeModelRaw(
   systemPrompt: string,
   userMessage: string,
-  config: { endpoint?: string; model?: string; apiKey?: string },
+  config: { endpoint?: string; model?: string; apiKey?: string; providerType?: EdgeProviderType; customModule?: string },
 ): Promise<string> {
   const endpoint = config.endpoint ?? "http://localhost:11434";
   const model = config.model ?? "openbmb/minicpm4.1";
@@ -575,6 +643,8 @@ export async function callLocalModelDirect(
       frequencyPenalty: 0.5,
       stop: ["[message_id:", "[Message_id:", "[system:", "Instructions:", "Data:"],
       apiKey: config.apiKey,
+      providerType: config.providerType,
+      customModule: config.customModule,
     },
   );
 

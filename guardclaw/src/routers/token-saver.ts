@@ -13,7 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { GuardClawRouter, DetectionContext, RouterDecision } from "../types.js";
+import type { GuardClawRouter, DetectionContext, EdgeProviderType, RouterDecision } from "../types.js";
 import { callChatCompletion } from "../local-model.js";
 import { loadPrompt } from "../prompt-loader.js";
 
@@ -25,6 +25,8 @@ type TokenSaverConfig = {
   enabled: boolean;
   judgeEndpoint: string;
   judgeModel: string;
+  judgeProviderType: EdgeProviderType;
+  judgeCustomModule?: string;
   tiers: Record<Tier, { provider: string; model: string }>;
   cacheTtlMs: number;
 };
@@ -33,6 +35,7 @@ const DEFAULT_CONFIG: TokenSaverConfig = {
   enabled: false,
   judgeEndpoint: "http://localhost:11434",
   judgeModel: "openbmb/minicpm4.1",
+  judgeProviderType: "openai-compatible",
   tiers: {
     SIMPLE: { provider: "openai", model: "gpt-4o-mini" },
     MEDIUM: { provider: "openai", model: "gpt-4o" },
@@ -123,7 +126,7 @@ function resolveConfig(pluginConfig: Record<string, unknown>): TokenSaverConfig 
   const options = (tsConfig?.options ?? {}) as Record<string, unknown>;
 
   const privacyLocalModel = (pluginConfig?.privacy as Record<string, unknown>)?.localModel as
-    | { endpoint?: string; model?: string }
+    | { endpoint?: string; model?: string; type?: EdgeProviderType; module?: string }
     | undefined;
 
   return {
@@ -136,6 +139,13 @@ function resolveConfig(pluginConfig: Record<string, unknown>): TokenSaverConfig 
       (options.judgeModel as string) ??
       privacyLocalModel?.model ??
       DEFAULT_CONFIG.judgeModel,
+    judgeProviderType:
+      (options.judgeProviderType as EdgeProviderType) ??
+      privacyLocalModel?.type ??
+      DEFAULT_CONFIG.judgeProviderType,
+    judgeCustomModule:
+      (options.judgeCustomModule as string) ??
+      privacyLocalModel?.module,
     tiers: {
       ...DEFAULT_CONFIG.tiers,
       ...((options.tiers as Record<string, { provider: string; model: string }>) ?? {}),
@@ -189,7 +199,12 @@ export const tokenSaverRouter: GuardClawRouter = {
           { role: "system", content: judgeSystemPrompt },
           { role: "user", content: prompt },
         ],
-        { temperature: 0, maxTokens: 20 },
+        {
+          temperature: 0,
+          maxTokens: 20,
+          providerType: config.judgeProviderType,
+          customModule: config.judgeCustomModule,
+        },
       );
 
       const tier = parseTier(response);

@@ -68,10 +68,18 @@ export const guardClawConfigSchema = Type.Object({
       localModel: Type.Optional(
         Type.Object({
           enabled: Type.Optional(Type.Boolean()),
+          type: Type.Optional(
+            Type.Union([
+              Type.Literal("openai-compatible"),
+              Type.Literal("ollama-native"),
+              Type.Literal("custom"),
+            ]),
+          ),
           provider: Type.Optional(Type.String()),
           model: Type.Optional(Type.String()),
           endpoint: Type.Optional(Type.String()),
           apiKey: Type.Optional(Type.String()),
+          module: Type.Optional(Type.String()),
         }),
       ),
       guardAgent: Type.Optional(
@@ -81,6 +89,7 @@ export const guardClawConfigSchema = Type.Object({
           model: Type.Optional(Type.String()),
         }),
       ),
+      localProviders: Type.Optional(Type.Array(Type.String())),
       session: Type.Optional(
         Type.Object({
           isolateGuardHistory: Type.Optional(Type.Boolean()),
@@ -140,6 +149,7 @@ export const defaultPrivacyConfig = {
   },
   localModel: {
     enabled: true,
+    type: "openai-compatible" as const,
     model: "openbmb/minicpm4.1",
     endpoint: "http://localhost:11434",
   },
@@ -148,6 +158,7 @@ export const defaultPrivacyConfig = {
     workspace: "~/.openclaw/workspace-guard",
     model: "ollama/openbmb/minicpm4.1",
   },
+  localProviders: [] as string[],
   session: {
     isolateGuardHistory: true,
     baseDir: "~/.openclaw",

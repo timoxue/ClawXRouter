@@ -1,941 +1,1523 @@
-# GuardClaw 技术报告
+# GuardClaw 技术文档
 
-> 版本: 2026.3.0 | 生成日期: 2026-03-09
+> **版本**: 2026.3.9  
+> **定位**: OpenClaw 隐私感知插件 — 集成灵敏度检测、可组合路由管线、隐私代理与 Guard Agent  
+> **协议**: OpenClaw Plugin SDK
 
 ---
 
 ## 目录
 
 1. [项目概览](#1-项目概览)
-2. [系统架构](#2-系统架构)
-3. [设计模式分析](#3-设计模式分析)
-4. [核心模块详解](#4-核心模块详解)
-5. [数据流与处理链路](#5-数据流与处理链路)
-6. [配置体系](#6-配置体系)
+2. [架构设计](#2-架构设计)
+3. [代码结构](#3-代码结构)
+4. [核心类型定义](#4-核心类型定义)
+5. [模块详解与 API 参考](#5-模块详解与-api-参考)
+   - 5.1 [入口 — index.ts](#51-入口--indexts)
+   - 5.2 [类型系统 — types.ts](#52-类型系统--typests)
+   - 5.3 [配置 Schema — config-schema.ts](#53-配置-schema--config-schemats)
+   - 5.4 [检测引擎 — detector.ts](#54-检测引擎--detectorts)
+   - 5.5 [规则检测器 — rules.ts](#55-规则检测器--rulests)
+   - 5.6 [本地模型检测器 — local-model.ts](#56-本地模型检测器--local-modelts)
+   - 5.7 [路由管线 — router-pipeline.ts](#57-路由管线--router-pipelinets)
+   - 5.8 [隐私路由器 — routers/privacy.ts](#58-隐私路由器--routersprivacyts)
+   - 5.9 [Token-Saver 路由器 — routers/token-saver.ts](#59-token-saver-路由器--routerstoken-saverts)
+   - 5.10 [Hook 系统 — hooks.ts](#510-hook-系统--hooksts)
+   - 5.11 [隐私代理 — privacy-proxy.ts](#511-隐私代理--privacy-proxyts)
+   - 5.12 [Provider — provider.ts](#512-provider--providerts)
+   - 5.13 [Guard Agent — guard-agent.ts](#513-guard-agent--guard-agentts)
+   - 5.14 [会话状态 — session-state.ts](#514-会话状态--session-statest)
+   - 5.15 [会话管理器 — session-manager.ts](#515-会话管理器--session-managerts)
+   - 5.16 [记忆隔离 — memory-isolation.ts](#516-记忆隔离--memory-isolationts)
+   - 5.17 [Prompt 加载器 — prompt-loader.ts](#517-prompt-加载器--prompt-loaderts)
+   - 5.18 [工具函数 — utils.ts](#518-工具函数--utilsts)
+6. [配置指南](#6-配置指南)
 7. [开发指南](#7-开发指南)
-8. [测试策略](#8-测试策略)
-9. [现有不足与改进建议](#9-现有不足与改进建议)
-10. [路线图建议](#10-路线图建议)
+8. [自定义指南](#8-自定义指南)
+   - 8.1 [自定义路由器](#81-自定义路由器)
+   - 8.2 [自定义边缘推理 Provider](#82-自定义边缘推理-provider)
+   - 8.3 [自定义 Prompt 模板](#83-自定义-prompt-模板)
+   - 8.4 [自定义检测规则](#84-自定义检测规则)
+9. [测试](#9-测试)
+10. [安全模型与威胁分析](#10-安全模型与威胁分析)
 
 ---
 
 ## 1. 项目概览
 
-### 1.1 定位
+GuardClaw 是 OpenClaw 平台的隐私感知插件，核心目标是**在 AI Agent 与用户交互过程中自动检测敏感数据，并根据敏感等级做出适当的路由决策**——确保高敏感数据永远不会离开本地环境。
 
-GuardClaw 是 OpenClaw AI 编程代理平台的**隐私保护扩展插件**。它作为一个安全层嵌入在 Agent 与 LLM 之间，在不影响用户体验的前提下，实时检测、分级、路由和脱敏敏感数据，确保私密信息不会泄露至云端模型。
+### 核心能力
 
-### 1.2 核心能力
-
-| 能力 | 描述 |
+| 能力 | 说明 |
 |------|------|
-| **三级敏感度分类** | S1（安全）、S2（敏感，需脱敏）、S3（私密，仅本地处理） |
-| **双引擎检测** | 规则引擎 + 本地 LLM 判别器，可组合配置 |
-| **可组合路由管道** | Pipeline 架构支持内置路由器 + 用户自定义路由器 |
-| **隐私代理** | 本地 HTTP 代理，拦截 S2 请求并剥离 PII 标记后转发 |
-| **Guard Agent** | S3 内容全部路由至本地模型的守护子代理 |
-| **双轨会话管理** | full（完整历史）+ clean（脱敏历史）双轨持久化 |
-| **记忆隔离** | MEMORY-FULL.md 与 MEMORY.md 分离，云模型永远只看到干净版本 |
-| **Token 节省路由** | LLM-as-Judge 任务复杂度分级，自动路由到最经济的模型 |
+| **三级灵敏度分类** | S1（安全）→ 云端处理；S2（敏感）→ 脱敏后云端 / 本地处理；S3（私密）→ 仅本地处理 |
+| **双检测引擎** | 基于规则的检测器 + 基于本地 LLM 的检测器，可组合使用 |
+| **可扩展路由管线** | 内置 privacy 路由器 + token-saver 路由器，支持用户自定义路由器 |
+| **隐私代理** | 本地 HTTP 代理服务器，拦截 S2 请求并在转发前剥离 PII 标记 |
+| **Guard Agent** | 专用本地子代理，处理 S3 级别的私密任务 |
+| **双轨记忆** | MEMORY-FULL.md（本地完整记忆）+ MEMORY.md（脱敏后的云端记忆） |
+| **双轨会话历史** | full 历史（含 guard agent 交互）+ clean 历史（排除 guard agent 内容） |
+| **多推理后端** | 支持 Ollama、vLLM、LMStudio、SGLang、TGI 等 OpenAI 兼容 API 以及自定义 Provider |
 
-### 1.3 技术栈
+### 灵敏度等级定义
 
-- **语言**: TypeScript (ESM)
-- **运行时**: Node.js
-- **LLM 后端**: OpenAI-compatible API（Ollama、vLLM、LiteLLM 等）
-- **配置校验**: @sinclair/typebox
-- **测试框架**: Vitest
-- **代理服务**: Node.js `http` 模块
+| 等级 | 含义 | 路由策略 | 示例 |
+|------|------|----------|------|
+| **S1** | 安全 | 直接通过，云端模型处理 | "写一首关于春天的诗" |
+| **S2** | 敏感（含 PII） | 脱敏后转发云端（proxy 策略）或路由到本地模型（local 策略） | 地址、电话、邮箱、快递单号 |
+| **S3** | 私密 | 仅本地模型处理，永不上云 | 工资单、病历、密码、API Key、SSH 密钥 |
 
-### 1.4 文件结构
+---
+
+## 2. 架构设计
+
+### 整体架构
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        OpenClaw Agent                        │
+│                                                              │
+│  User Message → [Hook: before_model_resolve]                 │
+│                       │                                      │
+│                 ┌─────▼──────┐                               │
+│                 │  RouterPipeline  │                          │
+│                 │  ┌──────────────┐│                          │
+│                 │  │ privacy      ││ ← 内置: S1/S2/S3 检测   │
+│                 │  │ token-saver  ││ ← 内置: 任务复杂度路由   │
+│                 │  │ custom-*     ││ ← 用户自定义路由器       │
+│                 │  └──────────────┘│                          │
+│                 └─────┬──────┘                               │
+│                       │ RouterDecision                       │
+│              ┌────────┼────────┐                             │
+│              │        │        │                             │
+│          S1: 通过  S2: 代理   S3: 本地                       │
+│              │        │        │                             │
+│              ▼        ▼        ▼                             │
+│          Cloud   Privacy    Guard Agent                      │
+│          Model    Proxy    (Local Model)                     │
+│                    │                                         │
+│            ┌───────▼────────┐                                │
+│            │ Strip PII Markers│                               │
+│            │ Forward to Cloud │                               │
+│            └─────────────────┘                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 插件注册五步流程
+
+1. **registerProvider** — 注册 `guardclaw-privacy` 代理 Provider
+2. **config injection** — 将 Provider 指向本地隐私代理
+3. **registerService** — 管理代理服务器生命周期
+4. **init pipeline** — 创建路由管线 + 注册内置与自定义路由器
+5. **registerHooks** — 注册全部 10 个 Hook 点
+
+### 检测流程
+
+```
+Checkpoint (onUserMessage / onToolCallProposed / onToolCallExecuted)
+    │
+    ▼
+RouterPipeline.run()
+    │
+    ├── Phase 1: 高权重路由器 (weight ≥ 50) 并行执行
+    │       └── privacy router → detectSensitivityLevel()
+    │                                ├── ruleDetector: 关键词 + 正则 + 工具类型
+    │                                └── localModelDetector: 本地 LLM 分类
+    │
+    ├── 短路判断: 若 Phase 1 发现非 S1 → 跳过 Phase 2
+    │
+    └── Phase 2: 低权重路由器 (weight < 50) 
+            └── token-saver → LLM Judge 任务复杂度分类
+```
+
+### S2 数据流（proxy 策略）
+
+```
+User Message (含 PII)
+    │
+    ▼
+detectByLocalModel() → S2
+    │
+    ▼
+desensitizeWithLocalModel()
+    ├── Step 1: LLM 提取 PII 为 JSON 数组
+    └── Step 2: 编程替换 PII → [REDACTED:TYPE] 标记
+    │
+    ▼
+Wrap in <guardclaw-s2>...</guardclaw-s2> markers
+    │
+    ▼
+Route to guardclaw-privacy provider
+    │
+    ▼
+Privacy Proxy (localhost:8403)
+    ├── Strip markers, keep only desensitized content
+    ├── Forward to original cloud provider
+    └── Passthrough response (including SSE streaming)
+```
+
+---
+
+## 3. 代码结构
 
 ```
 guardclaw/
 ├── index.ts                    # 插件入口，五步注册流程
-├── package.json
-├── openclaw.plugin.json        # 插件元数据 + 配置 JSON Schema
-├── config.example.json         # 示例配置
-├── tsconfig.json
-├── prompts/                    # 可编辑的 prompt 模板
-│   ├── guard-agent-system.md
-│   └── token-saver-judge.md
+├── package.json                # 包定义与依赖
+├── openclaw.plugin.json        # OpenClaw 插件元数据 + configSchema
+├── config.example.json         # 示例配置（含所有 Edge Provider 示例）
+│
 ├── src/
 │   ├── types.ts                # 核心类型定义
-│   ├── config-schema.ts        # TypeBox 配置 schema + 默认值
-│   ├── detector.ts             # 检测引擎协调器
-│   ├── rules.ts                # 规则检测器（关键词、正则、工具、路径）
-│   ├── local-model.ts          # 本地 LLM 检测器 + 脱敏器
-│   ├── hooks.ts                # 10 个 OpenClaw 钩子注册
-│   ├── router-pipeline.ts      # 可组合路由管道
-│   ├── routers/
-│   │   ├── privacy.ts          # 内置隐私路由器
-│   │   └── token-saver.ts      # 内置 Token 节省路由器
-│   ├── privacy-proxy.ts        # HTTP 隐私代理
-│   ├── provider.ts             # guardclaw-privacy 提供者注册
-│   ├── guard-agent.ts          # Guard Agent 配置管理
-│   ├── session-manager.ts      # 双轨会话管理器
-│   ├── session-state.ts        # 运行时会话状态（内存态）
-│   ├── memory-isolation.ts     # 记忆文件隔离管理
-│   ├── prompt-loader.ts        # Prompt 模板加载器
-│   └── utils.ts                # 工具函数（路径匹配、PII 规则脱敏）
-└── test/
-    ├── detector.test.ts
-    ├── rules.test.ts
-    ├── privacy-proxy.test.ts
-    ├── session-manager.test.ts
-    ├── token-saver.test.ts
-    ├── integration.test.ts
-    └── router-pipeline.test.ts
+│   ├── config-schema.ts        # TypeBox 配置 Schema + 默认值
+│   ├── detector.ts             # 检测引擎核心（协调双检测器）
+│   ├── rules.ts                # 规则检测器（关键词、正则、工具类型、路径）
+│   ├── local-model.ts          # 本地 LLM 检测器 + 脱敏 + 多协议支持
+│   ├── router-pipeline.ts      # 路由管线（注册、配置、两阶段执行、加权合并）
+│   ├── hooks.ts                # 10 个 Hook 注册与实现
+│   ├── privacy-proxy.ts        # HTTP 隐私代理服务器
+│   ├── provider.ts             # guardclaw-privacy Provider 定义
+│   ├── guard-agent.ts          # Guard Agent 配置与会话管理
+│   ├── session-state.ts        # 会话隐私状态（内存存储）
+│   ├── session-manager.ts      # 双轨会话历史持久化
+│   ├── memory-isolation.ts     # 双轨记忆管理（MEMORY.md / MEMORY-FULL.md）
+│   ├── prompt-loader.ts        # Prompt 模板加载器（支持用户自定义）
+│   ├── utils.ts                # 工具函数（路径匹配、PII 规则脱敏等）
+│   └── routers/
+│       ├── privacy.ts          # 内置 privacy 路由器
+│       └── token-saver.ts      # 内置 token-saver 路由器
+│
+├── prompts/
+│   ├── guard-agent-system.md   # Guard Agent 系统 Prompt（可自定义）
+│   └── token-saver-judge.md    # Token-Saver 复杂度分类 Prompt（可自定义）
+│
+├── test/
+│   ├── rules.test.ts           # 规则检测器测试
+│   ├── session-manager.test.ts # 会话管理器测试
+│   ├── detector.test.ts        # 检测引擎测试
+│   ├── token-saver.test.ts     # Token-Saver 路由器测试
+│   ├── guardclaw-plugin-e2e.test.ts  # 端到端插件测试
+│   ├── privacy-proxy.test.ts   # 隐私代理测试
+│   ├── integration.test.ts     # 集成测试
+│   └── router-pipeline.test.ts # 路由管线测试
+│
+└── docs/
+    └── GuardClaw-技术报告.md   # 本文档
 ```
 
 ---
 
-## 2. 系统架构
+## 4. 核心类型定义
 
-### 2.1 高层架构图
-
-```
-                    ┌──────────────────────────────────────────────┐
-                    │              OpenClaw Agent Runtime           │
-                    │                                              │
-  User Message ──►  │  ┌─── Hook 1: before_model_resolve ───────┐  │
-                    │  │                                         │  │
-                    │  │   RouterPipeline.run("onUserMessage")   │  │
-                    │  │         ┌──────────┐ ┌──────────┐       │  │
-                    │  │         │ Privacy  │ │ Token    │ ...   │  │
-                    │  │         │ Router   │ │ Saver    │       │  │
-                    │  │         └────┬─────┘ └────┬─────┘       │  │
-                    │  │              │             │             │  │
-                    │  │         mergeDecisions()                 │  │
-                    │  │              │                           │  │
-                    │  │    ┌────────┼────────┬───────────┐      │  │
-                    │  │    ▼        ▼        ▼           ▼      │  │
-                    │  │   S1      S2/proxy  S2/local    S3      │  │
-                    │  │ (pass)  (privacy   (local     (guard    │  │
-                    │  │          proxy)     model)     agent)   │  │
-                    │  └─────────────────────────────────────────┘  │
-                    │                                              │
-                    │  ┌─── Hook 2: before_prompt_build ─────────┐  │
-                    │  │  Inject guard prompt / S2 markers       │  │
-                    │  └─────────────────────────────────────────┘  │
-                    │                                              │
-                    │  ┌─── Hook 3-4: tool call guards ──────────┐  │
-                    │  │  Pipeline check → block / desensitize   │  │
-                    │  └─────────────────────────────────────────┘  │
-                    │                                              │
-                    │  ┌─── Hook 5-6: persistence ───────────────┐  │
-                    │  │  Dual history write + transcript sanitize│  │
-                    │  └─────────────────────────────────────────┘  │
-                    │                                              │
-                    │  ┌─── Hook 7: session_end ─────────────────┐  │
-                    │  │  Memory sync: FULL → CLEAN (redact PII) │  │
-                    │  └─────────────────────────────────────────┘  │
-                    └──────────────────────────────────────────────┘
-```
-
-### 2.2 S2 隐私代理流程
-
-```
-Agent ──► guardclaw-privacy provider ──► localhost:8403 (Privacy Proxy)
-                                              │
-                                         Strip <guardclaw-s2> markers
-                                              │
-                                         Forward clean request ──► Cloud LLM (OpenAI / Anthropic)
-                                              │
-                                         Stream/buffer response ◄── Cloud LLM
-                                              │
-                                         Return to Agent ◄──
-```
-
-### 2.3 双轨历史模型
-
-```
-┌─────────────────────────┐     ┌──────────────────────────┐
-│      MEMORY-FULL.md     │     │       MEMORY.md          │
-│   (本地模型可见)          │     │   (云模型可见)             │
-│                         │     │                          │
-│ - 所有消息              │ ──► │ - 过滤 Guard Agent 内容    │
-│ - Guard Agent 交互      │sync │ - PII 已脱敏              │
-│ - 完整 PII 数据         │     │ - [REDACTED:xxx] 标记     │
-└─────────────────────────┘     └──────────────────────────┘
-
-sessions/full/*.jsonl  ←→  sessions/clean/*.jsonl
-memory-full/*.md       ←→  memory/*.md
-```
-
----
-
-## 3. 设计模式分析
-
-### 3.1 管道与过滤器模式 (Pipeline & Filters)
-
-**应用位置**: `RouterPipeline` 类
-
-这是 GuardClaw 最核心的架构模式。`RouterPipeline` 实现了一个可组合的路由管道，每个路由器（Router）作为一个独立的过滤器：
+### 灵敏度等级
 
 ```typescript
-// 多个路由器按序执行，决策合并
-const decision = await pipeline.run("onUserMessage", context, config);
+type SensitivityLevel = "S1" | "S2" | "S3";
+type SensitivityLevelNumeric = 1 | 2 | 3;
 ```
 
-**特点**:
-- 每个路由器实现 `GuardClawRouter` 接口，仅需提供 `id` 和 `detect()` 方法
-- 管道按配置顺序依次执行所有路由器
-- 决策合并策略：最高敏感度级别胜出；同级别下 block > redirect > transform > passthrough
-- 单个路由器异常不影响其他路由器（容错隔离）
-
-**优势**: 高度可扩展，用户可通过配置注册自定义路由器（如成本优化、内容过滤等），无需修改核心代码。
-
-### 3.2 策略模式 (Strategy Pattern)
-
-**应用位置**: 检测器分发 (`detector.ts`)
-
-检测引擎支持两种可替换的检测策略——`ruleDetector` 和 `localModelDetector`——通过配置在不同 checkpoint 自由组合：
+### 检测器类型
 
 ```typescript
-// 配置驱动的策略选择
-checkpoints: {
-  onUserMessage: ["ruleDetector", "localModelDetector"],
-  onToolCallProposed: ["ruleDetector"],
+type DetectorType = "ruleDetector" | "localModelDetector";
+```
+
+### 检测点（Checkpoint）
+
+```typescript
+type Checkpoint = "onUserMessage" | "onToolCallProposed" | "onToolCallExecuted";
+```
+
+### 边缘推理 Provider 协议
+
+```typescript
+type EdgeProviderType = "openai-compatible" | "ollama-native" | "custom";
+```
+
+- **openai-compatible**: `POST /v1/chat/completions` — 兼容 Ollama、vLLM、LiteLLM、LocalAI、LMStudio、SGLang、TGI
+- **ollama-native**: `POST /api/chat` — Ollama 原生 API
+- **custom**: 用户提供的模块，需导出 `callChat()` 函数
+
+### 检测上下文
+
+```typescript
+type DetectionContext = {
+  checkpoint: Checkpoint;
+  message?: string;
+  toolName?: string;
+  toolParams?: Record<string, unknown>;
+  toolResult?: unknown;
+  sessionKey?: string;
+  agentId?: string;
+  recentContext?: string[];
+  fileContentSnippet?: string;   // 预读文件内容片段
+};
+```
+
+### 检测结果
+
+```typescript
+type DetectionResult = {
+  level: SensitivityLevel;
+  levelNumeric: SensitivityLevelNumeric;
+  reason?: string;
+  detectorType: DetectorType;
+  confidence?: number;
+};
+```
+
+### 路由器决策
+
+```typescript
+type RouterAction = "passthrough" | "redirect" | "transform" | "block";
+
+type RouterDecision = {
+  level: SensitivityLevel;
+  action?: RouterAction;
+  target?: { provider: string; model: string };
+  transformedContent?: string;
+  reason?: string;
+  confidence?: number;
+  routerId?: string;
+};
+```
+
+### 路由器接口
+
+```typescript
+interface GuardClawRouter {
+  id: string;
+  detect(
+    context: DetectionContext,
+    config: Record<string, unknown>,
+  ): Promise<RouterDecision>;
 }
 ```
 
-每个检测器实现独立的检测逻辑，但共享相同的输入/输出接口 (`DetectionContext` → `DetectionResult`)。`runDetectors()` 函数依次执行配置的检测器并合并结果。
-
-### 3.3 代理模式 (Proxy Pattern)
-
-**应用位置**: `privacy-proxy.ts` + `provider.ts`
-
-隐私代理是经典代理模式的应用：
-
-1. **`guardclaw-privacy` Provider** 注册为虚拟提供者，镜像所有已配置模型
-2. **本地 HTTP 代理** 拦截请求，剥离 `<guardclaw-s2>` 标记后转发至真实 Provider
-3. 对调用者完全透明——Agent 以为在与 "guardclaw-privacy" 通信，实际数据已被清洗
-
-```
-Agent → guardclaw-privacy → Privacy Proxy → 剥离 PII → OpenAI/Anthropic
-```
-
-### 3.4 观察者模式 (Observer / Hook Pattern)
-
-**应用位置**: `hooks.ts`
-
-通过 OpenClaw 的 `api.on(event, handler)` 钩子机制，GuardClaw 注册了 10 个事件监听器：
-
-| 钩子 | 触发时机 | 职责 |
-|------|---------|------|
-| `before_model_resolve` | 模型选择前 | 管道检测 + 模型路由 |
-| `before_prompt_build` | Prompt 构建前 | 注入守护 prompt / S2 标记 |
-| `before_tool_call` | 工具调用前 | 管道检测 + 阻断/脱敏 |
-| `after_tool_call` | 工具调用后 | 结果检测 + 会话标记 |
-| `tool_result_persist` | 工具结果持久化 | 双轨历史写入 |
-| `before_message_write` | 消息写入前 | 会话转录脱敏 |
-| `session_end` | 会话结束 | 记忆同步 |
-| `message_sending` | 消息外发 | 出站消息守卫 |
-| `before_agent_start` | 子代理启动前 | 子代理内容守卫 |
-| `message_received` | 消息接收 | 观测日志 |
-
-这实现了**面向切面 (AOP)** 的安全增强——业务逻辑不受影响，安全检测作为横切关注点植入。
-
-### 3.5 单例模式 (Singleton)
-
-**应用位置**: 多个管理器
-
-以下组件使用了模块级单例：
-
-- `RouterPipeline` — `globalPipeline` (via `setGlobalPipeline` / `getGlobalPipeline`)
-- `DualSessionManager` — `defaultManager` (via `getDefaultSessionManager`)
-- `MemoryIsolationManager` — `defaultMemoryManager` (via `getDefaultMemoryManager`)
-- Prompt 缓存 — `cache` Map in `prompt-loader.ts`
-
-单例确保全局状态一致性，避免多实例间的状态竞争。
-
-### 3.6 模板方法模式 (Template Method)
-
-**应用位置**: `GuardClawRouter` 接口
-
-路由器接口定义了检测的骨架结构（`detect(context, config) → RouterDecision`），具体策略由各实现填充：
-
-- `privacyRouter`: 封装 S1/S2/S3 敏感度检测
-- `tokenSaverRouter`: 封装 LLM-as-Judge 任务复杂度分级
-
-新路由器只需实现 `detect()` 方法，管道负责编排和合并。
-
-### 3.7 装饰器模式 (Decorator)
-
-**应用位置**: `before_prompt_build` 钩子
-
-在不修改原始 prompt 的情况下，GuardClaw 以装饰方式添加额外内容：
-
-- S3: `prependSystemContext` 注入守护 Agent 系统提示
-- S2-proxy: `prependContext` 注入 `<guardclaw-s2>` 包裹的脱敏内容 + `appendSystemContext` 注入隐私指令
-
-### 3.8 暂存器模式 (Stash Pattern)
-
-**应用位置**: `session-state.ts` 中的 `PendingDetection`
-
-由于 OpenClaw 钩子是独立注册的（`before_model_resolve` 和 `before_prompt_build` 分开触发），需要在钩子间传递检测结果：
+### 路由器注册
 
 ```typescript
-stashDetection(sessionKey, { level, reason, desensitized, ... });
-// ... 下一个钩子中 ...
-const pending = getPendingDetection(sessionKey);
-consumeDetection(sessionKey); // 一次性消费
+type RouterRegistration = {
+  enabled?: boolean;
+  type?: "builtin" | "custom";
+  module?: string;                    // 自定义路由器模块路径
+  options?: Record<string, unknown>;  // 传递给 router.detect() 的配置
+  weight?: number;                    // 合并权重 (0–100, 默认 50)
+};
 ```
 
-这是一种受控的共享状态模式，通过 `consume` 语义防止过期数据误用。
+### 管线配置
 
-### 3.9 配置优先模式 (Configuration-Driven)
+```typescript
+type PipelineConfig = {
+  onUserMessage?: string[];           // 路由器 ID 执行顺序
+  onToolCallProposed?: string[];
+  onToolCallExecuted?: string[];
+};
+```
 
-整个插件的行为高度可配置化：
+### 会话隐私状态
 
-- 检测器组合由 `checkpoints` 配置驱动
-- 路由管道顺序由 `pipeline` 配置驱动
-- 关键词/正则/工具规则由 `rules` 配置驱动
-- 自定义路由器通过 `routers[id].module` 动态加载
-- Prompt 通过 `prompts/*.md` 文件可编辑
-
-零代码修改即可调整系统行为。
+```typescript
+type SessionPrivacyState = {
+  sessionKey: string;
+  isPrivate: boolean;
+  highestLevel: SensitivityLevel;
+  detectionHistory: Array<{
+    timestamp: number;
+    level: SensitivityLevel;
+    checkpoint: Checkpoint;
+    reason?: string;
+  }>;
+};
+```
 
 ---
 
-## 4. 核心模块详解
+## 5. 模块详解与 API 参考
 
-### 4.1 检测引擎 (`detector.ts`)
+### 5.1 入口 — `index.ts`
 
-**职责**: 协调多个检测器，合并结果。
+插件的主入口文件，实现 OpenClaw 插件接口。
 
-**流程**:
-1. 根据 checkpoint 类型从配置获取检测器列表
-2. 依次运行每个检测器
-3. 取最高敏感度级别作为最终结果
-4. 合并所有非 S1 结果的原因和置信度
+**导出**: `default plugin` 对象
 
-**关键设计**:
-- 检测器失败不中断流程（catch + continue）
-- 空检测器列表回退到 `localModelDetector`
-- 配置使用深度合并（用户配置覆盖默认值）
+**注册流程** (`register(api)`):
 
-### 4.2 规则检测器 (`rules.ts`)
+| 步骤 | 操作 | 说明 |
+|------|------|------|
+| 1 | `api.registerProvider()` | 注册 `guardclaw-privacy` Provider |
+| 2 | Config injection | 将 Provider 的 `baseUrl` 指向 `http://127.0.0.1:{proxyPort}/v1` |
+| 3 | `api.registerService()` | 注册代理服务 `guardclaw-proxy`，管理启停 |
+| 4 | `new RouterPipeline()` | 创建路由管线，注册 privacy + token-saver 路由器 |
+| 5 | `registerHooks(api)` | 注册全部 10 个检测与路由 Hook |
 
-**职责**: 基于静态规则的快速检测。
+**关键内部函数**:
 
-**五层检测**:
-1. **关键词匹配** — S2/S3 关键词在消息中的大小写无关匹配
-2. **正则模式** — 编译缓存的 RegExp 匹配（内网 IP、数据库连接串、API Key 等）
-3. **工具类型** — 工具名称与 S2/S3 工具列表匹配
-4. **工具参数路径** — 参数中的文件路径与保护路径匹配 + 敏感扩展名检测
-5. **工具结果扫描** — 对工具返回内容执行关键词 + 正则检查
+- `getPrivacyConfig(pluginConfig)` — 合并用户配置与默认配置
 
-**性能优化**: 正则编译结果缓存在 `patternCache` Map 中，避免重复编译。
+---
 
-### 4.3 本地 LLM 检测器 (`local-model.ts`)
+### 5.2 类型系统 — `types.ts`
 
-**职责**: 基于语义的智能检测 + PII 脱敏。
+集中定义所有核心类型与辅助函数。
 
-**检测流程**:
-1. 使用系统级分类 prompt 发送至本地模型
-2. 解析 JSON 响应 `{"level":"S1|S2|S3","reason":"..."}`
-3. 对文件内容执行 `quickPiiScan` 安全网检查（防止 LLM 漏判）
+**导出的辅助函数**:
 
-**脱敏流程**（两步法）:
-1. **PII 提取**: 请求本地模型输出 PII 项的 JSON 数组 `[{"type":"NAME","value":"张三"}, ...]`
-2. **程序化替换**: 按值长度降序替换，映射为 `[REDACTED:xxx]` 标记
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `levelToNumeric` | `(level: SensitivityLevel) => SensitivityLevelNumeric` | 等级转数字 |
+| `numericToLevel` | `(numeric: SensitivityLevelNumeric) => SensitivityLevel` | 数字转等级 |
+| `maxLevel` | `(...levels: SensitivityLevel[]) => SensitivityLevel` | 取最高等级 |
 
-**兼容性处理**:
-- 剥离 `<think>...</think>` 推理标签（MiniCPM、Qwen3 等模型）
-- Qwen3 自动添加 `/no_think` 前缀
-- 修复 Python 风格单引号 JSON
-- 支持不完整 JSON 修复（缺少 `]`、尾逗号等）
+---
 
-### 4.4 路由管道 (`router-pipeline.ts`)
+### 5.3 配置 Schema — `config-schema.ts`
 
-**职责**: 可组合的多路由器编排引擎。
+使用 `@sinclair/typebox` 定义配置 Schema，提供运行时类型验证。
 
-**核心 API**:
-- `register(router, registration)` — 注册路由器
-- `configure({ routers, pipeline })` — 配置管道顺序
-- `loadCustomRouters()` — 异步动态加载自定义路由器模块
-- `run(checkpoint, context, config)` — 执行管道并合并决策
+**导出**:
 
-**决策合并算法** (`mergeDecisions`):
-1. 所有路由器的决策按级别排序
-2. 最高 `SensitivityLevel` 胜出（S3 > S2 > S1）
-3. 同级别按 action 优先级排序：block(4) > redirect(3) > transform(2) > passthrough(1)
-4. 原因字符串从所有非 S1 决策拼接
-5. 置信度取平均值
+| 名称 | 说明 |
+|------|------|
+| `guardClawConfigSchema` | TypeBox Schema 对象 |
+| `defaultPrivacyConfig` | 默认配置值 |
 
-### 4.5 隐私代理 (`privacy-proxy.ts`)
+**默认配置要点**:
 
-**职责**: 本地 HTTP 代理，在 S2 流程中剥离 PII 标记。
+- 检测默认使用 `localModelDetector`（非规则检测器）
+- S2 策略默认为 `"proxy"`
+- 代理端口默认 `8403`
+- 默认本地模型: `openbmb/minicpm4.1` via `openai-compatible`
+- privacy 路由器默认启用，token-saver 默认禁用
+
+---
+
+### 5.4 检测引擎 — `detector.ts`
+
+检测的核心协调器，负责根据配置调度多个检测器并合并结果。
+
+**导出函数**:
+
+#### `detectSensitivityLevel(context, pluginConfig)`
+
+- **参数**: `DetectionContext` + 插件配置
+- **返回**: `Promise<DetectionResult>`
+- **逻辑**:
+  1. 合并配置（用户 + 默认）
+  2. 根据 checkpoint 获取配置的检测器列表
+  3. 顺序执行所有检测器
+  4. 合并结果：取最高等级，合并原因，加权平均置信度
+
+**内部函数**:
+
+| 函数 | 说明 |
+|------|------|
+| `getDetectorsForCheckpoint()` | 获取指定 checkpoint 的检测器列表，默认 `["localModelDetector"]` |
+| `runDetectors()` | 顺序执行检测器，单个失败不阻塞其它 |
+| `mergeDetectionResults()` | 合并多个检测结果，最高等级优先 |
+| `mergeWithDefaults()` | 深度合并用户配置与默认值 |
+
+---
+
+### 5.5 规则检测器 — `rules.ts`
+
+基于规则的灵敏度检测，支持关键词匹配、正则表达式、工具类型和路径检测。
+
+**导出函数**:
+
+#### `detectByRules(context, config)`
+
+- **返回**: `DetectionResult`（同步，confidence 固定为 1.0）
+
+**检测维度** (按顺序):
+
+| 序号 | 检测项 | 说明 |
+|------|--------|------|
+| 1 | 关键词匹配 | 消息文本中匹配 `rules.keywords.S2/S3` |
+| 2 | 正则匹配 | 消息文本中匹配 `rules.patterns.S2/S3`（带编译缓存） |
+| 3 | 工具类型 | 工具名匹配 `rules.tools.S2/S3.tools` |
+| 4 | 工具参数路径 | 参数中提取路径，匹配 `rules.tools.S2/S3.paths` |
+| 5 | 工具结果内容 | 对工具执行结果重复关键词 + 正则检查 |
+
+**内部实现细节**:
+
+- 正则编译结果缓存在 `patternCache` Map 中，避免重复编译
+- 所有检查 S3 优先于 S2（高优先级先检测）
+- 路径匹配支持精确匹配、前缀匹配和后缀匹配（`*` 通配）
+- 额外检测敏感文件扩展名：`.pem`, `.key`, `.p12`, `.pfx`, `id_rsa` 等
+
+---
+
+### 5.6 本地模型检测器 — `local-model.ts`
+
+基于本地 LLM 的灵敏度检测与 PII 脱敏引擎，支持多种 API 协议。
+
+**导出函数**:
+
+#### `callChatCompletion(endpoint, model, messages, options?)`
+
+统一的 Chat Completion 调用入口，根据 `providerType` 分发到不同 API。
+
+| 协议 | API 路径 | 兼容后端 |
+|------|----------|----------|
+| `openai-compatible` | `POST {endpoint}/v1/chat/completions` | Ollama, vLLM, LiteLLM, LocalAI, LMStudio, SGLang, TGI |
+| `ollama-native` | `POST {endpoint}/api/chat` | Ollama 原生 |
+| `custom` | 用户模块的 `callChat()` | 自定义 |
+
+#### `detectByLocalModel(context, config)`
+
+- 构建检测 Prompt（system + user）
+- 调用本地模型获取 JSON 分类结果
+- 解析响应提取 `{level, reason, confidence}`
+- 安全网: 若 LLM 返回 S1 但文件内容有明显 PII，自动升级到 S2
+
+#### `desensitizeWithLocalModel(content, config)`
+
+两步脱敏流程：
+1. **Step 1**: LLM 提取 PII 为 JSON 数组 `[{type, value}, ...]`
+2. **Step 2**: 编程替换 — 按 value 长度降序排序，逐个替换为 `[REDACTED:TYPE]` 标记
+
+PII 类型映射覆盖：ADDRESS, PHONE, NAME, EMAIL, ID, CARD, SECRET, PASSWORD, LICENSE_PLATE, DELIVERY, ACCESS_CODE 等 30+ 种类型。
+
+#### `callLocalModelDirect(systemPrompt, userMessage, config)`
+
+直接调用边缘模型执行 S3 分析任务，绕过完整 Agent 管线。配置了 `frequencyPenalty: 0.5` 抑制重复。
+
+**内部实现细节**:
+
+- `stripThinkingTags()` — 清理推理模型（MiniCPM、Qwen3）的 `<think>...</think>` 输出
+- `quickPiiScan()` — 基于正则的 PII 快速扫描，用于安全网判断（非主要检测手段）
+- `parsePiiJson()` — 健壮的 JSON 解析器，处理 markdown 代码块、单引号 JSON、尾部逗号等模型输出异常
+- Qwen 模型自动添加 `/no_think` 前缀抑制思维链输出
+
+**自定义 Provider 接口**:
+
+```typescript
+interface CustomEdgeProvider {
+  callChat(
+    endpoint: string,
+    model: string,
+    messages: ChatMessage[],
+    options?: ChatCompletionOptions,
+  ): Promise<string>;
+}
+```
+
+---
+
+### 5.7 路由管线 — `router-pipeline.ts`
+
+通用路由管线，支持多个路由器在每个 checkpoint 组合执行。
+
+**导出类**: `RouterPipeline`
+
+#### 构造函数
+
+```typescript
+new RouterPipeline(logger?)
+```
+
+#### 方法
+
+| 方法 | 说明 |
+|------|------|
+| `register(router, registration?)` | 注册路由器实例 |
+| `loadCustomRouter(id, modulePath, registration?)` | 从模块路径动态加载自定义路由器 |
+| `configure(config)` | 从插件配置初始化管线 |
+| `loadCustomRouters()` | 加载所有在配置中声明的自定义路由器 |
+| `getRoutersForCheckpoint(checkpoint)` | 获取指定 checkpoint 的路由器列表 |
+| `getRouterWeight(id)` | 获取路由器权重（默认 50） |
+| `run(checkpoint, context, pluginConfig)` | 执行路由管线 |
+| `listRouters()` | 列出所有已注册路由器 ID |
+| `hasRouter(id)` | 检查路由器是否已注册 |
+
+#### 两阶段执行策略
+
+`run()` 方法实现两阶段短路执行：
+
+| 阶段 | 条件 | 行为 |
+|------|------|------|
+| **Phase 1** | weight ≥ 50（快速路由器） | 并行执行，如有非 S1/非 passthrough 结果则短路 |
+| **Phase 2** | weight < 50（慢速路由器） | 仅当 Phase 1 全部 S1 时执行 |
+
+这避免了在规则检测已确定敏感时还调用昂贵的 LLM Judge。
+
+#### 加权决策合并策略
+
+```
+1. 安全优先: 最高灵敏度等级始终获胜 (S3 > S2 > S1)
+2. 同等级下，权重决定: 高权重路由器的 action/target 获胜
+3. 权重相同时，action 严重性决定: block > redirect > transform > passthrough
+4. 最终 confidence: 加权平均
+```
+
+**导出的全局函数**:
+
+| 函数 | 说明 |
+|------|------|
+| `setGlobalPipeline(pipeline)` | 设置全局单例管线（插件初始化时调用） |
+| `getGlobalPipeline()` | 获取全局管线实例 |
+
+---
+
+### 5.8 隐私路由器 — `routers/privacy.ts`
+
+内置隐私路由器，封装现有的检测引擎 (`detector.ts`) 作为 `GuardClawRouter` 接口。
+
+**导出**: `privacyRouter: GuardClawRouter`
+
+- **id**: `"privacy"`
+- **默认权重**: 50（归类为快速路由器，Phase 1 执行）
+
+**路由逻辑**:
+
+| 检测结果 | 路由动作 | 目标 |
+|----------|----------|------|
+| S1 | `passthrough` | 直接通过 |
+| S2 (proxy 策略) | `redirect` | `guardclaw-privacy` 代理 Provider |
+| S2 (local 策略) | `redirect` | 本地 Guard Agent |
+| S3 | `redirect` | 本地 Guard Agent |
+
+---
+
+### 5.9 Token-Saver 路由器 — `routers/token-saver.ts`
+
+基于 LLM-as-Judge 的任务复杂度路由器，将简单任务路由到更便宜的模型。
+
+**导出**: `tokenSaverRouter: GuardClawRouter`
+
+- **id**: `"token-saver"`
+- **默认启用**: `false`（需用户主动开启）
+- **建议权重**: < 50（归类为慢速路由器，仅在 privacy 通过后执行）
+
+**任务复杂度分级**:
+
+| 级别 | 说明 | 默认模型 |
+|------|------|----------|
+| SIMPLE | 查询、翻译、格式化、是/否 | `gpt-4o-mini` |
+| MEDIUM | 代码生成、数据分析、单文件编辑 | `gpt-4o` |
+| COMPLEX | 系统设计、多文件重构、架构决策 | `claude-sonnet-4.6` |
+| REASONING | 数学证明、形式逻辑、深度分析 | `o4-mini` |
+
+**特性**:
+
+- 子代理会话自动跳过（避免逐消息 Judge 开销）
+- Prompt 哈希缓存（SHA-256，TTL 5 分钟）
+- 定期缓存清理（每 60 秒，最大存活 10 分钟）
+- Judge 调用失败时 fallback 为 passthrough（不阻塞请求）
+- 复用 GuardClaw 的 `callChatCompletion()` 基础设施
+
+**配置项** (`routers.token-saver.options`):
+
+| 键 | 类型 | 默认 | 说明 |
+|----|------|------|------|
+| `judgeEndpoint` | string | 继承 localModel.endpoint | Judge 模型端点 |
+| `judgeModel` | string | 继承 localModel.model | Judge 模型名称 |
+| `judgeProviderType` | EdgeProviderType | 继承 localModel.type | Judge API 协议 |
+| `tiers` | Record<Tier, {provider, model}> | 见上表 | 每级对应的模型 |
+| `cacheTtlMs` | number | 300000 | 缓存 TTL（毫秒） |
+
+---
+
+### 5.10 Hook 系统 — `hooks.ts`
+
+注册全部 10 个插件 Hook，串联检测、路由、脱敏、Guard Agent、记忆同步等功能。
+
+**Hook 列表**:
+
+| 序号 | Hook 名称 | 触发时机 | 核心职责 |
+|------|-----------|----------|----------|
+| 1 | `before_model_resolve` | 模型选择前 | 运行管线 → 决定路由（本地/代理/云端） |
+| 2 | `before_prompt_build` | Prompt 构建前 | 注入 Guard Prompt / S2 标记 / 文件内容 |
+| 3 | `before_tool_call` | 工具调用前 | 管线检测 + 文件访问守卫 + 子代理守卫 |
+| 4 | `after_tool_call` | 工具调用后 | 对工具结果运行管线检测 |
+| 5 | `tool_result_persist` | 工具结果持久化时 | 写入双轨会话历史 |
+| 6 | `before_message_write` | 消息写入前 | 根据检测结果清理会话记录（S3 → 占位符，S2 → 脱敏版） |
+| 7 | `session_end` | 会话结束时 | 记忆同步（MEMORY-FULL → MEMORY） |
+| 8 | `message_sending` | 出站消息时 | 对外发消息运行管线，S3 取消 / S2 脱敏 |
+| 9 | `before_agent_start` | 子代理启动前 | 对子代理任务运行管线守卫 |
+| 10 | `message_received` | 收到消息时 | 观察性日志 |
+
+**Hook 1 详细流程** (`before_model_resolve`):
+
+```
+1. 检查是否为 Guard 子会话 → 是则直接返回本地模型
+2. 过滤系统消息、已脱敏内容
+3. 尝试预读消息中引用的文件 (.xlsx/.csv/.txt/.docx/.json/.md)
+4. 执行 RouterPipeline.run("onUserMessage")
+5. 记录检测结果到会话状态
+6. 根据 RouterDecision:
+   - S1 passthrough → 无操作
+   - S3 / redirect → 路由到本地模型
+   - S2 proxy → 脱敏 + 路由到 guardclaw-privacy
+   - S2 local → 脱敏 + 路由到本地模型
+   - block → 路由到边缘模型作为安全保障
+7. Stash 检测结果供后续 Hook 使用
+```
+
+**Hook 3 特殊守卫**:
+
+- **文件访问守卫**: 阻止云端模型访问 `sessions/full/`、`MEMORY-FULL.md` 等受保护路径
+- **预读文件守卫**: 若文件已在 S2 流程中预读并脱敏，阻止重复读取原始文件
+- **子代理守卫**: 拦截 `sessions_spawn` / `sessions_send`，对任务内容运行管线检测
+
+---
+
+### 5.11 隐私代理 — `privacy-proxy.ts`
+
+轻量级 HTTP 代理服务器，拦截 S2 请求并在转发到云端前剥离 PII 标记。
+
+**导出函数/类型**:
+
+| 名称 | 说明 |
+|------|------|
+| `startPrivacyProxy(port, logger?)` | 启动代理服务器，返回 `ProxyHandle` |
+| `stripPiiMarkers(messages)` | 从消息数组中剥离 `<guardclaw-s2>` 标记 |
+| `stashOriginalProvider(key, target)` | 暂存原始 Provider 信息（按会话 key） |
+| `consumeOriginalProvider(key)` | 消费并返回暂存的 Provider 信息 |
+| `setDefaultProviderTarget(target)` | 设置默认 Provider 目标（fallback） |
 
 **标记协议**:
+
 ```
 <guardclaw-s2>
-  脱敏后的内容（含 [REDACTED:xxx] 标记）
+  [脱敏后的内容]
 </guardclaw-s2>
-原始敏感内容（不会发送至云端）
 ```
 
 **代理处理流程**:
-1. 读取请求体 JSON
-2. 扫描 `messages[]` 中的 `<guardclaw-s2>` 标记
-3. 提取标记内的脱敏内容，丢弃标记外的原始内容
-4. 解析 `x-guardclaw-session` header 获取原始 Provider 目标
-5. 转发清洗后的请求至真实 LLM API
-6. 流式或缓冲透传响应
 
-### 4.6 Guard Agent (`guard-agent.ts`)
+1. 读取请求体
+2. 剥离 `<guardclaw-s2>...</guardclaw-s2>` 标记
+3. 通过 `x-guardclaw-session` 头解析会话 key
+4. 查找原始 Provider 目标
+5. 转发清理后的请求到上游 Provider
+6. 透传响应（支持 SSE streaming）
 
-**职责**: S3 内容的本地守护代理配置管理。
+**ProxyHandle 接口**:
 
-**关键功能**:
-- 从 `"ollama/openbmb/minicpm4.1"` 格式解析 `provider` + `modelName`
-- 生成守护子会话 Key：`{parentSessionKey}:guard`
-- 验证 provider 是否为本地类型（`ollama`、`llama.cpp`、`localai`、`llamafile`、`lmstudio`）
-- 生成主会话占位符消息：`🔒 [Private content — processed locally]`
+```typescript
+type ProxyHandle = {
+  baseUrl: string;     // "http://127.0.0.1:{port}"
+  port: number;
+  close: () => Promise<void>;
+};
+```
 
-### 4.7 会话管理 (`session-manager.ts` + `session-state.ts`)
+---
 
-**双轨持久化** (`DualSessionManager`):
-- 普通消息 → 写入 `full/` + `clean/` 两个目录
-- Guard Agent 消息 → 仅写入 `full/`
-- 云模型加载 → 读取 `clean/`；本地模型加载 → 读取 `full/`
-- 存储格式：JSONL（每行一条消息）
+### 5.12 Provider — `provider.ts`
 
-**运行时状态** (`session-state.ts`):
-- `sessionStates` Map: 跟踪每个会话的隐私状态（一旦标记为 private，不可降级）
-- `preReadFiles` Map: 跟踪已预读的文件路径（防止云模型二次读取原始文件）
-- `pendingDetections` Map: 钩子间传递检测结果的暂存器
-- 检测历史上限 50 条，防止内存膨胀
+注册 `guardclaw-privacy` 作为 OpenClaw Provider。
 
-### 4.8 记忆隔离 (`memory-isolation.ts`)
+**导出**:
 
-**职责**: 管理 MEMORY-FULL.md 与 MEMORY.md 的同步。
+| 名称 | 说明 |
+|------|------|
+| `guardClawPrivacyProvider` | Provider 定义对象 |
+| `setActiveProxy(proxy)` | 设置活跃的代理实例 |
+| `getActiveProxy()` | 获取活跃的代理实例 |
+| `mirrorAllProviderModels(config)` | 从所有已配置 Provider 镜像模型列表 |
+
+`mirrorAllProviderModels()` 确保 `guardclaw-privacy` Provider 包含所有用户配置的模型，使得 `providerOverride: "guardclaw-privacy"` 可以与任意模型配合工作。
+
+---
+
+### 5.13 Guard Agent — `guard-agent.ts`
+
+管理 Guard Agent 配置与 S3 会话路由。
+
+**导出函数**:
+
+| 函数 | 说明 |
+|------|------|
+| `isGuardAgentConfigured(config)` | 检查 Guard Agent 是否完整配置 |
+| `getGuardAgentConfig(config)` | 解析 Guard Agent 配置，分离 provider/model |
+| `generateGuardSessionKey(parentKey)` | 生成 guard 子会话 key（`{parent}:guard`） |
+| `isGuardSessionKey(key)` | 检测是否为 guard 子会话 |
+| `getParentSessionKey(guardKey)` | 提取父会话 key |
+| `buildMainSessionPlaceholder(level, reason?)` | 构建主会话占位消息 |
+| `isLocalProvider(provider, extraProviders?)` | 验证 Provider 是否为本地（非云端） |
+
+**内置本地 Provider 列表**:
+
+`ollama`, `llama.cpp`, `localai`, `llamafile`, `lmstudio`, `vllm`, `mlx`, `sglang`, `tgi`, `koboldcpp`, `tabbyapi`, `nitro`
+
+**模型引用格式**: `"provider/model"` — 如 `"ollama/llama3.2:3b"`, `"vllm/qwen2.5:7b"`
+
+---
+
+### 5.14 会话状态 — `session-state.ts`
+
+基于内存的会话隐私状态管理。
+
+**导出函数**:
+
+| 函数 | 说明 |
+|------|------|
+| `markSessionAsPrivate(key, level)` | 标记会话为私密（一旦标记不降级） |
+| `isSessionMarkedPrivate(key)` | 检查会话是否私密 |
+| `getSessionHighestLevel(key)` | 获取最高检测等级 |
+| `getSessionSensitivity(key)` | 获取会话灵敏度信息 |
+| `recordDetection(key, level, checkpoint, reason?)` | 记录检测事件（最多保留 50 条） |
+| `getSessionState(key)` | 获取完整会话状态 |
+| `clearSessionState(key)` | 清除会话状态 |
+| `resetSessionPrivacy(key)` | 重置隐私状态（允许切回云端模型） |
+| `getAllSessionStates()` | 获取所有活跃会话状态（调试用） |
+| `markPreReadFiles(key, message)` | 标记已预读的文件路径 |
+| `isFilePreRead(key, filePath)` | 检查文件是否已预读 |
+| `stashDetection(key, detection)` | 暂存检测结果（跨 Hook 传递） |
+| `getPendingDetection(key)` | 获取待处理的检测结果 |
+| `consumeDetection(key)` | 消费并返回待处理的检测结果 |
+
+**PendingDetection 类型**:
+
+```typescript
+type PendingDetection = {
+  level: SensitivityLevel;
+  reason?: string;
+  desensitized?: string;        // S2 脱敏后的内容
+  preReadFileContent?: string;  // 预读的文件内容
+  originalPrompt?: string;      // 原始消息
+  timestamp: number;
+};
+```
+
+---
+
+### 5.15 会话管理器 — `session-manager.ts`
+
+双轨会话历史持久化（JSONL 格式）。
+
+**导出类**: `DualSessionManager`
+
+#### 方法
+
+| 方法 | 说明 |
+|------|------|
+| `persistMessage(sessionKey, message, agentId?)` | 持久化消息到双轨历史 |
+| `loadHistory(sessionKey, isCloudModel, agentId?, limit?)` | 根据模型类型加载历史 |
+| `clearHistory(sessionKey, agentId?, historyType?)` | 清除历史 |
+| `getHistoryStats(sessionKey, agentId?)` | 获取历史统计 |
+
+**双轨策略**:
+
+- **full 历史**: 所有消息（含 Guard Agent 交互），供本地模型使用
+- **clean 历史**: 排除 Guard Agent 消息，供云端模型使用
+
+**存储路径**:
+
+```
+~/.openclaw/agents/{agentId}/sessions/{full|clean}/{sessionKey}.jsonl
+```
+
+**导出的单例**:
+
+```typescript
+getDefaultSessionManager(): DualSessionManager
+```
+
+---
+
+### 5.16 记忆隔离 — `memory-isolation.ts`
+
+管理双轨记忆目录，确保云端模型永远看不到完整的隐私记忆。
+
+**导出类**: `MemoryIsolationManager`
+
+#### 方法
+
+| 方法 | 说明 |
+|------|------|
+| `getMemoryDir(isCloudModel)` | 获取记忆目录路径 |
+| `getMemoryFilePath(isCloudModel)` | 获取 MEMORY.md / MEMORY-FULL.md 路径 |
+| `getDailyMemoryPath(isCloudModel, date?)` | 获取日记忆文件路径 |
+| `writeMemory(content, isCloudModel, options?)` | 写入记忆 |
+| `readMemory(isCloudModel, options?)` | 读取记忆 |
+| `mergeCleanIntoFull(options?)` | 将云端记忆的新增内容合并到完整记忆 |
+| `syncMemoryToClean(privacyConfig?)` | 同步 MEMORY-FULL → MEMORY（过滤 + 脱敏） |
+| `syncDailyMemoryToClean(privacyConfig?)` | 同步所有日记忆文件 |
+| `syncAllMemoryToClean(privacyConfig?)` | 全量同步（长期 + 日记忆） |
+| `initializeDirectories()` | 初始化目录结构 |
+| `getMemoryStats()` | 获取记忆统计 |
 
 **同步流程**:
-1. **Merge**: 将 MEMORY.md（云模型写入）的新行合并至 MEMORY-FULL.md
-2. **Filter**: 从 MEMORY-FULL.md 中过滤 Guard Agent 相关段落
-3. **Redact**: PII 脱敏（优先本地模型，降级至规则脱敏）
-4. **Write**: 写入清洗后的 MEMORY.md
-
-支持长期记忆（MEMORY.md / MEMORY-FULL.md）和每日记忆（`memory/YYYY-MM-DD.md`）两种模式。
-
-### 4.9 Token 节省路由器 (`routers/token-saver.ts`)
-
-**职责**: LLM-as-Judge 任务复杂度分级，路由到最经济的模型。
-
-**四级分类**:
-| 级别 | 描述 | 默认模型 |
-|------|------|---------|
-| SIMPLE | 查询、翻译、格式化 | gpt-4o-mini |
-| MEDIUM | 代码生成、数据分析 | gpt-4o |
-| COMPLEX | 架构设计、多文件重构 | claude-sonnet-4.6 |
-| REASONING | 数学证明、形式逻辑 | o4-mini |
-
-**优化设计**:
-- Prompt 哈希缓存（SHA-256 前 16 位，TTL 5 分钟）
-- 子代理会话直接跳过（避免每条消息都调用 Judge）
-- 完整 Prompt 转发给 Judge（不截断，确保分类准确性）
-- Judge 失败时 passthrough（不阻塞请求）
-- 定时清理过期缓存（每 60 秒，`unref()` 避免阻止进程退出）
-
-### 4.10 Prompt 加载器 (`prompt-loader.ts`)
-
-**职责**: 运行时加载可编辑的 Prompt 模板。
-
-用户可以编辑 `prompts/*.md` 文件来自定义：
-- 检测标准 (`detection-system.md`)
-- Guard Agent 行为 (`guard-agent-system.md`)
-- PII 提取规则 (`pii-extraction.md`)
-- Token Saver Judge (`token-saver-judge.md`)
-
-**特点**:
-- 内存缓存（每个进程生命周期只读一次）
-- 找不到文件时回退到硬编码默认值
-- 支持 `{{PLACEHOLDER}}` 变量替换
-- 自动适配 `src/` 和 `dist/src/` 两种目录结构
-
----
-
-## 5. 数据流与处理链路
-
-### 5.1 用户消息处理 (S2 Proxy 路径)
 
 ```
-1. 用户发送消息: "分析我的工资单 payslip.xlsx"
-   │
-2. Hook: before_model_resolve
-   │  ├─ 预读文件内容 (tryReadReferencedFile)
-   │  ├─ RouterPipeline.run("onUserMessage")
-   │  │   └─ privacyRouter.detect()
-   │  │       └─ detectSensitivityLevel() → S2 (salary data)
-   │  ├─ desensitizeWithLocalModel(fileContent)
-   │  │   └─ extractPiiWithModel() → [{type:"NAME",value:"张三"}, {type:"SALARY",value:"50000"}]
-   │  │   └─ 替换: "张三" → [REDACTED:NAME], "50000" → [REDACTED:SALARY]
-   │  ├─ stashDetection(sessionKey, { level:"S2", desensitized, preReadFileContent })
-   │  ├─ stashOriginalProvider(sessionKey, { baseUrl, apiKey })
-   │  └─ return { providerOverride: "guardclaw-privacy" }
-   │
-3. Hook: before_prompt_build
-   │  ├─ getPendingDetection(sessionKey)
-   │  └─ return {
-   │      prependContext: "<guardclaw-s2>\n脱敏内容\n</guardclaw-s2>",
-   │      appendSystemContext: PRIVACY_S2_SYSTEM_INSTRUCTION
-   │    }
-   │
-4. Agent → guardclaw-privacy provider → localhost:8403
-   │  ├─ stripPiiMarkers(messages) → 提取脱敏内容，丢弃原始内容
-   │  ├─ resolveTarget(sessionKey) → 获取原始 Provider (OpenAI)
-   │  └─ Forward clean request → OpenAI API → Stream response back
-   │
-5. Hook: before_message_write
-   │  └─ 将用户消息替换为脱敏版本（写入会话历史）
-   │
-6. Agent 返回分析结果给用户
+1. Merge MEMORY.md → MEMORY-FULL.md    (捕获云端模型的新增)
+2. Filter guard agent sections           (移除 [Guard Agent] 等标记段)
+3. Redact PII                            (优先 LLM 脱敏，fallback 规则脱敏)
+4. Write → MEMORY.md                     (清理后的版本)
 ```
 
-### 5.2 用户消息处理 (S3 Guard Agent 路径)
+**文件结构**:
 
 ```
-1. 用户发送消息: "检查我的密码强度: abc123"
-   │
-2. Hook: before_model_resolve
-   │  ├─ RouterPipeline.run("onUserMessage") → S3
-   │  ├─ markSessionAsPrivate(sessionKey, "S3")
-   │  └─ return { providerOverride: "ollama", modelOverride: "openbmb/minicpm4.1" }
-   │
-3. Hook: before_prompt_build
-   │  └─ return { prependSystemContext: guardAgentSystemPrompt }
-   │
-4. 本地模型直接处理 → 响应不经过任何云端
-   │
-5. Hook: before_message_write
-   │  └─ 用户消息替换为: "🔒 [Private content — processed locally]"
-   │
-6. 用户看到分析结果，会话历史中不含原始密码
-```
-
-### 5.3 工具调用守卫流程
-
-```
-1. LLM 提议调用工具: read_file(path="~/.ssh/id_rsa")
-   │
-2. Hook: before_tool_call
-   │  ├─ 检查保护路径: isProtectedMemoryPath() → false
-   │  ├─ 检查预读文件: isFilePreRead() → false
-   │  ├─ RouterPipeline.run("onToolCallProposed")
-   │  │   └─ S3 detected (path matches ~/.ssh)
-   │  ├─ markSessionAsPrivate(sessionKey, "S3")
-   │  └─ return { block: true, blockReason: "..." }
-   │
-3. 工具调用被阻断，Agent 收到阻断原因
+~/.openclaw/workspace/
+├── MEMORY.md           # 云端模型看到的（脱敏后）
+├── MEMORY-FULL.md      # 本地模型看到的（完整）
+├── memory/             # 日记忆（脱敏后）
+│   └── 2026-03-11.md
+└── memory-full/        # 日记忆（完整）
+    └── 2026-03-11.md
 ```
 
 ---
 
-## 6. 配置体系
+### 5.17 Prompt 加载器 — `prompt-loader.ts`
 
-### 6.1 配置层级
+从 `prompts/` 目录加载 Prompt 模板，支持用户自定义。
 
+**导出函数**:
+
+| 函数 | 说明 |
+|------|------|
+| `loadPrompt(name, fallback)` | 加载 `prompts/{name}.md`，不存在则用 fallback |
+| `loadPromptWithVars(name, fallback, vars)` | 加载并替换 `{{PLACEHOLDER}}` 变量 |
+
+**特性**:
+
+- 结果缓存在内存中，每个名称只读取一次
+- 自动搜索 `src/../prompts` 和 `dist/src/../../prompts`
+- 文件不存在或读取失败时静默回退到硬编码默认值
+
+---
+
+### 5.18 工具函数 — `utils.ts`
+
+通用辅助函数集。
+
+**导出函数**:
+
+| 函数 | 说明 |
+|------|------|
+| `getPrivacyConfig(pluginConfig)` | 从插件配置提取隐私配置 |
+| `isPrivacyEnabled(config)` | 检查隐私功能是否启用 |
+| `normalizePath(path)` | 路径标准化（展开 `~`） |
+| `matchesPathPattern(path, patterns)` | 路径模式匹配 |
+| `extractPathsFromParams(params)` | 从工具参数递归提取路径 |
+| `redactSensitiveInfo(text)` | 综合规则脱敏（两阶段） |
+| `isProtectedMemoryPath(filePath, baseDir?)` | 检查路径是否为受保护的记忆路径 |
+
+**`redactSensitiveInfo()` 两阶段脱敏**:
+
+| 阶段 | 策略 | 覆盖模式 |
+|------|------|----------|
+| Phase 1 | 模式匹配 | SSH 私钥、API Key、AWS Key、数据库连接串、内网 IP、邮箱、.env 变量、信用卡号、中文手机号、身份证号、快递单号、门禁码、中文地址 |
+| Phase 2 | 上下文匹配 | `keyword + connecting_word + value` — password/api_key/token/secret/ssn/pin/credit_card + is/are/=/:/ + 实际值 |
+
+Phase 2 使用两种连接模式:
+- **STRICT** — 需要动词 (is/are/was) 或分隔符 (=/:)，用于宽泛关键词如 "credit card"
+- **LOOSE** — 也接受空格，用于凭证关键词如 "password"
+
+---
+
+## 6. 配置指南
+
+### 最小配置
+
+```json
+{
+  "plugins": { "enabled": ["guardclaw"] },
+  "privacy": {
+    "enabled": true
+  }
+}
 ```
-默认值 (defaultPrivacyConfig)
-  ↓ 深度合并
-用户配置 (config.json → privacy)
-  ↓ 深度合并
-运行时覆盖 (hooks 中的动态调整)
+
+使用默认值：localModelDetector + proxy 策略 + 端口 8403。
+
+### 完整配置参考
+
+```json
+{
+  "privacy": {
+    "enabled": true,
+    "s2Policy": "proxy",
+    "proxyPort": 8403,
+
+    "checkpoints": {
+      "onUserMessage": ["localModelDetector"],
+      "onToolCallProposed": ["localModelDetector"],
+      "onToolCallExecuted": ["localModelDetector"]
+    },
+
+    "rules": {
+      "keywords": {
+        "S2": ["password", "api_key", "secret", "token"],
+        "S3": ["ssh", "id_rsa", "private_key", ".pem", ".env"]
+      },
+      "patterns": {
+        "S2": [
+          "\\b(?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.\\d{1,3}\\.\\d{1,3}\\b",
+          "(?:mysql|postgres|mongodb|redis)://[^\\s]+"
+        ],
+        "S3": [
+          "-----BEGIN (?:RSA |EC )?PRIVATE KEY-----",
+          "AKIA[0-9A-Z]{16}"
+        ]
+      },
+      "tools": {
+        "S2": { "tools": ["exec", "shell"], "paths": ["~/secrets"] },
+        "S3": { "tools": ["sudo"], "paths": ["~/.ssh", "/etc", "~/.aws"] }
+      }
+    },
+
+    "localModel": {
+      "enabled": true,
+      "type": "openai-compatible",
+      "provider": "ollama",
+      "model": "openbmb/minicpm4.1",
+      "endpoint": "http://localhost:11434"
+    },
+
+    "guardAgent": {
+      "id": "guard",
+      "workspace": "~/.openclaw/workspace-guard",
+      "model": "ollama/openbmb/minicpm4.1"
+    },
+
+    "localProviders": ["my-custom-inference"],
+
+    "session": {
+      "isolateGuardHistory": true,
+      "baseDir": "~/.openclaw"
+    },
+
+    "routers": {
+      "privacy": { "enabled": true, "type": "builtin", "weight": 80 },
+      "token-saver": {
+        "enabled": true,
+        "type": "builtin",
+        "weight": 30,
+        "options": {
+          "tiers": {
+            "SIMPLE": { "provider": "openai", "model": "gpt-4o-mini" },
+            "MEDIUM": { "provider": "openai", "model": "gpt-4o" },
+            "COMPLEX": { "provider": "anthropic", "model": "claude-sonnet-4.6" },
+            "REASONING": { "provider": "openai", "model": "o4-mini" }
+          }
+        }
+      },
+      "my-filter": {
+        "enabled": true,
+        "type": "custom",
+        "module": "./my-routers/content-filter.js",
+        "weight": 60,
+        "options": { "maxLength": 5000 }
+      }
+    },
+
+    "pipeline": {
+      "onUserMessage": ["privacy", "token-saver", "my-filter"],
+      "onToolCallProposed": ["privacy"],
+      "onToolCallExecuted": ["privacy"]
+    }
+  }
+}
 ```
 
-### 6.2 关键配置项
+### Edge Provider 配置示例
 
-| 配置路径 | 类型 | 默认值 | 说明 |
-|---------|------|--------|------|
-| `privacy.enabled` | boolean | `true` | 启用/禁用整个插件 |
-| `privacy.s2Policy` | `"proxy" \| "local"` | `"proxy"` | S2 处理策略 |
-| `privacy.proxyPort` | number | `8403` | 代理端口 |
-| `privacy.checkpoints.*` | string[] | `["localModelDetector"]` | 各 checkpoint 的检测器列表 |
-| `privacy.rules.keywords.S2/S3` | string[] | `[]` | 敏感关键词 |
-| `privacy.rules.patterns.S2/S3` | string[] | `[]` | 敏感正则 |
-| `privacy.rules.tools.S2/S3` | object | `{}` | 敏感工具和路径 |
-| `privacy.localModel.enabled` | boolean | `true` | 启用本地模型检测 |
-| `privacy.localModel.model` | string | `"openbmb/minicpm4.1"` | 本地模型名称 |
-| `privacy.localModel.endpoint` | string | `"http://localhost:11434"` | 模型端点 |
-| `privacy.guardAgent.id` | string | `"guard"` | Guard Agent ID |
-| `privacy.guardAgent.model` | string | `"ollama/openbmb/minicpm4.1"` | Guard Agent 模型 |
-| `privacy.session.isolateGuardHistory` | boolean | `true` | 隔离 Guard 历史 |
-| `privacy.routers.*` | object | — | 路由器注册和配置 |
-| `privacy.pipeline.*` | string[] | `["privacy"]` | 各 checkpoint 的路由器执行顺序 |
+#### Ollama (OpenAI 兼容)
 
-### 6.3 配置校验
+```json
+{
+  "localModel": {
+    "enabled": true,
+    "type": "openai-compatible",
+    "provider": "ollama",
+    "model": "llama3.2:3b",
+    "endpoint": "http://localhost:11434"
+  }
+}
+```
 
-使用 `@sinclair/typebox` 进行类型安全的 schema 校验，同时在 `openclaw.plugin.json` 中提供 JSON Schema 供编辑器验证。两者同步定义。
+#### Ollama (原生 API)
+
+```json
+{
+  "localModel": {
+    "enabled": true,
+    "type": "ollama-native",
+    "provider": "ollama",
+    "model": "qwen2.5:7b",
+    "endpoint": "http://localhost:11434"
+  }
+}
+```
+
+#### vLLM
+
+```json
+{
+  "localModel": {
+    "enabled": true,
+    "type": "openai-compatible",
+    "provider": "vllm",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "endpoint": "http://localhost:8000"
+  }
+}
+```
+
+#### LMStudio
+
+```json
+{
+  "localModel": {
+    "enabled": true,
+    "type": "openai-compatible",
+    "provider": "lmstudio",
+    "model": "lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF",
+    "endpoint": "http://localhost:1234"
+  }
+}
+```
+
+#### SGLang
+
+```json
+{
+  "localModel": {
+    "enabled": true,
+    "type": "openai-compatible",
+    "provider": "sglang",
+    "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "endpoint": "http://localhost:30000"
+  }
+}
+```
+
+#### 自定义 Provider
+
+```json
+{
+  "localModel": {
+    "enabled": true,
+    "type": "custom",
+    "provider": "my-inference",
+    "model": "my-model",
+    "endpoint": "http://localhost:9999",
+    "module": "./my-edge-provider.js"
+  },
+  "localProviders": ["my-inference"]
+}
+```
 
 ---
 
 ## 7. 开发指南
 
-### 7.1 添加新的检测规则
+### 环境要求
 
-**方式 1: 通过配置添加**
+- **Node.js**: >= 18（需要 `fetch` API 支持）
+- **TypeScript**: ES module 项目（`"type": "module"`）
+- **依赖**: `@sinclair/typebox` 0.34.x
+- **本地推理**: 至少一个 Edge 推理后端（推荐 Ollama）
 
-编辑 `config.json` 的 `privacy.rules`:
+### 项目设置
 
-```json
-{
-  "privacy": {
-    "rules": {
-      "keywords": {
-        "S2": ["employee_id", "工号"],
-        "S3": ["master_password", "root_password"]
-      },
-      "patterns": {
-        "S2": ["\\b\\d{3}-\\d{2}-\\d{4}\\b"]
-      },
-      "tools": {
-        "S3": {
-          "tools": ["dangerous_tool"],
-          "paths": ["/sensitive/data"]
-        }
-      }
-    }
-  }
-}
+```bash
+# 安装依赖
+cd guardclaw
+npm install
+
+# 运行测试
+npx vitest run
+
+# 单独运行特定测试
+npx vitest run test/rules.test.ts
+npx vitest run test/router-pipeline.test.ts
 ```
 
-**方式 2: 修改规则引擎**
+### 开发工作流
 
-编辑 `src/rules.ts`，在 `checkToolParams()` 等函数中添加新的检测逻辑。
+1. **修改源码** — 所有源码在 `src/` 目录
+2. **运行测试** — `npx vitest run` 验证改动
+3. **测试 Prompt** — 修改 `prompts/*.md` 文件无需改代码
+4. **集成测试** — `test/integration.test.ts` 和 `test/guardclaw-plugin-e2e.test.ts`
 
-### 7.2 开发自定义路由器
+### 添加新的检测维度
 
-1. 创建路由器模块文件:
+1. 在 `types.ts` 中扩展 `DetectorType` 联合类型
+2. 在对应模块中实现检测函数（返回 `DetectionResult`）
+3. 在 `detector.ts` 的 `runDetectors()` switch 中注册
+4. 在 `config-schema.ts` 的 checkpoint 枚举中添加新类型
+
+### 添加新的 Hook
+
+1. 在 `hooks.ts` 的 `registerHooks()` 函数中添加 `api.on("hook_name", ...)` 
+2. 遵循现有 Hook 的错误处理模式（try/catch + logger.error）
+3. 需要跨 Hook 传递数据时使用 `session-state.ts` 的 stash/consume 机制
+
+### 模块依赖关系
+
+```
+index.ts
+  ├── config-schema.ts     (配置 Schema + 默认值)
+  ├── hooks.ts             (10 个 Hook)
+  │     ├── detector.ts    (检测引擎)
+  │     │     ├── rules.ts        (规则检测器)
+  │     │     └── local-model.ts  (LLM 检测器)
+  │     ├── router-pipeline.ts    (路由管线)
+  │     ├── guard-agent.ts        (Guard Agent)
+  │     ├── session-state.ts      (会话状态)
+  │     ├── session-manager.ts    (双轨历史)
+  │     ├── memory-isolation.ts   (双轨记忆)
+  │     ├── prompt-loader.ts      (Prompt 加载)
+  │     └── privacy-proxy.ts      (标记常量)
+  ├── provider.ts          (Provider 定义)
+  ├── privacy-proxy.ts     (代理服务器)
+  ├── router-pipeline.ts   (管线单例)
+  └── routers/
+        ├── privacy.ts     (隐私路由器)
+        └── token-saver.ts (Token-Saver 路由器)
+```
+
+---
+
+## 8. 自定义指南
+
+### 8.1 自定义路由器
+
+自定义路由器允许在 GuardClaw 管线中注入自定义逻辑（内容过滤、成本优化、A/B 测试等）。
+
+#### 步骤 1: 实现 `GuardClawRouter` 接口
+
+创建 `my-routers/content-filter.js`:
 
 ```typescript
-// my-custom-router.ts
-import type { GuardClawRouter, DetectionContext, RouterDecision } from "../types.js";
+import type { GuardClawRouter, DetectionContext, RouterDecision } from "@openclaw/guardclaw/src/types.js";
 
-export default {
-  id: "my-router",
-  async detect(context: DetectionContext, config: Record<string, unknown>): Promise<RouterDecision> {
-    // 自定义检测逻辑
-    if (someCondition(context)) {
+const contentFilterRouter: GuardClawRouter = {
+  id: "content-filter",
+
+  async detect(
+    context: DetectionContext,
+    pluginConfig: Record<string, unknown>,
+  ): Promise<RouterDecision> {
+    const message = context.message ?? "";
+    
+    // 获取路由器自身的配置 (来自 routers.content-filter.options)
+    const privacy = pluginConfig?.privacy as Record<string, unknown>;
+    const routers = privacy?.routers as Record<string, { options?: Record<string, unknown> }>;
+    const options = routers?.["content-filter"]?.options ?? {};
+    const maxLength = (options.maxLength as number) ?? 10000;
+    
+    // 自定义逻辑: 超长消息路由到更大上下文的模型
+    if (message.length > maxLength) {
       return {
-        level: "S2",
+        level: "S1",
         action: "redirect",
-        target: { provider: "openai", model: "gpt-4o-mini" },
-        reason: "Custom routing logic",
+        target: { provider: "anthropic", model: "claude-sonnet-4.6" },
+        reason: `Message too long (${message.length} chars), using larger context model`,
+        confidence: 0.9,
       };
     }
+
     return { level: "S1", action: "passthrough" };
   },
-} satisfies GuardClawRouter;
+};
+
+export default contentFilterRouter;
 ```
 
-2. 在配置中注册:
+#### 步骤 2: 在配置中注册
 
 ```json
 {
   "privacy": {
     "routers": {
-      "my-router": {
+      "content-filter": {
         "enabled": true,
         "type": "custom",
-        "module": "./path/to/my-custom-router.js",
-        "options": { "customOption": "value" }
+        "module": "./my-routers/content-filter.js",
+        "weight": 40,
+        "options": { "maxLength": 5000 }
       }
     },
     "pipeline": {
-      "onUserMessage": ["privacy", "my-router"]
+      "onUserMessage": ["privacy", "content-filter"]
     }
   }
 }
 ```
 
-### 7.3 自定义 Prompt 模板
+#### 路由器设计原则
 
-在 `prompts/` 目录下创建或编辑 `.md` 文件：
+| 原则 | 说明 |
+|------|------|
+| **权重语义** | 安全类路由器（privacy）使用高权重 (60-100)；优化类路由器使用低权重 (10-40) |
+| **快慢分类** | weight ≥ 50 为快速路由器（Phase 1 并行），< 50 为慢速路由器（Phase 2 按需） |
+| **Action 语义** | `passthrough` = 不干预; `redirect` = 转向其他模型; `transform` = 修改内容; `block` = 阻止 |
+| **Level 语义** | 在非安全路由器中通常返回 `S1`，除非有独立的安全理由需要升级等级 |
+| **错误处理** | 路由器异常不会阻塞管线，仅记录错误日志并跳过 |
 
-- `prompts/detection-system.md` — 覆盖默认的敏感度分类 prompt
-- `prompts/guard-agent-system.md` — 自定义 Guard Agent 行为
-- `prompts/pii-extraction.md` — 自定义 PII 提取 prompt
-- `prompts/token-saver-judge.md` — 自定义任务复杂度分类 prompt
+---
 
-支持 `{{PLACEHOLDER}}` 变量替换。文件不存在时自动回退至代码内硬编码默认值。
+### 8.2 自定义边缘推理 Provider
 
-### 7.4 添加新的 Hook
+当内置的 `openai-compatible` 和 `ollama-native` 协议无法满足需求时，可实现自定义 Provider。
 
-在 `src/hooks.ts` 的 `registerHooks()` 函数中添加:
+#### 步骤 1: 实现 `CustomEdgeProvider` 接口
+
+创建 `my-edge-provider.js`:
 
 ```typescript
-api.on("new_event_name", async (event, ctx) => {
-  try {
-    const pipeline = getGlobalPipeline();
-    if (!pipeline) return;
-    
-    const decision = await pipeline.run(
-      "onUserMessage",
-      { checkpoint: "onUserMessage", message: event.content, sessionKey: ctx.sessionKey },
-      api.pluginConfig ?? {},
-    );
-    
-    // 根据 decision 执行操作
-  } catch (err) {
-    api.logger.error(`[GuardClaw] Error in new_event hook: ${String(err)}`);
+import type { ChatMessage, ChatCompletionOptions } from "@openclaw/guardclaw/src/local-model.js";
+
+export async function callChat(
+  endpoint: string,
+  model: string,
+  messages: ChatMessage[],
+  options?: ChatCompletionOptions,
+): Promise<string> {
+  // 自定义 API 调用逻辑
+  const response = await fetch(`${endpoint}/my-api/generate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options?.apiKey ? { "X-API-Key": options.apiKey } : {}),
+    },
+    body: JSON.stringify({
+      model,
+      prompt: messages.map(m => `${m.role}: ${m.content}`).join("\n"),
+      max_tokens: options?.maxTokens ?? 800,
+      temperature: options?.temperature ?? 0.1,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Custom provider error: ${response.status}`);
   }
-});
+
+  const data = await response.json() as { output: string };
+  return data.output;
+}
 ```
 
-### 7.5 本地开发环境搭建
+#### 步骤 2: 配置使用
+
+```json
+{
+  "privacy": {
+    "localModel": {
+      "enabled": true,
+      "type": "custom",
+      "provider": "my-inference",
+      "model": "my-model",
+      "endpoint": "http://localhost:9999",
+      "module": "./my-edge-provider.js"
+    },
+    "localProviders": ["my-inference"]
+  }
+}
+```
+
+> **注意**: `localProviders` 数组用于声明哪些 Provider 名称是本地的（安全的），允许 Guard Agent 使用。
+
+---
+
+### 8.3 自定义 Prompt 模板
+
+GuardClaw 的 Prompt 模板可以通过编辑 `prompts/` 目录下的 Markdown 文件进行自定义，无需修改代码。
+
+#### 可自定义的 Prompt
+
+| 文件 | 用途 | 变量 |
+|------|------|------|
+| `prompts/guard-agent-system.md` | Guard Agent 系统 Prompt | 无 |
+| `prompts/token-saver-judge.md` | Token-Saver 复杂度分类 Prompt | 无 |
+| `prompts/detection-system.md` | 灵敏度检测系统 Prompt | 无 |
+| `prompts/pii-extraction.md` | PII 提取 Prompt | `{{CONTENT}}` |
+
+#### 示例: 自定义检测 Prompt
+
+创建 `prompts/detection-system.md`:
+
+```markdown
+[SYSTEM] You are a strict privacy classifier for our enterprise system.
+Output ONLY a single JSON object.
+
+Our classification criteria:
+S3 = PRIVATE: financial records, medical data, HR data, all credentials
+S2 = SENSITIVE: personal contact info, addresses, tracking numbers
+S1 = SAFE: everything else
+
+Industry-specific rules:
+- Any mention of HIPAA-covered data → S3
+- Customer support ticket content → S2
+- Internal API documentation → S1
+
+Output: {"level":"S1|S2|S3","reason":"brief explanation"}
+```
+
+#### 示例: 自定义 PII 提取 Prompt
+
+创建 `prompts/pii-extraction.md`:
+
+```markdown
+Extract ALL personally identifiable information from the following text.
+
+Text: {{CONTENT}}
+
+Output a JSON array of objects with "type" and "value" fields.
+Supported types: NAME, PHONE, ADDRESS, EMAIL, ID, CARD, SECRET, 
+EMPLOYEE_ID, DEPARTMENT, SALARY_GRADE
+
+Output ONLY the JSON array.
+```
+
+---
+
+### 8.4 自定义检测规则
+
+#### 添加关键词
+
+```json
+{
+  "rules": {
+    "keywords": {
+      "S2": ["employee_id", "department", "内部编号"],
+      "S3": ["salary_grade", "performance_review", "绩效评分"]
+    }
+  }
+}
+```
+
+#### 添加正则模式
+
+```json
+{
+  "rules": {
+    "patterns": {
+      "S2": [
+        "EMP-\\d{6}",
+        "\\b[A-Z]{2}-\\d{4}-\\d{4}\\b"
+      ],
+      "S3": [
+        "GRADE-[A-E]\\d{2}",
+        "PERF-\\d{4}-[A-Z]+"
+      ]
+    }
+  }
+}
+```
+
+#### 添加工具规则
+
+```json
+{
+  "rules": {
+    "tools": {
+      "S2": {
+        "tools": ["database_query", "crm_lookup"],
+        "paths": ["~/company-data/employees"]
+      },
+      "S3": {
+        "tools": ["hr_system", "payroll_api"],
+        "paths": ["~/company-data/hr", "~/company-data/payroll"]
+      }
+    }
+  }
+}
+```
+
+#### 组合双检测器
+
+默认仅使用 `localModelDetector`。若需要叠加规则检测器作为额外安全层:
+
+```json
+{
+  "checkpoints": {
+    "onUserMessage": ["ruleDetector", "localModelDetector"],
+    "onToolCallProposed": ["ruleDetector"],
+    "onToolCallExecuted": ["ruleDetector"]
+  }
+}
+```
+
+两个检测器的结果会自动合并（取最高等级）。
+
+---
+
+## 9. 测试
+
+### 测试文件
+
+| 文件 | 覆盖范围 |
+|------|----------|
+| `test/rules.test.ts` | 规则检测器 — 关键词、正则、工具类型、路径 |
+| `test/detector.test.ts` | 检测引擎 — 检测器协调与结果合并 |
+| `test/session-manager.test.ts` | 双轨会话历史 — 持久化、加载、过滤 |
+| `test/token-saver.test.ts` | Token-Saver — 复杂度分类、缓存、配置解析 |
+| `test/privacy-proxy.test.ts` | 隐私代理 — PII 标记剥离、请求转发 |
+| `test/router-pipeline.test.ts` | 路由管线 — 注册、执行、加权合并、短路 |
+| `test/integration.test.ts` | 集成测试 — 端到端检测流程 |
+| `test/guardclaw-plugin-e2e.test.ts` | 插件 E2E — 完整注册与 Hook 触发 |
+
+### 运行测试
 
 ```bash
-# 1. 确保 Ollama 运行并拉取模型
-ollama pull openbmb/minicpm4.1
+# 全部测试
+npx vitest run
 
-# 2. 安装依赖（workspace 模式）
-pnpm install
+# 单文件
+npx vitest run test/rules.test.ts
 
-# 3. 运行测试
-pnpm vitest run --filter guardclaw
+# 监视模式
+npx vitest --watch
 
-# 4. 监听模式开发
-pnpm vitest watch --filter guardclaw
-```
-
-### 7.6 模块依赖关系
-
-```
-index.ts (入口)
-  ├── config-schema.ts
-  ├── hooks.ts ──────────── ★ 最核心，连接所有模块
-  │     ├── detector.ts
-  │     │     ├── rules.ts ──── utils.ts
-  │     │     └── local-model.ts ──── prompt-loader.ts
-  │     ├── router-pipeline.ts
-  │     │     └── types.ts
-  │     ├── guard-agent.ts
-  │     ├── session-manager.ts
-  │     ├── session-state.ts
-  │     ├── memory-isolation.ts ──── local-model.ts, utils.ts
-  │     └── privacy-proxy.ts
-  ├── provider.ts
-  ├── routers/
-  │     ├── privacy.ts ──── detector.ts, guard-agent.ts
-  │     └── token-saver.ts ──── local-model.ts, prompt-loader.ts
-  └── types.ts (被所有模块引用)
+# 覆盖率
+npx vitest run --coverage
 ```
 
 ---
 
-## 8. 测试策略
+## 10. 安全模型与威胁分析
 
-### 8.1 测试覆盖范围
-
-| 测试文件 | 测试目标 | 用例数 | 类型 |
-|---------|---------|--------|------|
-| `detector.test.ts` | 检测引擎协调 | 5 | 单元 |
-| `rules.test.ts` | 规则检测器 | 10 | 单元 |
-| `privacy-proxy.test.ts` | PII 标记剥离 | 8 | 单元 |
-| `session-manager.test.ts` | 双轨会话管理 | 6 | 单元（含 I/O） |
-| `token-saver.test.ts` | Token 节省路由器 | 12 | 单元 + Mock |
-| `integration.test.ts` | 端到端流程 | 9 | 集成 |
-| `router-pipeline.test.ts` | 路由管道 | 9 | 单元 |
-
-### 8.2 测试设计特点
-
-**规则测试** (`rules.test.ts`):
-- 覆盖五层检测的所有路径（关键词、工具、路径、扩展名、结果合并）
-- 大小写无关性验证
-- 多规则触发时的优先级合并
-
-**代理测试** (`privacy-proxy.test.ts`):
-- 标记剥离的正确性
-- 仅处理 user 角色消息
-- 多消息批量处理
-- 畸形标记的容错
-- 非字符串 content 的处理
-- 文件内容在标记内的保留
-
-**管道测试** (`router-pipeline.test.ts`):
-- 空管道的默认行为
-- 单路由器直通
-- 多路由器合并（级别、action 优先级）
-- 管道配置（checkpoint 关联、enabled 标志）
-- 路由器异常的容错
-
-**Token Saver 测试** (`token-saver.test.ts`):
-- LLM 调用 Mock（`vi.mock`）
-- 缓存命中/未命中
-- 子代理跳过
-- 完整 Prompt 转发
-- 降级处理（LLM 失败、非法 JSON）
-
-**集成测试** (`integration.test.ts`):
-- 检测 → 会话标记 → 历史记录的完整流程
-- 多次检测的级别升级（不降级）
-- 三个 checkpoint 的链式处理
-- 配置禁用/空配置的边界情况
-- 暂存器（stash/consume）的生命周期
-
-### 8.3 Mock 策略
-
-- `callChatCompletion` 通过 Vitest `vi.mock` 替换，避免真实 LLM 调用
-- `DualSessionManager` 使用临时目录（`.test-guardclaw`），测试后清理
-- 集成测试仅使用 `ruleDetector`，不依赖本地模型
-
----
-
-## 9. 现有不足与改进建议
-
-### 9.1 架构层面
-
-| 问题 | 影响 | 建议 |
-|------|------|------|
-| **全局单例状态** | `globalPipeline`、`sessionStates`、`preReadFiles` 等全局 Map 在多租户场景下会产生状态污染 | 引入 Scope 化的上下文对象（类似 DI Container），将状态绑定到插件实例而非全局 |
-| **同步配置合并** | `mergeWithDefaults()` 在 `detector.ts`、`hooks.ts`、`routers/privacy.ts` 三处重复实现 | 抽取为共享的 `resolvePrivacyConfig(api)` 工具函数 |
-| **Hook 耦合度高** | `hooks.ts` 承载了 10 个钩子 ~600 行代码，职责过于集中 | 按功能域拆分为 `hooks/model-resolve.ts`、`hooks/tool-guard.ts`、`hooks/persistence.ts` 等 |
-| **缺少依赖注入** | 模块间直接 import 单例，难以替换（如测试中替换 MemoryIsolationManager） | 引入简单的 DI 或 Context 对象，在 `register()` 时注入依赖 |
-
-### 9.2 安全层面
-
-| 问题 | 影响 | 建议 |
-|------|------|------|
-| **LLM 检测的绕过风险** | 精心构造的 prompt 可能绕过本地 LLM 的分类（如 Base64 编码、拆分敏感词） | 增加对编码内容的预处理解码；引入对抗样本测试集 |
-| **quickPiiScan 粒度不足** | 仅需 2 个 S2 模式匹配才触发，单个 PII 会被遗漏 | 降低阈值至 1，或为高置信度模式（如完整地址）直接触发 |
-| **规则引擎的 S2/S3 边界模糊** | `password` 被配置为 S2 关键词，但密码类数据应为 S3 | 审计默认关键词分级；提供分级建议文档 |
-| **Proxy API Key 透传** | `apiKey: "guardclaw-proxy-handles-auth"` 硬编码在 Provider 配置中 | 虽然仅本地使用，但考虑使用随机 token 增加安全性 |
-| **execSync 用于文件读取** | `tryReadReferencedFile` 中使用 `execSync` 执行 Python 脚本，存在命令注入风险 | 使用 Node.js 原生库处理 xlsx/docx（如 `xlsx` 或 `exceljs` 包） |
-
-### 9.3 性能层面
-
-| 问题 | 影响 | 建议 |
-|------|------|------|
-| **每条消息调用本地 LLM** | `localModelDetector` 作为默认检测器，每条消息都需 LLM 推理（~100-500ms） | 引入规则预筛：规则检测器先过滤明显的 S1 消息，仅对"可能敏感"的消息调用 LLM |
-| **脱敏的双次 LLM 调用** | S2 流程: 检测(1次) + PII 提取(1次) = 2 次 LLM 调用 | 合并为单次调用：检测 prompt 中同时要求输出 PII 列表 |
-| **Prompt 缓存无失效** | `prompt-loader.ts` 的缓存永不失效，热重载时需重启 | 增加 mtime 检查或 `--watch` 模式下禁用缓存 |
-| **patternCache 无大小限制** | 正则编译缓存 Map 无上限 | 引入 LRU 策略或定期清理 |
-| **会话状态内存泄漏** | `sessionStates`、`preReadFiles`、`pendingDetections` 无 TTL | 在 `session_end` 中清理对应 key；或增加定时扫描清理过期条目 |
-
-### 9.4 可用性层面
-
-| 问题 | 影响 | 建议 |
-|------|------|------|
-| **缺少管理界面** | 无法直观查看当前会话的隐私状态、检测历史 | 提供 CLI 命令或 Web UI dashboard |
-| **缺少日志结构化** | 全部使用 `console.log/error/warn`，不便于过滤和分析 | 统一使用 `api.logger` 并增加结构化字段 |
-| **错误处理过于静默** | 多处 `catch { /* ignore */ }` 或仅 console.error | 关键路径的错误应上报至 OpenClaw 的错误追踪系统 |
-| **缺少 dry-run 模式** | 用户无法在不影响路由的情况下测试检测效果 | 增加 `dryRun: true` 配置，仅记录检测结果不执行路由 |
-
-### 9.5 测试层面
-
-| 问题 | 影响 | 建议 |
-|------|------|------|
-| **无 LLM 集成测试** | `localModelDetector` 在所有测试中被禁用或 Mock | 增加可选的端到端测试（需本地 Ollama），标记为 `@slow` |
-| **hooks.ts 无直接测试** | 最核心的模块没有单独的测试文件 | 创建 `test/hooks.test.ts`，mock OpenClawPluginApi |
-| **memory-isolation.ts 无测试** | 记忆同步逻辑未测试 | 创建 `test/memory-isolation.test.ts` |
-| **utils.ts 无测试** | `redactSensitiveInfo`、`isProtectedMemoryPath` 等关键函数未测试 | 创建 `test/utils.test.ts` |
-
----
-
-## 10. 路线图建议
-
-### Phase 1: 稳定性与质量 (短期，1-2 周)
-
-- [ ] 补全 `hooks.ts`、`memory-isolation.ts`、`utils.ts` 的测试
-- [ ] 重构配置合并逻辑，消除三处重复的 `getPrivacyConfig`
-- [ ] 为 `session-state.ts` 增加 TTL 清理机制
-- [ ] 将 `hooks.ts` 拆分为多个文件
-- [ ] 修复 `console.log/error` → 统一使用 `api.logger`
-- [ ] 替换 `execSync` 文件读取为安全的 Node.js 实现
-
-### Phase 2: 性能优化 (中期，3-4 周)
-
-- [ ] 实现规则预筛 + LLM 后验的两阶段检测
-- [ ] 合并检测与 PII 提取为单次 LLM 调用
-- [ ] 引入消息级别缓存（类似 token-saver 的 hash 缓存）
-- [ ] 为 `patternCache` 和 Prompt 缓存增加大小限制 / 失效策略
-- [ ] 基准测试：测量每条消息的处理延迟，设定 P99 目标
-
-### Phase 3: 功能增强 (中期，4-6 周)
-
-- [ ] **Dry-run 模式**: 仅检测记录，不路由，用于调试和调优
-- [ ] **审计日志**: 结构化记录所有检测决策，支持导出分析
-- [ ] **用户反馈回路**: 允许用户标记误判（False Positive / False Negative），用于规则调优
-- [ ] **多 LLM Provider 支持**: 检测和脱敏使用不同的本地模型（如小模型分类 + 大模型脱敏）
-- [ ] **流式脱敏**: 对 S2 流式响应中的 PII 进行实时检测和脱敏
-- [ ] **PII 类型扩展**: 支持更多地区的 PII 格式（日本、韩国、欧洲 GDPR 相关）
-
-### Phase 4: 生态集成 (长期，6+ 周)
-
-- [ ] **Web Dashboard**: 实时查看会话隐私状态、检测统计、配置管理
-- [ ] **多租户支持**: Scope 化状态管理，支持多用户/多工作区
-- [ ] **合规报告生成**: 自动生成 GDPR/CCPA/PIPL 合规审计报告
-- [ ] **联邦学习**: 多实例间共享脱敏的检测模式（不共享数据）
-- [ ] **A2A (Agent-to-Agent) 深度集成**: 跨代理调用的隐私链路追踪
-- [ ] **IDE 集成**: VS Code / Cursor 侧边栏显示当前会话隐私等级
-
----
-
-## 附录 A: 类型系统一览
-
-```typescript
-// 核心枚举
-type SensitivityLevel = "S1" | "S2" | "S3";
-type DetectorType = "ruleDetector" | "localModelDetector";
-type Checkpoint = "onUserMessage" | "onToolCallProposed" | "onToolCallExecuted";
-type RouterAction = "passthrough" | "redirect" | "transform" | "block";
-
-// 检测输入
-type DetectionContext = {
-  checkpoint, message?, toolName?, toolParams?, toolResult?,
-  sessionKey?, agentId?, recentContext?, fileContentSnippet?
-};
-
-// 检测输出
-type DetectionResult = { level, levelNumeric, reason?, detectorType, confidence? };
-
-// 路由决策
-type RouterDecision = {
-  level, action?, target?: { provider, model },
-  transformedContent?, reason?, confidence?, routerId?
-};
-
-// 路由器接口
-interface GuardClawRouter {
-  id: string;
-  detect(context: DetectionContext, config: Record<string, unknown>): Promise<RouterDecision>;
-}
-
-// 会话状态
-type SessionPrivacyState = {
-  sessionKey, isPrivate, highestLevel,
-  detectionHistory: Array<{ timestamp, level, checkpoint, reason? }>
-};
-```
-
-## 附录 B: S2 标记协议
+### 信任边界
 
 ```
-用户消息:
-  <guardclaw-s2>
-  [脱敏后的安全内容，含 [REDACTED:xxx] 标记]
-  </guardclaw-s2>
-  [原始敏感内容 — 标记外的部分永远不会到达云端]
-
-Privacy Proxy 处理:
-  1. 找到 <guardclaw-s2>...</guardclaw-s2> 范围
-  2. 提取范围内内容作为新的 message.content
-  3. 丢弃范围外的所有内容
-  4. 转发清洗后的请求至目标 Provider
+┌─────────────────────────────────┐
+│         信任边界: 本地           │
+│                                 │
+│  ● Edge Model (Ollama/vLLM)    │
+│  ● Guard Agent                 │
+│  ● MEMORY-FULL.md              │
+│  ● sessions/full/              │
+│  ● Privacy Proxy               │
+│                                 │
+├─────────────────────────────────┤
+│         信任边界: 云端           │
+│                                 │
+│  ● Cloud Model (GPT-4/Claude)  │
+│  ● MEMORY.md (脱敏后)          │
+│  ● sessions/clean/             │
+│                                 │
+└─────────────────────────────────┘
 ```
 
-## 附录 C: 外部依赖
+### 防护机制
 
-| 依赖 | 用途 | 类型 |
-|------|------|------|
-| `openclaw` | 宿主平台 Plugin SDK | workspace devDependency |
-| `@sinclair/typebox` | 配置 schema 校验 | 间接依赖（来自 openclaw） |
-| `vitest` | 测试框架 | 间接依赖（来自 openclaw） |
-| 本地 LLM 后端 | 检测 + 脱敏 + Guard Agent | 运行时外部服务（Ollama 等） |
+| 威胁 | 防护 |
+|------|------|
+| 云端模型读取私密文件 | `before_tool_call` Hook 阻止访问 `sessions/full/`、`MEMORY-FULL.md` |
+| S2 数据泄露到云端 | Privacy Proxy 在转发前剥离 PII 标记 |
+| S3 数据意外上云 | 路由到本地模型 + `before_message_write` 写入占位符 |
+| 子代理传递敏感数据 | `before_tool_call` 拦截 `sessions_spawn/send` |
+| 出站消息泄露 PII | `message_sending` Hook 检测并脱敏/取消 |
+| 文件重复读取绕过脱敏 | `isFilePreRead()` 阻止对已脱敏文件的重复读取 |
+| Guard 历史污染云端记忆 | 双轨记忆 + 会话结束时同步过滤 |
+| 会话隐私降级 | 一旦标记为 private 不自动降级（需显式调用 `resetSessionPrivacy`） |
 
----
+### 已知限制
 
-*本报告基于 GuardClaw v2026.3.0 源代码分析生成。*
+1. **LLM 检测器准确性**: 依赖本地模型的分类能力，小模型在复杂场景可能误判
+2. **脱敏完整性**: PII 提取依赖 LLM 输出，可能遗漏非标准格式的 PII
+3. **内存存储**: 会话状态存储在进程内存中，重启后丢失
+4. **单节点**: 隐私代理运行在单节点上，不支持分布式部署
+5. **文件预读**: 仅支持 `.xlsx/.xls/.csv/.txt/.docx/.json/.md` 格式

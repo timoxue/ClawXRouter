@@ -17,7 +17,7 @@ import { startPrivacyProxy, setDefaultProviderTarget } from "./src/privacy-proxy
 import { RouterPipeline, setGlobalPipeline } from "./src/router-pipeline.js";
 import { privacyRouter } from "./src/routers/privacy.js";
 import { tokenSaverRouter } from "./src/routers/token-saver.js";
-import type { PrivacyConfig, PipelineConfig, RouterRegistration } from "./src/types.js";
+import type { PrivacyConfig, PipelineConfig, RouterRegistration, EdgeProviderType } from "./src/types.js";
 import type { ProxyHandle } from "./src/privacy-proxy.js";
 
 function getPrivacyConfig(pluginConfig: Record<string, unknown> | undefined): PrivacyConfig {
@@ -71,6 +71,26 @@ const plugin = {
     }
 
     api.logger.info(`[GuardClaw] Privacy provider registered (proxy port: ${proxyPort})`);
+
+    // ── Step 2b: Ensure MEMORY-FULL.md and memory-full/ are in memorySearch.extraPaths ──
+    // This is required so that memory_get can read from the full-memory files
+    // (isMemoryPath only allows MEMORY.md, memory.md, and memory/ by default).
+    const agents = (api.config as Record<string, unknown>).agents as Record<string, unknown> | undefined;
+    const defaults = (agents?.defaults ?? {}) as Record<string, unknown>;
+    const memSearch = (defaults.memorySearch ?? {}) as Record<string, unknown>;
+    const existingExtra = (memSearch.extraPaths ?? []) as string[];
+    const requiredPaths = ["MEMORY-FULL.md", "memory-full"];
+    const missing = requiredPaths.filter((p) => !existingExtra.includes(p));
+    if (missing.length > 0) {
+      const updated = [...existingExtra, ...missing];
+      if (!agents) (api.config as Record<string, unknown>).agents = { defaults: {} };
+      const agts = (api.config as Record<string, unknown>).agents as Record<string, unknown>;
+      if (!agts.defaults) agts.defaults = {};
+      const defs = agts.defaults as Record<string, unknown>;
+      if (!defs.memorySearch) defs.memorySearch = {};
+      (defs.memorySearch as Record<string, unknown>).extraPaths = updated;
+      api.logger.info(`[GuardClaw] Added to memorySearch.extraPaths: ${missing.join(", ")}`);
+    }
 
     // ── Step 3: Register service for proxy lifecycle ──
     let proxyHandle: ProxyHandle | null = null;
