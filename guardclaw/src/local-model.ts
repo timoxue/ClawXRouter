@@ -51,7 +51,6 @@ export async function callChatCompletion(
       ...(options?.stop ? { stop: options.stop } : {}),
       ...(options?.frequencyPenalty != null ? { frequency_penalty: options.frequencyPenalty } : {}),
     }),
-    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
