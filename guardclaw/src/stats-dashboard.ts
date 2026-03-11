@@ -93,6 +93,7 @@ export async function statsHttpHandler(
         guardAgent: liveConfig.guardAgent,
         s2Policy: liveConfig.s2Policy,
         rules: liveConfig.rules,
+        localProviders: liveConfig.localProviders,
       },
     });
     return true;
@@ -268,9 +269,19 @@ function dashboardHtml(): string {
 <div id="config-panel" class="panel">
   <div class="config-section">
     <h3>Local Model Settings <span class="badge badge-hot">instant</span></h3>
-    <div class="field"><label>Endpoint</label><input id="cfg-lm-endpoint" placeholder="https://yeysai.com"></div>
-    <div class="field"><label>Model</label><input id="cfg-lm-model" placeholder="qwen3.5-27b"></div>
+    <div class="field">
+      <label>API Protocol</label>
+      <select id="cfg-lm-type">
+        <option value="openai-compatible">openai-compatible (Ollama, vLLM, LMStudio …)</option>
+        <option value="ollama-native">ollama-native (Ollama /api/chat)</option>
+        <option value="custom">custom (user module)</option>
+      </select>
+    </div>
+    <div class="field"><label>Provider</label><input id="cfg-lm-provider" placeholder="ollama"></div>
+    <div class="field"><label>Endpoint</label><input id="cfg-lm-endpoint" placeholder="http://localhost:11434"></div>
+    <div class="field"><label>Model</label><input id="cfg-lm-model" placeholder="openbmb/minicpm4.1"></div>
     <div class="field"><label>API Key</label><input id="cfg-lm-apikey" type="password" placeholder="sk-..."></div>
+    <div class="field" id="cfg-lm-module-wrap"><label>Custom Module Path</label><input id="cfg-lm-module" placeholder="./my-provider.js"></div>
   </div>
   <div class="config-section">
     <h3>Guard Agent <span class="badge badge-hot">instant</span></h3>
@@ -281,6 +292,17 @@ function dashboardHtml(): string {
     <div class="field">
       <label>Handling Strategy</label>
       <select id="cfg-s2policy"><option value="proxy">proxy (strip PII via proxy)</option><option value="local">local (route entirely to local model)</option></select>
+    </div>
+  </div>
+  <div class="config-section">
+    <h3>Extra Local Providers <span class="badge badge-hot">instant</span></h3>
+    <div class="field">
+      <label>Additional providers treated as "local" (safe for S3 routing)</label>
+      <div class="tag-list" id="cfg-local-providers"></div>
+      <div class="add-row">
+        <input id="cfg-lp-input" placeholder="e.g. my-inference-server">
+        <button class="btn btn-sm btn-outline" onclick="addLocalProvider()">Add</button>
+      </div>
     </div>
   </div>
   <div class="save-bar">
@@ -412,32 +434,74 @@ refreshSessions();
 setInterval(refreshSessions, 30000);
 
 // Config panel
+let _localProviders = [];
+
+function renderLocalProviders() {
+  const container = document.getElementById('cfg-local-providers');
+  container.innerHTML = _localProviders.map((p, i) =>
+    '<span class="tag">' + p + '<button onclick="removeLocalProvider(' + i + ')">&times;</button></span>'
+  ).join('');
+}
+
+function addLocalProvider() {
+  const input = document.getElementById('cfg-lp-input');
+  const val = input.value.trim();
+  if (val && !_localProviders.includes(val)) {
+    _localProviders.push(val);
+    renderLocalProviders();
+  }
+  input.value = '';
+}
+
+function removeLocalProvider(idx) {
+  _localProviders.splice(idx, 1);
+  renderLocalProviders();
+}
+
+function toggleModuleField() {
+  const wrap = document.getElementById('cfg-lm-module-wrap');
+  wrap.style.display = document.getElementById('cfg-lm-type').value === 'custom' ? 'block' : 'none';
+}
+
 async function loadConfig() {
   try {
     const cfg = await fetch(BASE + '/config').then(r => r.json());
     const lm = cfg.privacy?.localModel || {};
     const ga = cfg.privacy?.guardAgent || {};
+    document.getElementById('cfg-lm-type').value = lm.type || 'openai-compatible';
+    document.getElementById('cfg-lm-provider').value = lm.provider || '';
     document.getElementById('cfg-lm-endpoint').value = lm.endpoint || '';
     document.getElementById('cfg-lm-model').value = lm.model || '';
     document.getElementById('cfg-lm-apikey').value = lm.apiKey || '';
+    document.getElementById('cfg-lm-module').value = lm.module || '';
     document.getElementById('cfg-ga-model').value = ga.model || '';
     document.getElementById('cfg-s2policy').value = cfg.privacy?.s2Policy || 'proxy';
+    _localProviders = cfg.privacy?.localProviders || [];
+    renderLocalProviders();
+    toggleModuleField();
   } catch {}
 }
 
+document.getElementById('cfg-lm-type').addEventListener('change', toggleModuleField);
+
 async function saveConfig() {
   try {
+    const typeVal = document.getElementById('cfg-lm-type').value;
     const payload = {
       privacy: {
         localModel: {
+          type: typeVal || undefined,
+          provider: document.getElementById('cfg-lm-provider').value || undefined,
           endpoint: document.getElementById('cfg-lm-endpoint').value || undefined,
           model: document.getElementById('cfg-lm-model').value || undefined,
           apiKey: document.getElementById('cfg-lm-apikey').value || undefined,
+          module: typeVal === 'custom' ? (document.getElementById('cfg-lm-module').value || undefined) : undefined,
         },
         guardAgent: {
           model: document.getElementById('cfg-ga-model').value || undefined,
         },
         s2Policy: document.getElementById('cfg-s2policy').value,
+        localProviders: _localProviders.length > 0 ? _localProviders : undefined,
       },
     };
     const res = await fetch(BASE + '/config', {

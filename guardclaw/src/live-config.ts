@@ -50,5 +50,9 @@ function mergeConfig(userConfig: PrivacyConfig): PrivacyConfig {
     localModel: { ...defaultPrivacyConfig.localModel, ...userConfig.localModel },
     guardAgent: { ...defaultPrivacyConfig.guardAgent, ...userConfig.guardAgent },
     session: { ...defaultPrivacyConfig.session, ...userConfig.session },
+    localProviders: [
+      ...defaultPrivacyConfig.localProviders,
+      ...(userConfig.localProviders ?? []),
+    ],
   } as PrivacyConfig;
 }
