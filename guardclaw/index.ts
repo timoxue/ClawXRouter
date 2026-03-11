@@ -10,6 +10,7 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { join } from "node:path";
 import { guardClawConfigSchema, defaultPrivacyConfig } from "./src/config-schema.js";
 import { registerHooks } from "./src/hooks.js";
 import { guardClawPrivacyProvider, setActiveProxy, mirrorAllProviderModels } from "./src/provider.js";
@@ -17,7 +18,10 @@ import { startPrivacyProxy, setDefaultProviderTarget } from "./src/privacy-proxy
 import { RouterPipeline, setGlobalPipeline } from "./src/router-pipeline.js";
 import { privacyRouter } from "./src/routers/privacy.js";
 import { tokenSaverRouter } from "./src/routers/token-saver.js";
-import type { PrivacyConfig, PipelineConfig, RouterRegistration, EdgeProviderType } from "./src/types.js";
+import { TokenStatsCollector, setGlobalCollector } from "./src/token-stats.js";
+import { initLiveConfig } from "./src/live-config.js";
+import { initDashboard, statsHttpHandler } from "./src/stats-dashboard.js";
+import type { PrivacyConfig, PipelineConfig, RouterRegistration } from "./src/types.js";
 import type { ProxyHandle } from "./src/privacy-proxy.js";
 
 function getPrivacyConfig(pluginConfig: Record<string, unknown> | undefined): PrivacyConfig {
@@ -144,10 +148,45 @@ const plugin = {
     setGlobalPipeline(pipeline);
     api.logger.info(`[GuardClaw] Router pipeline initialized (built-in: privacy)`);
 
-    // ── Step 5: Register all hooks ──
+    // ── Step 5: Initialize live config & token stats ──
+    initLiveConfig(api.pluginConfig);
+
+    const statsPath = join(process.env.HOME ?? "/tmp", ".openclaw", "guardclaw-stats.json");
+    const collector = new TokenStatsCollector(statsPath);
+    setGlobalCollector(collector);
+    collector.load().then(() => {
+      collector.startAutoFlush();
+      api.logger.info(`[GuardClaw] Token stats initialized (${statsPath})`);
+    }).catch((err) => {
+      api.logger.error(`[GuardClaw] Failed to load token stats: ${String(err)}`);
+    });
+
+    // ── Step 6: Register Dashboard HTTP route ──
+    initDashboard({
+      loadConfig: api.runtime.config.loadConfig,
+      writeConfigFile: api.runtime.config.writeConfigFile,
+      pluginId: "guardclaw",
+    });
+
+    api.registerHttpRoute({
+      path: "/plugins/guardclaw/stats",
+      auth: "plugin",
+      match: "prefix",
+      handler: async (req, res) => {
+        const handled = await statsHttpHandler(req, res);
+        if (!handled) {
+          res.writeHead(404);
+          res.end("Not Found");
+        }
+      },
+    });
+
+    api.logger.info("[GuardClaw] Dashboard registered at /plugins/guardclaw/stats");
+
+    // ── Step 7: Register all hooks ──
     registerHooks(api);
 
-    api.logger.info("[GuardClaw] Plugin initialized (pipeline + privacy proxy + guard agent)");
+    api.logger.info("[GuardClaw] Plugin initialized (pipeline + privacy proxy + guard agent + dashboard)");
   },
 };
 

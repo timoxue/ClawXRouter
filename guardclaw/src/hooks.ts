@@ -21,7 +21,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { PrivacyConfig } from "./types.js";
-import { defaultPrivacyConfig } from "./config-schema.js";
 import {
   getGuardAgentConfig,
   isGuardSessionKey,
@@ -45,6 +44,8 @@ import {
   stashOriginalProvider,
 } from "./privacy-proxy.js";
 import { getGlobalPipeline } from "./router-pipeline.js";
+import { getGlobalCollector } from "./token-stats.js";
+import { getLiveConfig } from "./live-config.js";
 
 const DEFAULT_GUARD_AGENT_SYSTEM_PROMPT = `You are a privacy-aware analyst. Analyze the data the user provides. Do your job.
 
@@ -448,6 +449,9 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const memMgr = getDefaultMemoryManager();
       const privacyConfig = getPrivacyConfigFromApi(api);
       await memMgr.syncAllMemoryToClean(privacyConfig);
+
+      const collector = getGlobalCollector();
+      if (collector) await collector.flush();
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in session_end hook: ${String(err)}`);
     }
@@ -469,7 +473,25 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 9: before_reset — Full memory sync before session clear
+  // Hook 9: llm_output — Token usage tracking
+  // =========================================================================
+  api.on("llm_output", async (event, ctx) => {
+    try {
+      const collector = getGlobalCollector();
+      if (!collector) return;
+      collector.record({
+        sessionKey: ctx.sessionKey ?? event.sessionId ?? "",
+        provider: event.provider ?? "unknown",
+        model: event.model ?? "unknown",
+        usage: event.usage,
+      });
+    } catch (err) {
+      api.logger.error(`[GuardClaw] Error in llm_output hook: ${String(err)}`);
+    }
+  });
+
+  // =========================================================================
+  // Hook 10: before_reset — Full memory sync before session clear
   // =========================================================================
   api.on("before_reset", async (_event, ctx) => {
     try {
@@ -484,7 +506,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 10: message_sending — Outbound message guard (via pipeline)
+  // Hook 11: message_sending — Outbound message guard (via pipeline)
   // =========================================================================
   api.on("message_sending", async (event, _ctx) => {
     try {
@@ -517,7 +539,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 11: before_agent_start — Subagent guard (via pipeline)
+  // Hook 12: before_agent_start — Subagent guard (via pipeline)
   // =========================================================================
   api.on("before_agent_start", async (event, ctx) => {
     try {
@@ -556,7 +578,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 12: message_received — Observational logging
+  // Hook 13: message_received — Observational logging
   // =========================================================================
   api.on("message_received", async (event, _ctx) => {
     try {
@@ -566,35 +588,15 @@ export function registerHooks(api: OpenClawPluginApi): void {
     } catch { /* observational only */ }
   });
 
-  api.logger.info("[GuardClaw] All hooks registered (12 hooks, pipeline-driven)");
+  api.logger.info("[GuardClaw] All hooks registered (13 hooks, pipeline-driven)");
 }
 
 // ==========================================================================
 // Helpers
 // ==========================================================================
 
-function getPrivacyConfigFromApi(api: OpenClawPluginApi): PrivacyConfig {
-  const userConfig = (api.pluginConfig?.privacy as PrivacyConfig) ?? {};
-  return {
-    ...defaultPrivacyConfig,
-    ...userConfig,
-    checkpoints: { ...defaultPrivacyConfig.checkpoints, ...userConfig.checkpoints },
-    rules: {
-      keywords: { ...defaultPrivacyConfig.rules.keywords, ...userConfig.rules?.keywords },
-      patterns: { ...defaultPrivacyConfig.rules.patterns, ...userConfig.rules?.patterns },
-      tools: {
-        S2: { ...defaultPrivacyConfig.rules.tools.S2, ...userConfig.rules?.tools?.S2 },
-        S3: { ...defaultPrivacyConfig.rules.tools.S3, ...userConfig.rules?.tools?.S3 },
-      },
-    },
-    localModel: { ...defaultPrivacyConfig.localModel, ...userConfig.localModel },
-    guardAgent: { ...defaultPrivacyConfig.guardAgent, ...userConfig.guardAgent },
-    session: { ...defaultPrivacyConfig.session, ...userConfig.session },
-    localProviders: [
-      ...defaultPrivacyConfig.localProviders,
-      ...(userConfig.localProviders ?? []),
-    ],
-  };
+function getPrivacyConfigFromApi(_api: OpenClawPluginApi): PrivacyConfig {
+  return getLiveConfig();
 }
 
 function shouldSkipMessage(msg: string): boolean {
