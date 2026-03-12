@@ -529,6 +529,15 @@ export async function startPrivacyProxy(
         ...resolveAuthHeaders(target),
       };
 
+      // Cap max_tokens to avoid upstream rejections
+      const MAX_COMPLETION_TOKENS = 16384;
+      for (const key of ["max_tokens", "max_completion_tokens"] as const) {
+        if (parsed[key] != null && (parsed[key] as number) > MAX_COMPLETION_TOKENS) {
+          log.info(`[GuardClaw Proxy] Capped ${key} ${parsed[key]} → ${MAX_COMPLETION_TOKENS}`);
+          parsed[key] = MAX_COMPLETION_TOKENS;
+        }
+      }
+
       const clientWantsStream = !!parsed.stream;
       log.info(`[GuardClaw Proxy] → ${upstreamUrl} (stream=${clientWantsStream})`);
 
@@ -542,7 +551,7 @@ export async function startPrivacyProxy(
         log.info("[GuardClaw Proxy] Streaming unavailable, falling back to non-streaming + SSE conversion");
       }
 
-      // Non-streaming upstream request (or fallback from failed stream)
+      // Non-streaming upstream request (or fallback from failed stream).
       const upstreamBody = { ...parsed, stream: false };
       const nonStreamController = new AbortController();
       const nonStreamTimeout = setTimeout(() => nonStreamController.abort(), 120_000);
@@ -567,7 +576,6 @@ export async function startPrivacyProxy(
       clearTimeout(nonStreamTimeout);
 
       if (clientWantsStream) {
-        // Convert complete response to SSE for the streaming client
         const responseJson = await upstream.json() as Record<string, unknown>;
         if (upstream.ok) {
           res.writeHead(200, {

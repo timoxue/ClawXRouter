@@ -173,15 +173,19 @@ export class RouterPipeline {
     if (hasNonPassthrough || slow.length === 0) {
       if (hasNonPassthrough && slow.length > 0) {
         this.logger.info(
-          `[RouterPipeline] Short-circuit: ${fastResults.map((r) => `${r.decision.routerId}=${r.decision.level}`).join(",")} — skipping ${slow.map((s) => s.id).join(",")}`,
+          `[GuardClaw] [${checkpoint}] Short-circuit: skipping ${slow.map((s) => s.id).join(",")}`,
         );
       }
-      return mergeDecisionsWeighted(fastResults);
+      const merged = mergeDecisionsWeighted(fastResults);
+      this.logFinalDecision(checkpoint, merged);
+      return merged;
     }
 
     // Phase 2: slow (low-weight) routers — only when fast routers all said S1
     const slowResults = await this.runGroup(slow, context, pluginConfig);
-    return mergeDecisionsWeighted([...fastResults, ...slowResults]);
+    const merged = mergeDecisionsWeighted([...fastResults, ...slowResults]);
+    this.logFinalDecision(checkpoint, merged);
+    return merged;
   }
 
   private async runGroup(
@@ -205,13 +209,24 @@ export class RouterPipeline {
       const result = settled[i];
       const { id, weight } = tasks[i];
       if (result.status === "fulfilled") {
-        results.push({ decision: result.value, weight });
+        const d = result.value;
+        const reasonStr = d.reason ? ` (${d.reason})` : "";
+        const targetStr = d.target ? ` → ${d.target.provider}/${d.target.model}` : "";
+        this.logger.info(`[GuardClaw] [${context.checkpoint}] ${id}: ${d.level} ${d.action ?? "passthrough"}${targetStr}${reasonStr}`);
+        results.push({ decision: d, weight });
       } else {
         this.logger.error(`[RouterPipeline] Router "${id}" failed: ${String(result.reason)}`);
       }
     }
 
     return results;
+  }
+
+  private logFinalDecision(checkpoint: Checkpoint, d: RouterDecision): void {
+    const targetStr = d.target ? ` → ${d.target.provider}/${d.target.model}` : "";
+    const reasonStr = d.reason ? ` (${d.reason})` : "";
+    const log = d.level === "S1" ? this.logger.info : this.logger.warn;
+    log.call(this.logger, `[GuardClaw] [${checkpoint}] ▶ Final: ${d.level} ${d.action ?? "passthrough"}${targetStr}${reasonStr}`);
   }
 
   /**
