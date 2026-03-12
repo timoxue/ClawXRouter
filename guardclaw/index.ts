@@ -21,7 +21,7 @@ import { tokenSaverRouter } from "./src/routers/token-saver.js";
 import { createConfigurableRouter } from "./src/routers/configurable.js";
 import { TokenStatsCollector, setGlobalCollector } from "./src/token-stats.js";
 import { initLiveConfig } from "./src/live-config.js";
-import { initDashboard, statsHttpHandler } from "./src/stats-dashboard.js";
+import { initDashboard, statsHttpHandler, loadDashboardOverrides } from "./src/stats-dashboard.js";
 import type { PrivacyConfig, PipelineConfig, RouterRegistration } from "./src/types.js";
 import type { ProxyHandle } from "./src/privacy-proxy.js";
 
@@ -161,13 +161,26 @@ const plugin = {
       },
     });
 
-    // ── Step 4: Initialize router pipeline ──
+    // ── Step 4: Merge dashboard overrides (persisted outside openclaw.json) ──
+    const dashOverrides = loadDashboardOverrides();
+    if (dashOverrides) {
+      const pcPrivacy = ((api.pluginConfig ?? {}) as Record<string, unknown>);
+      const base = (pcPrivacy.privacy ?? {}) as Record<string, unknown>;
+      pcPrivacy.privacy = { ...base, ...dashOverrides };
+      Object.assign(privacyConfig, dashOverrides);
+      api.logger.info("[GuardClaw] Dashboard overrides loaded from guardclaw-dashboard.json");
+    }
+
+    // ── Step 5: Initialize router pipeline ──
     const pipeline = new RouterPipeline(api.logger);
 
     // Register built-in routers
     const routerConfigs = (privacyConfig as Record<string, unknown>).routers as Record<string, RouterRegistration> | undefined;
+    const pipelineCfg = (privacyConfig as Record<string, unknown>).pipeline as PipelineConfig | undefined;
+    const inPipeline = (id: string) =>
+      pipelineCfg && Object.values(pipelineCfg).some((ids) => ids?.includes(id));
     pipeline.register(privacyRouter, routerConfigs?.privacy ?? { enabled: true, type: "builtin" });
-    pipeline.register(tokenSaverRouter, routerConfigs?.["token-saver"] ?? { enabled: false, type: "builtin" });
+    pipeline.register(tokenSaverRouter, routerConfigs?.["token-saver"] ?? { enabled: inPipeline("token-saver") ?? false, type: "builtin" });
 
     // Register configurable routers (dashboard-created)
     if (routerConfigs) {
@@ -197,7 +210,7 @@ const plugin = {
     setGlobalPipeline(pipeline);
     api.logger.info(`[GuardClaw] Router pipeline initialized (built-in: privacy)`);
 
-    // ── Step 5: Initialize live config & token stats ──
+    // ── Step 6: Initialize live config & token stats ──
     initLiveConfig(api.pluginConfig);
 
     const statsPath = join(process.env.HOME ?? "/tmp", ".openclaw", "guardclaw-stats.json");
@@ -210,7 +223,7 @@ const plugin = {
       api.logger.error(`[GuardClaw] Failed to load token stats: ${String(err)}`);
     });
 
-    // ── Step 6: Register Dashboard HTTP route ──
+    // ── Step 7: Register Dashboard HTTP route ──
     initDashboard({
       loadConfig: api.runtime.config.loadConfig,
       writeConfigFile: api.runtime.config.writeConfigFile,
@@ -234,7 +247,7 @@ const plugin = {
 
     api.logger.info("[GuardClaw] Dashboard registered at /plugins/guardclaw/stats");
 
-    // ── Step 7: Register all hooks ──
+    // ── Step 8: Register all hooks ──
     registerHooks(api);
 
     api.logger.info("[GuardClaw] Plugin initialized (pipeline + privacy proxy + guard agent + dashboard)");

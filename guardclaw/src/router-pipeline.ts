@@ -215,6 +215,34 @@ export class RouterPipeline {
   }
 
   /**
+   * Run all routers for a checkpoint and return individual results (for dashboard testing).
+   */
+  async runEach(
+    checkpoint: Checkpoint,
+    context: DetectionContext,
+    pluginConfig: Record<string, unknown>,
+  ): Promise<RouterDecision[]> {
+    const routerIds = this.getRoutersForCheckpoint(checkpoint);
+    const results: RouterDecision[] = [];
+    const ctx = { ...context, dryRun: true };
+    const tasks = routerIds
+      .filter((id) => this.routers.has(id))
+      .map(async (id) => {
+        const router = this.routers.get(id)!;
+        try {
+          const d = await router.detect(ctx, pluginConfig);
+          d.routerId = id;
+          return d;
+        } catch {
+          return { level: "S1" as const, action: "passthrough" as const, reason: "error", routerId: id };
+        }
+      });
+    const settled = await Promise.all(tasks);
+    results.push(...settled);
+    return results;
+  }
+
+  /**
    * Run a single router by ID (for per-router testing).
    */
   async runSingle(
