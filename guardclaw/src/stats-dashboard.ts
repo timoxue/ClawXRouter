@@ -11,6 +11,7 @@
  *   - POST /plugins/guardclaw/stats/api/config   → update config (hot-reload + persist)
  *   - GET  /plugins/guardclaw/stats/api/prompts  → all editable prompts
  *   - POST /plugins/guardclaw/stats/api/prompts  → save a prompt (hot-reload)
+ *   - POST /plugins/guardclaw/stats/api/reset          → reset all token stats
  *   - POST /plugins/guardclaw/stats/api/test-classify → dry-run pipeline classification
  */
 
@@ -94,6 +95,14 @@ export async function statsHttpHandler(
     const collector = getGlobalCollector();
     if (!collector) { json(res, { error: "not initialized" }, 503); return true; }
     json(res, collector.getSessionStats());
+    return true;
+  }
+
+  if (req.method === "POST" && sub === "/api/reset") {
+    const collector = getGlobalCollector();
+    if (!collector) { json(res, { error: "not initialized" }, 503); return true; }
+    await collector.reset();
+    json(res, { ok: true });
     return true;
   }
 
@@ -349,11 +358,11 @@ function dashboardHtml(): string {
   .chart-wrap h3{font-size:14px;color:#94a3b8;margin-bottom:12px}
 
   .data-table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:12px;overflow:hidden}
-  .data-table th,.data-table td{padding:10px 16px;font-size:13px}
-  .data-table th{background:#0f172a;color:#94a3b8;font-weight:500;text-align:left}
-  .data-table td{text-align:right}
+  .data-table th,.data-table td{padding:10px 16px;font-size:13px;text-align:right}
+  .data-table th{background:#0f172a;color:#94a3b8;font-weight:500}
   .data-table th:first-child,.data-table td:first-child{text-align:left}
   .data-table tr:not(:last-child) td{border-bottom:1px solid #0f172a}
+  #detections-panel .data-table th,#detections-panel .data-table td{text-align:left}
 
   .info-bar{display:flex;gap:24px;padding:12px 0;font-size:12px;color:#64748b}
 
@@ -484,84 +493,94 @@ function dashboardHtml(): string {
   .pipe-pick-btn.in-use:hover{border-color:#475569;color:#64748b}
   .tag.pipe-tag{cursor:grab;user-select:none}
   .tag.pipe-tag.dragging{opacity:.4}
+  .adv-toggle{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;font-size:12px;color:#64748b;margin:16px 0 8px;padding:6px 0}
+  .adv-toggle:hover{color:#94a3b8}
+  .adv-toggle .adv-arrow{font-size:10px;transition:transform .2s;display:inline-block}
+  .adv-toggle.open .adv-arrow{transform:rotate(90deg)}
+  .adv-body{display:none}
+  .adv-body.open{display:block}
 </style>
 </head>
 <body>
 
 <div class="header">
   <div class="header-left">
-    <h1>GuardClaw Dashboard</h1>
+    <h1 data-i18n="header.title">GuardClaw Dashboard</h1>
   </div>
   <div class="header-right">
     <span class="status-dot warn" id="status-dot"></span>
-    <span id="status-text">Connecting...</span>
+    <span id="status-text" data-i18n="header.connecting">Connecting...</span>
     <span id="last-updated"></span>
-    <button class="btn btn-sm btn-outline" onclick="refreshAll()">Refresh</button>
+    <button class="btn btn-sm btn-outline" onclick="refreshAll()" data-i18n="header.refresh">Refresh</button>
+    <button class="btn btn-sm btn-outline" id="lang-toggle" onclick="setLang(LANG==='en'?'zh':'en')">中文</button>
   </div>
 </div>
 
 <div class="tabs">
-  <div class="tab active" data-tab="stats">Overview</div>
-  <div class="tab" data-tab="sessions">Sessions</div>
-  <div class="tab" data-tab="detections">Detection Log</div>
-  <div class="tab" data-tab="rules">Router Rules <span class="badge badge-hot">live</span></div>
-  <div class="tab" data-tab="config">Configuration <span class="badge badge-hot">live</span></div>
+  <div class="tab active" data-tab="stats" data-i18n="tab.overview">Overview</div>
+  <div class="tab" data-tab="sessions" data-i18n="tab.sessions">Sessions</div>
+  <div class="tab" data-tab="detections" data-i18n="tab.detections">Detection Log</div>
+  <div class="tab" data-tab="rules"><span data-i18n="tab.rules">Router Rules</span> <span class="badge badge-hot">live</span></div>
+  <div class="tab" data-tab="config"><span data-i18n="tab.config">Configuration</span> <span class="badge badge-hot">live</span></div>
 </div>
 
 <!-- Overview -->
 <div id="stats-panel" class="panel active">
   <div class="cards">
     <div class="card cloud">
-      <div class="card-label">Cloud Tokens</div>
+      <div class="card-label" data-i18n="overview.cloud">Cloud Tokens</div>
       <div class="card-value" id="cloud-tokens">-</div>
       <div class="card-sub" id="cloud-reqs">0 requests</div>
     </div>
     <div class="card local">
-      <div class="card-label">Local Tokens</div>
+      <div class="card-label" data-i18n="overview.local">Local Tokens</div>
       <div class="card-value" id="local-tokens">-</div>
       <div class="card-sub" id="local-reqs">0 requests</div>
     </div>
     <div class="card proxy">
-      <div class="card-label">Proxy Tokens</div>
+      <div class="card-label" data-i18n="overview.redacted">Redacted Tokens</div>
       <div class="card-value" id="proxy-tokens">-</div>
       <div class="card-sub" id="proxy-reqs">0 requests</div>
     </div>
     <div class="card privacy">
-      <div class="card-label">Privacy Rate</div>
+      <div class="card-label" data-i18n="overview.protection">Data Protection Rate</div>
       <div class="card-value" id="privacy-rate">-</div>
-      <div class="card-sub" id="privacy-sub">of total tokens protected</div>
+      <div class="card-sub" id="privacy-sub" data-i18n="overview.sub">of total tokens protected</div>
     </div>
   </div>
   <div class="chart-wrap">
-    <h3>Hourly Token Usage</h3>
+    <h3 data-i18n="overview.chart">Hourly Token Usage</h3>
     <canvas id="hourlyChart" height="80"></canvas>
   </div>
   <table class="data-table">
-    <thead><tr><th>Category</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Total</th><th>Requests</th></tr></thead>
+    <thead><tr><th data-i18n="table.category">Category</th><th data-i18n="table.input">Input</th><th data-i18n="table.output">Output</th><th data-i18n="table.cache">Cache Read</th><th data-i18n="table.total">Total</th><th data-i18n="table.requests">Requests</th></tr></thead>
     <tbody id="detail-body"></tbody>
   </table>
   <div class="info-bar" id="info-bar"></div>
+  <div style="text-align:right;margin-top:8px;">
+    <button class="btn btn-sm btn-outline" onclick="resetStats()" data-i18n="overview.reset_btn">Reset Stats</button>
+  </div>
 </div>
 
 <!-- Sessions -->
 <div id="sessions-panel" class="panel">
   <table class="data-table">
-    <thead><tr><th>Session</th><th>Level</th><th>Cloud</th><th>Local</th><th>Proxy</th><th>Total</th><th>Requests</th><th>Last Active</th></tr></thead>
-    <tbody id="sessions-body"><tr><td colspan="8" class="empty-state">No session data yet</td></tr></tbody>
+    <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
+    <tbody id="sessions-body"><tr><td colspan="8" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
   </table>
 </div>
 
 <!-- Detection Log -->
 <div id="detections-panel" class="panel">
   <div class="filter-bar">
-    <button class="filter-btn active" onclick="filterDetections('all',this)">All</button>
+    <button class="filter-btn active" onclick="filterDetections('all',this)" data-i18n="det.all">All</button>
     <button class="filter-btn" onclick="filterDetections('S1',this)">S1</button>
     <button class="filter-btn" onclick="filterDetections('S2',this)">S2</button>
     <button class="filter-btn" onclick="filterDetections('S3',this)">S3</button>
   </div>
   <table class="data-table">
-    <thead><tr><th>Time</th><th>Session</th><th>Level</th><th>Checkpoint</th><th>Reason</th></tr></thead>
-    <tbody id="detections-body"><tr><td colspan="5" class="empty-state">No detections yet</td></tr></tbody>
+    <thead><tr><th data-i18n="det.time">Time</th><th data-i18n="det.session">Session</th><th data-i18n="det.level">Level</th><th data-i18n="det.checkpoint">Checkpoint</th><th data-i18n="det.reason">Reason</th></tr></thead>
+    <tbody id="detections-body"><tr><td colspan="5" class="empty-state" data-i18n="det.empty">No detections yet</td></tr></tbody>
   </table>
 </div>
 
@@ -570,162 +589,94 @@ function dashboardHtml(): string {
 
   <!-- Pipeline Test (full pipeline) -->
   <div class="test-panel">
-    <h3 style="font-size:14px;color:#94a3b8;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px">Test Classification</h3>
-    <div class="hint" style="margin-bottom:10px">Dry-run the full router pipeline on a message (no side effects).</div>
-    <textarea class="test-input" id="test-message" placeholder="e.g. &quot;帮我分析一下这个月的工资单&quot; or &quot;write a poem about spring&quot;"></textarea>
+    <h3 style="font-size:14px;color:#94a3b8;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px" data-i18n="test.title">Test Classification</h3>
+    <div class="hint" style="margin-bottom:10px" data-i18n="test.hint">Test how the router pipeline would classify a message (no changes applied).</div>
+    <textarea class="test-input" id="test-message" data-i18n-ph="test.placeholder" placeholder="e.g. &quot;帮我分析一下这个月的工资单&quot; or &quot;write a poem about spring&quot;"></textarea>
     <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
       <select id="test-checkpoint" style="padding:9px 36px 9px 14px;background:#0f172a url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E&quot;) no-repeat right 14px center;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:12px;appearance:none;-webkit-appearance:none">
-        <option value="onUserMessage">onUserMessage</option>
-        <option value="onToolCallProposed">onToolCallProposed</option>
-        <option value="onToolCallExecuted">onToolCallExecuted</option>
+        <option value="onUserMessage" data-i18n-opt="ck.user_message">User Message</option>
+        <option value="onToolCallProposed" data-i18n-opt="ck.before_tool">Before Tool Runs</option>
+        <option value="onToolCallExecuted" data-i18n-opt="ck.after_tool">After Tool Runs</option>
       </select>
-      <button class="btn btn-primary btn-sm" onclick="runTestClassify()">Classify (Full Pipeline)</button>
+      <button class="btn btn-primary btn-sm" onclick="runTestClassify()" data-i18n="test.run">Run Test</button>
     </div>
     <div class="test-result" id="test-result">
-      <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-level">-</span></div>
-      <div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-action">-</span></div>
-      <div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-target">-</span></div>
-      <div class="test-result-row"><span class="test-result-label">Router</span><span class="test-result-value" id="tr-router">-</span></div>
-      <div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-reason">-</span></div>
-      <div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-confidence">-</span></div>
+      <div style="font-size:11px;text-transform:uppercase;color:#64748b;letter-spacing:.5px;margin-bottom:8px" data-i18n="test.merged">Merged Result</div>
+      <div class="test-result-row"><span class="test-result-label" data-i18n="test.level">Level</span><span class="test-result-value" id="tr-level">-</span></div>
+      <div class="test-result-row"><span class="test-result-label" data-i18n="test.action">Action</span><span class="test-result-value" id="tr-action">-</span></div>
+      <div class="test-result-row"><span class="test-result-label" data-i18n="test.target">Target</span><span class="test-result-value" id="tr-target">-</span></div>
+      <div class="test-result-row"><span class="test-result-label" data-i18n="test.deciding">Deciding Router</span><span class="test-result-value" id="tr-router">-</span></div>
+      <div class="test-result-row"><span class="test-result-label" data-i18n="test.reason">Reason</span><span class="test-result-value" id="tr-reason">-</span></div>
+      <div class="test-result-row"><span class="test-result-label" data-i18n="test.confidence">Confidence</span><span class="test-result-value" id="tr-confidence">-</span></div>
+      <div id="tr-per-router"></div>
     </div>
-    <div class="test-loading" id="test-loading" style="display:none">Classifying...</div>
+    <div class="test-loading" id="test-loading" style="display:none" data-i18n="test.classifying">Classifying...</div>
   </div>
 
-  <!-- Pipeline Order -->
-  <div class="config-section">
-    <h3>Pipeline Order <span class="badge badge-hot">instant</span></h3>
-    <div class="hint" style="margin-bottom:12px">Click a router to add it to a checkpoint. Drag tags to reorder. Click &times; to remove.</div>
-    <div class="field">
-      <label>onUserMessage</label>
-      <div class="tag-list" id="cfg-tags-pipe-um"></div>
-      <div class="pipe-picker" id="pipe-picker-um"></div>
+  <!-- Pipeline Order (Advanced) -->
+  <div class="adv-toggle" onclick="toggleAdv(this)">
+    <span class="adv-arrow">&#9654;</span> <span data-i18n="pipe.title">Router Execution Order (Advanced)</span>
+  </div>
+  <div class="adv-body">
+    <div class="config-section">
+      <div class="hint" style="margin-bottom:12px" data-i18n="pipe.hint">Click a router to add it to a stage. Drag tags to reorder. Click &times; to remove.</div>
+      <div class="field">
+        <label data-i18n="ck.user_message">User Message</label>
+        <div class="tag-list" id="cfg-tags-pipe-um"></div>
+        <div class="pipe-picker" id="pipe-picker-um"></div>
+      </div>
+      <div class="field">
+        <label data-i18n="ck.before_tool">Before Tool Runs</label>
+        <div class="tag-list" id="cfg-tags-pipe-tcp"></div>
+        <div class="pipe-picker" id="pipe-picker-tcp"></div>
+      </div>
+      <div class="field">
+        <label data-i18n="ck.after_tool">After Tool Runs</label>
+        <div class="tag-list" id="cfg-tags-pipe-tce"></div>
+        <div class="pipe-picker" id="pipe-picker-tce"></div>
+      </div>
+      <div class="save-bar"><button class="btn btn-primary btn-sm" onclick="savePipelineOrder()" data-i18n="pipe.save">Save Execution Order</button></div>
     </div>
-    <div class="field">
-      <label>onToolCallProposed</label>
-      <div class="tag-list" id="cfg-tags-pipe-tcp"></div>
-      <div class="pipe-picker" id="pipe-picker-tcp"></div>
-    </div>
-    <div class="field">
-      <label>onToolCallExecuted</label>
-      <div class="tag-list" id="cfg-tags-pipe-tce"></div>
-      <div class="pipe-picker" id="pipe-picker-tce"></div>
-    </div>
-    <div class="save-bar"><button class="btn btn-primary btn-sm" onclick="savePipelineOrder()">Save Pipeline Order</button></div>
   </div>
 
   <!-- ═══ Privacy Router Card ═══ -->
   <div class="router-section">
     <div class="router-section-header" onclick="toggleSection(this)">
       <span class="section-arrow">&#9660;</span>
-      <h3>Privacy Router</h3>
+      <h3 data-i18n="priv.title">Privacy Router</h3>
       <span class="router-id-badge">privacy</span>
     </div>
     <div class="router-section-body">
+      <div class="hint" style="margin-bottom:14px" data-i18n="priv.desc">Detects sensitive data in messages and routes to local or redacted cloud models.</div>
 
       <div class="field-toggle" style="margin-bottom:18px">
-        <label>Enabled</label>
+        <label data-i18n="common.enabled">Enabled</label>
         <label class="toggle"><input type="checkbox" id="cfg-privacy-enabled" checked><span class="slider"></span></label>
       </div>
 
-      <!-- Checkpoints -->
+      <!-- Keywords (always visible) -->
       <div class="subsection">
-        <h4>Checkpoints</h4>
-        <div class="hint" style="margin-bottom:10px">Select which detectors run at each checkpoint for the privacy router.</div>
-        <div class="field">
-          <label>onUserMessage</label>
-          <div class="chip-group" id="ck-um">
-            <button class="chip" data-ck="um" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
-            <button class="chip" data-ck="um" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>onToolCallProposed</label>
-          <div class="chip-group" id="ck-tcp">
-            <button class="chip" data-ck="tcp" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
-            <button class="chip" data-ck="tcp" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>onToolCallExecuted</label>
-          <div class="chip-group" id="ck-tce">
-            <button class="chip" data-ck="tce" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
-            <button class="chip" data-ck="tce" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Detection Rules -->
-      <div class="subsection">
-        <h4>Detection Rules</h4>
+        <h4 data-i18n="priv.keywords">Keywords</h4>
         <div class="rules-grid">
           <div class="rules-col">
-            <h4>S2 &mdash; Moderate Sensitivity</h4>
+            <h4 data-i18n-html="priv.s2">S2 &mdash; Sensitive (Redact &rarr; Cloud)</h4>
             <div class="field">
-              <label>Keywords</label>
+              <label data-i18n="priv.keywords">Keywords</label>
               <div class="tag-list" id="cfg-tags-kw-s2"></div>
               <div class="add-row">
                 <input id="cfg-tags-kw-s2-input" placeholder="e.g. salary, phone number" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('kw-s2')}">
                 <button class="btn btn-sm btn-outline" onclick="addTag('kw-s2')">Add</button>
               </div>
             </div>
-            <div class="field">
-              <label>Regex Patterns</label>
-              <div class="tag-list" id="cfg-tags-pat-s2"></div>
-              <div class="add-row">
-                <input id="cfg-tags-pat-s2-input" placeholder="e.g. \\d{3}-\\d{4}" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s2')}">
-                <button class="btn btn-sm btn-outline" onclick="addTag('pat-s2')">Add</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Tool Names</label>
-              <div class="tag-list" id="cfg-tags-tool-s2"></div>
-              <div class="add-row">
-                <input id="cfg-tags-tool-s2-input" placeholder="e.g. read_file, execute_sql" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s2')}">
-                <button class="btn btn-sm btn-outline" onclick="addTag('tool-s2')">Add</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Tool Paths</label>
-              <div class="tag-list" id="cfg-tags-toolpath-s2"></div>
-              <div class="add-row">
-                <input id="cfg-tags-toolpath-s2-input" placeholder="e.g. /secrets/, *.env" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s2')}">
-                <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s2')">Add</button>
-              </div>
-            </div>
           </div>
           <div class="rules-col">
-            <h4>S3 &mdash; High Sensitivity</h4>
+            <h4 data-i18n-html="priv.s3">S3 &mdash; Confidential (Local Model Only)</h4>
             <div class="field">
-              <label>Keywords</label>
+              <label data-i18n="priv.keywords">Keywords</label>
               <div class="tag-list" id="cfg-tags-kw-s3"></div>
               <div class="add-row">
                 <input id="cfg-tags-kw-s3-input" placeholder="e.g. SSN, bank account" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('kw-s3')}">
                 <button class="btn btn-sm btn-outline" onclick="addTag('kw-s3')">Add</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Regex Patterns</label>
-              <div class="tag-list" id="cfg-tags-pat-s3"></div>
-              <div class="add-row">
-                <input id="cfg-tags-pat-s3-input" placeholder="e.g. \\b\\d{3}-\\d{2}-\\d{4}\\b" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s3')}">
-                <button class="btn btn-sm btn-outline" onclick="addTag('pat-s3')">Add</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Tool Names</label>
-              <div class="tag-list" id="cfg-tags-tool-s3"></div>
-              <div class="add-row">
-                <input id="cfg-tags-tool-s3-input" placeholder="e.g. execute_command" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s3')}">
-                <button class="btn btn-sm btn-outline" onclick="addTag('tool-s3')">Add</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Tool Paths</label>
-              <div class="tag-list" id="cfg-tags-toolpath-s3"></div>
-              <div class="add-row">
-                <input id="cfg-tags-toolpath-s3-input" placeholder="e.g. /credentials/" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s3')}">
-                <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s3')">Add</button>
               </div>
             </div>
           </div>
@@ -734,29 +685,132 @@ function dashboardHtml(): string {
 
       <!-- LLM Prompts (privacy-specific) -->
       <div class="subsection">
-        <h4>LLM Prompts</h4>
-        <div class="hint" style="margin-bottom:12px">Prompts used by the local LLM for sensitivity classification and PII extraction.</div>
-        <div id="privacy-prompt-editors"></div>
+        <h4 data-i18n="priv.llm_prompt">LLM Prompt</h4>
+        <div class="hint" style="margin-bottom:12px" data-i18n="priv.llm_hint">Prompt used by the local LLM to classify data sensitivity (S1/S2/S3).</div>
+        <div id="privacy-prompt-main"></div>
       </div>
 
       <!-- Per-router Test -->
       <div class="subsection">
-        <h4>Test (Privacy Router Only)</h4>
-        <textarea class="test-input" id="test-privacy-message" placeholder="Enter a message to test the privacy router alone..."></textarea>
+        <h4 data-i18n="priv.test_title">Test (Privacy Router Only)</h4>
+        <textarea class="test-input" id="test-privacy-message" data-i18n-ph="priv.test_ph" placeholder="Enter a message to test the privacy router alone..."></textarea>
         <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-          <button class="btn btn-primary btn-sm" onclick="runRouterTest('privacy')">Test Privacy Router</button>
+          <button class="btn btn-primary btn-sm" onclick="runRouterTest('privacy')" data-i18n="priv.test_btn">Test Privacy Router</button>
         </div>
         <div class="test-result" id="test-privacy-result">
-          <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-privacy-level">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-privacy-action">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-privacy-target">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-privacy-reason">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-privacy-confidence">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.level">Level</span><span class="test-result-value" id="tr-privacy-level">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.action">Action</span><span class="test-result-value" id="tr-privacy-action">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.target">Target</span><span class="test-result-value" id="tr-privacy-target">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.reason">Reason</span><span class="test-result-value" id="tr-privacy-reason">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.confidence">Confidence</span><span class="test-result-value" id="tr-privacy-confidence">-</span></div>
         </div>
-        <div class="test-loading" id="test-privacy-loading" style="display:none">Testing...</div>
+        <div class="test-loading" id="test-privacy-loading" style="display:none" data-i18n="test.testing">Testing...</div>
       </div>
 
-      <div class="save-bar"><button class="btn btn-primary" onclick="savePrivacyRouter()">Save Privacy Router</button></div>
+      <!-- Advanced Configuration -->
+      <div class="adv-toggle" onclick="toggleAdv(this)">
+        <span class="adv-arrow">&#9654;</span> <span data-i18n="priv.adv">Advanced Configuration</span>
+      </div>
+      <div class="adv-body">
+
+        <!-- When to Run -->
+        <div class="subsection">
+          <h4 data-i18n="priv.when">When to Run</h4>
+          <div class="hint" style="margin-bottom:10px" data-i18n="priv.when_hint">Select which detectors run at each stage for the privacy router.</div>
+          <div class="field">
+            <label data-i18n="ck.user_message">User Message</label>
+            <div class="chip-group" id="ck-um">
+              <button class="chip" data-ck="um" data-det="ruleDetector" onclick="toggleChip(this)" data-i18n="priv.kw_regex">Keyword &amp; Regex</button>
+              <button class="chip" data-ck="um" data-det="localModelDetector" onclick="toggleChip(this)" data-i18n="priv.llm_cls">LLM Classifier</button>
+            </div>
+          </div>
+          <div class="field">
+            <label data-i18n="ck.before_tool">Before Tool Runs</label>
+            <div class="chip-group" id="ck-tcp">
+              <button class="chip" data-ck="tcp" data-det="ruleDetector" onclick="toggleChip(this)" data-i18n="priv.kw_regex">Keyword &amp; Regex</button>
+              <button class="chip" data-ck="tcp" data-det="localModelDetector" onclick="toggleChip(this)" data-i18n="priv.llm_cls">LLM Classifier</button>
+            </div>
+          </div>
+          <div class="field">
+            <label data-i18n="ck.after_tool">After Tool Runs</label>
+            <div class="chip-group" id="ck-tce">
+              <button class="chip" data-ck="tce" data-det="ruleDetector" onclick="toggleChip(this)" data-i18n="priv.kw_regex">Keyword &amp; Regex</button>
+              <button class="chip" data-ck="tce" data-det="localModelDetector" onclick="toggleChip(this)" data-i18n="priv.llm_cls">LLM Classifier</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Regex Patterns, Sensitive Tool Names, Sensitive File Paths -->
+        <div class="subsection">
+          <h4 data-i18n="priv.det_rules">Detection Rules (Regex &amp; Tool Filters)</h4>
+          <div class="rules-grid">
+            <div class="rules-col">
+              <h4 data-i18n-html="priv.s2">S2 &mdash; Sensitive (Redact &rarr; Cloud)</h4>
+              <div class="field">
+                <label data-i18n="priv.regex">Regex Patterns</label>
+                <div class="tag-list" id="cfg-tags-pat-s2"></div>
+                <div class="add-row">
+                  <input id="cfg-tags-pat-s2-input" placeholder="e.g. \\d{3}-\\d{4}" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s2')}">
+                  <button class="btn btn-sm btn-outline" onclick="addTag('pat-s2')">Add</button>
+                </div>
+              </div>
+              <div class="field">
+                <label data-i18n="priv.tools">Sensitive Tool Names</label>
+                <div class="tag-list" id="cfg-tags-tool-s2"></div>
+                <div class="add-row">
+                  <input id="cfg-tags-tool-s2-input" placeholder="e.g. read_file, execute_sql" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s2')}">
+                  <button class="btn btn-sm btn-outline" onclick="addTag('tool-s2')">Add</button>
+                </div>
+              </div>
+              <div class="field">
+                <label data-i18n="priv.paths">Sensitive File Paths</label>
+                <div class="tag-list" id="cfg-tags-toolpath-s2"></div>
+                <div class="add-row">
+                  <input id="cfg-tags-toolpath-s2-input" placeholder="e.g. /secrets/, *.env" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s2')}">
+                  <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s2')">Add</button>
+                </div>
+              </div>
+            </div>
+            <div class="rules-col">
+              <h4 data-i18n-html="priv.s3">S3 &mdash; Confidential (Local Model Only)</h4>
+              <div class="field">
+                <label data-i18n="priv.regex">Regex Patterns</label>
+                <div class="tag-list" id="cfg-tags-pat-s3"></div>
+                <div class="add-row">
+                  <input id="cfg-tags-pat-s3-input" placeholder="e.g. \\b\\d{3}-\\d{2}-\\d{4}\\b" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s3')}">
+                  <button class="btn btn-sm btn-outline" onclick="addTag('pat-s3')">Add</button>
+                </div>
+              </div>
+              <div class="field">
+                <label data-i18n="priv.tools">Sensitive Tool Names</label>
+                <div class="tag-list" id="cfg-tags-tool-s3"></div>
+                <div class="add-row">
+                  <input id="cfg-tags-tool-s3-input" placeholder="e.g. execute_command" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s3')}">
+                  <button class="btn btn-sm btn-outline" onclick="addTag('tool-s3')">Add</button>
+                </div>
+              </div>
+              <div class="field">
+                <label data-i18n="priv.paths">Sensitive File Paths</label>
+                <div class="tag-list" id="cfg-tags-toolpath-s3"></div>
+                <div class="add-row">
+                  <input id="cfg-tags-toolpath-s3-input" placeholder="e.g. /credentials/" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s3')}">
+                  <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s3')">Add</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Personal Info Redaction Prompt -->
+        <div class="subsection">
+          <h4 data-i18n="priv.pii">Personal Info Redaction Prompt</h4>
+          <div class="hint" style="margin-bottom:12px" data-i18n="priv.pii_hint">Prompt used by the local LLM to extract and redact personal info.</div>
+          <div id="privacy-prompt-adv"></div>
+        </div>
+
+      </div>
+
+      <div class="save-bar"><button class="btn btn-primary" onclick="savePrivacyRouter()" data-i18n="priv.save">Save Privacy Router</button></div>
     </div>
   </div>
 
@@ -764,39 +818,24 @@ function dashboardHtml(): string {
   <div class="router-section">
     <div class="router-section-header" onclick="toggleSection(this)">
       <span class="section-arrow">&#9660;</span>
-      <h3>Token-Saver Router</h3>
+      <h3 data-i18n="co.title">Cost-Optimizer Router</h3>
       <span class="router-id-badge">token-saver</span>
     </div>
     <div class="router-section-body">
+      <div class="hint" style="margin-bottom:14px" data-i18n="co.desc">Classifies task complexity and routes to the most cost-effective model.</div>
 
       <div class="field-toggle" style="margin-bottom:18px">
-        <label>Enabled</label>
+        <label data-i18n="common.enabled">Enabled</label>
         <label class="toggle"><input type="checkbox" id="cfg-ts-enabled"><span class="slider"></span></label>
       </div>
 
       <!-- Judge Model -->
       <div class="subsection">
-        <h4>Judge Model</h4>
-        <div class="hint" style="margin-bottom:10px">LLM used to classify task complexity. Falls back to the global Local Model settings if empty.</div>
-        <div class="field"><label>Judge Endpoint</label><input id="cfg-ts-endpoint" placeholder="(inherits from Local Model)"></div>
-        <div class="field"><label>Judge Model</label><input id="cfg-ts-model" placeholder="(inherits from Local Model)"></div>
-        <div class="field">
-          <label>Judge API Protocol</label>
-          <select id="cfg-ts-providertype">
-            <option value="openai-compatible">openai-compatible</option>
-            <option value="ollama-native">ollama-native</option>
-            <option value="custom">custom</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Tier-to-Model -->
-      <div class="subsection">
-        <h4>Tier &rarr; Model Mapping</h4>
+        <h4 data-i18n-html="co.tier">Complexity Level &rarr; Model</h4>
         <div class="tier-grid">
-          <div class="tier-grid-header">Tier</div>
-          <div class="tier-grid-header">Provider</div>
-          <div class="tier-grid-header">Model</div>
+          <div class="tier-grid-header" data-i18n="co.complexity">Complexity</div>
+          <div class="tier-grid-header" data-i18n="co.provider">Provider</div>
+          <div class="tier-grid-header" data-i18n="co.model">Model</div>
           <div class="tier-label">SIMPLE</div><input id="cfg-ts-tier-SIMPLE-provider" placeholder="openai"><input id="cfg-ts-tier-SIMPLE-model" placeholder="gpt-4o-mini">
           <div class="tier-label">MEDIUM</div><input id="cfg-ts-tier-MEDIUM-provider" placeholder="openai"><input id="cfg-ts-tier-MEDIUM-model" placeholder="gpt-4o">
           <div class="tier-label">COMPLEX</div><input id="cfg-ts-tier-COMPLEX-provider" placeholder="anthropic"><input id="cfg-ts-tier-COMPLEX-model" placeholder="claude-sonnet-4.6">
@@ -804,40 +843,48 @@ function dashboardHtml(): string {
         </div>
       </div>
 
-      <!-- Cache TTL -->
-      <div class="subsection">
-        <h4>Cache</h4>
-        <div class="field">
-          <label>Cache TTL (ms)</label>
-          <input id="cfg-ts-cachettl" type="number" placeholder="300000" style="max-width:180px">
-        </div>
-      </div>
-
       <!-- LLM Prompt (token-saver-specific) -->
       <div class="subsection">
-        <h4>LLM Prompt</h4>
-        <div class="hint" style="margin-bottom:12px">Prompt used by the judge LLM to classify task complexity.</div>
+        <h4 data-i18n="co.llm_prompt">LLM Prompt</h4>
+        <div class="hint" style="margin-bottom:12px" data-i18n="co.llm_hint">Prompt used by the classifier LLM to determine task complexity.</div>
         <div id="tokensaver-prompt-editors"></div>
       </div>
 
       <!-- Per-router Test -->
       <div class="subsection">
-        <h4>Test (Token-Saver Only)</h4>
-        <textarea class="test-input" id="test-token-saver-message" placeholder="Enter a message to test the token-saver router alone..."></textarea>
+        <h4 data-i18n="co.test_title">Test (Cost-Optimizer Only)</h4>
+        <textarea class="test-input" id="test-token-saver-message" data-i18n-ph="co.test_ph" placeholder="Enter a message to test the cost-optimizer router alone..."></textarea>
         <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-          <button class="btn btn-primary btn-sm" onclick="runRouterTest('token-saver')">Test Token-Saver</button>
+          <button class="btn btn-primary btn-sm" onclick="runRouterTest('token-saver')" data-i18n="co.test_btn">Test Cost-Optimizer</button>
         </div>
         <div class="test-result" id="test-token-saver-result">
-          <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-token-saver-level">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-token-saver-action">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-token-saver-target">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-token-saver-reason">-</span></div>
-          <div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-token-saver-confidence">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.level">Level</span><span class="test-result-value" id="tr-token-saver-level">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.action">Action</span><span class="test-result-value" id="tr-token-saver-action">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.target">Target</span><span class="test-result-value" id="tr-token-saver-target">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.reason">Reason</span><span class="test-result-value" id="tr-token-saver-reason">-</span></div>
+          <div class="test-result-row"><span class="test-result-label" data-i18n="test.confidence">Confidence</span><span class="test-result-value" id="tr-token-saver-confidence">-</span></div>
         </div>
-        <div class="test-loading" id="test-token-saver-loading" style="display:none">Testing...</div>
+        <div class="test-loading" id="test-token-saver-loading" style="display:none" data-i18n="test.testing">Testing...</div>
       </div>
 
-      <div class="save-bar"><button class="btn btn-primary" onclick="saveTokenSaverConfig()">Save Token-Saver</button></div>
+      <!-- Advanced Configuration -->
+      <div class="adv-toggle" onclick="toggleAdv(this)">
+        <span class="adv-arrow">&#9654;</span> <span data-i18n="co.adv">Advanced Configuration</span>
+      </div>
+      <div class="adv-body">
+
+        <!-- Cache Duration -->
+        <div class="subsection">
+          <h4 data-i18n="co.cache">Cache</h4>
+          <div class="field">
+            <label data-i18n="co.cache_dur">Cache Duration (ms)</label>
+            <input id="cfg-ts-cachettl" type="number" placeholder="300000" style="max-width:180px">
+          </div>
+        </div>
+
+      </div>
+
+      <div class="save-bar"><button class="btn btn-primary" onclick="saveTokenSaverConfig()" data-i18n="co.save">Save Cost-Optimizer</button></div>
     </div>
   </div>
 
@@ -847,10 +894,10 @@ function dashboardHtml(): string {
   <!-- Add Custom Router -->
   <div class="add-custom-router">
     <div style="display:flex;gap:10px;align-items:center">
-      <input id="new-router-id" placeholder="Router ID (e.g. content-filter)" style="flex:1;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;outline:none">
-      <button class="btn btn-primary" onclick="addCustomRouter()">+ Add Custom Router</button>
+      <input id="new-router-id" data-i18n-ph="cr.add_ph" placeholder="Router ID (e.g. content-filter)" style="flex:1;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;outline:none">
+      <button class="btn btn-primary" onclick="addCustomRouter()" data-i18n="cr.add_btn">+ Add Custom Router</button>
     </div>
-    <div class="hint" style="margin-top:8px">Create a new router with keyword rules and an optional LLM classification prompt. Added routers appear above and can be included in Pipeline Order.</div>
+    <div class="hint" style="margin-top:8px" data-i18n="cr.add_hint">Create a new router with keyword rules and an optional LLM classification prompt. Added routers appear above and can be included in Router Execution Order.</div>
   </div>
 
 </div>
@@ -859,67 +906,86 @@ function dashboardHtml(): string {
 <div id="config-panel" class="panel">
 
   <div class="toggle-bar">
-    <label>GuardClaw Enabled</label>
+    <label data-i18n="cfg.enabled">GuardClaw Enabled</label>
     <label class="toggle"><input type="checkbox" id="cfg-enabled" checked><span class="slider"></span></label>
   </div>
 
   <div class="config-section">
-    <h3>Local Model <span class="badge badge-hot">instant</span></h3>
+    <h3><span data-i18n="cfg.lm">Local Model</span> <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfg.lm_desc">Configure the LLM used locally for privacy classification and PII redaction.</div>
     <div class="field-toggle">
-      <label>Enabled</label>
+      <label data-i18n="cfg.lm_enabled">Enabled</label>
       <label class="toggle"><input type="checkbox" id="cfg-lm-enabled" checked><span class="slider"></span></label>
     </div>
     <div class="field">
-      <label>API Protocol</label>
+      <label data-i18n="cfg.api_proto">API Protocol</label>
       <select id="cfg-lm-type">
         <option value="openai-compatible">openai-compatible (Ollama, vLLM, LMStudio ...)</option>
         <option value="ollama-native">ollama-native (Ollama /api/chat)</option>
         <option value="custom">custom (user module)</option>
       </select>
     </div>
-    <div class="field"><label>Provider</label><input id="cfg-lm-provider" placeholder="ollama"></div>
-    <div class="field"><label>Endpoint</label><input id="cfg-lm-endpoint" placeholder="http://localhost:11434"></div>
-    <div class="field"><label>Model</label><input id="cfg-lm-model" placeholder="openbmb/minicpm4.1"></div>
-    <div class="field"><label>API Key</label><input id="cfg-lm-apikey" type="password" placeholder="sk-..."></div>
-    <div class="field" id="cfg-lm-module-wrap" style="display:none"><label>Custom Module Path</label><input id="cfg-lm-module" placeholder="./my-provider.js"></div>
+    <div class="field"><label data-i18n="cfg.provider">Provider</label><input id="cfg-lm-provider" placeholder="ollama"></div>
+    <div class="field"><label data-i18n="cfg.endpoint">Endpoint</label><input id="cfg-lm-endpoint" placeholder="http://localhost:11434"></div>
+    <div class="field"><label data-i18n="cfg.model">Model</label><input id="cfg-lm-model" placeholder="openbmb/minicpm4.1"></div>
+    <div class="field"><label data-i18n="cfg.api_key">API Key</label><input id="cfg-lm-apikey" type="password" placeholder="sk-..."></div>
+    <div class="field" id="cfg-lm-module-wrap" style="display:none"><label data-i18n="cfg.custom_mod">Custom Module Path</label><input id="cfg-lm-module" placeholder="./my-provider.js"></div>
   </div>
 
   <div class="config-section">
-    <h3>Guard Agent <span class="badge badge-hot">instant</span></h3>
-    <div class="field"><label>Agent ID</label><input id="cfg-ga-id" placeholder="guard"></div>
-    <div class="field"><label>Workspace</label><input id="cfg-ga-workspace" placeholder="~/.openclaw/workspace-guard"></div>
-    <div class="field"><label>Model (provider/model)</label><input id="cfg-ga-model" placeholder="ollama/qwen3.5-27b"></div>
-  </div>
-
-  <div class="config-section">
-    <h3>Routing Policy <span class="badge badge-hot">instant</span></h3>
+    <h3><span data-i18n="cfg.cls">Cost-Optimizer Classifier</span> <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfg.cls_desc">LLM used by the Cost-Optimizer to determine task complexity. Falls back to the Local Model settings above if empty.</div>
+    <div class="field"><label data-i18n="cfg.endpoint">Endpoint</label><input id="cfg-ts-endpoint" placeholder="(inherits from Local Model)"></div>
+    <div class="field"><label data-i18n="cfg.model">Model</label><input id="cfg-ts-model" placeholder="(inherits from Local Model)"></div>
     <div class="field">
-      <label>S2 Handling Strategy</label>
+      <label data-i18n="cfg.api_proto">API Protocol</label>
+      <select id="cfg-ts-providertype">
+        <option value="openai-compatible">openai-compatible</option>
+        <option value="ollama-native">ollama-native</option>
+        <option value="custom">custom</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="config-section">
+    <h3><span data-i18n="cfg.guard">Privacy Guard Agent</span> <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfg.guard_desc">A local agent that handles sensitive tasks entirely on-device.</div>
+    <div class="field"><label data-i18n="cfg.agent_id">Agent ID</label><input id="cfg-ga-id" placeholder="guard"></div>
+    <div class="field"><label data-i18n="cfg.workspace">Workspace</label><input id="cfg-ga-workspace" placeholder="~/.openclaw/workspace-guard"></div>
+    <div class="field"><label data-i18n="cfg.model_prov">Model (provider/model)</label><input id="cfg-ga-model" placeholder="ollama/qwen3.5-27b"></div>
+  </div>
+
+  <div class="config-section">
+    <h3><span data-i18n="cfg.routing">Routing Policy</span> <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfg.routing_desc">How S2-level sensitive data is handled before reaching the cloud.</div>
+    <div class="field">
+      <label data-i18n="cfg.sens_route">Sensitive Data Routing</label>
       <select id="cfg-s2policy">
-        <option value="proxy">proxy (strip PII via privacy proxy)</option>
-        <option value="local">local (route entirely to local model)</option>
+        <option value="proxy" data-i18n-opt="cfg.s2_proxy">Proxy (redact personal info before sending)</option>
+        <option value="local" data-i18n-opt="cfg.s2_local">Local only (process on-device, no cloud)</option>
       </select>
     </div>
     <div class="field">
-      <label>Proxy Port</label>
+      <label data-i18n="cfg.proxy_port">Proxy Port</label>
       <input id="cfg-proxyport" type="number" placeholder="8403" style="max-width:160px">
-      <div class="hint">Requires restart to take effect</div>
+      <div class="hint" data-i18n="cfg.restart_hint">Requires restart to take effect</div>
     </div>
   </div>
 
   <div class="config-section">
-    <h3>Session Settings <span class="badge badge-hot">instant</span></h3>
+    <h3><span data-i18n="cfg.session">Session Settings</span> <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfg.session_desc">Manage isolation and storage of guard-related session data.</div>
     <div class="field-toggle">
-      <label>Isolate Guard History</label>
+      <label data-i18n="cfg.isolate">Separate Guard Chat History</label>
       <label class="toggle"><input type="checkbox" id="cfg-sess-isolate" checked><span class="slider"></span></label>
     </div>
-    <div class="field"><label>Base Directory</label><input id="cfg-sess-basedir" placeholder="~/.openclaw"></div>
+    <div class="field"><label data-i18n="cfg.base_dir">Base Directory</label><input id="cfg-sess-basedir" placeholder="~/.openclaw"></div>
   </div>
 
   <div class="config-section">
-    <h3>Local Providers <span class="badge badge-hot">instant</span></h3>
+    <h3><span data-i18n="cfg.local_prov">Local Providers</span> <span class="badge badge-hot">instant</span></h3>
     <div class="field">
-      <label>Additional providers treated as &quot;local&quot; (safe for S3 routing)</label>
+      <label data-i18n="cfg.local_prov_hint">Additional providers treated as &quot;local&quot; (safe for confidential data routing)</label>
       <div class="tag-list" id="cfg-tags-lp"></div>
       <div class="add-row">
         <input id="cfg-tags-lp-input" placeholder="e.g. my-inference-server" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('lp')}">
@@ -929,7 +995,7 @@ function dashboardHtml(): string {
   </div>
 
   <div class="save-bar">
-    <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+    <button class="btn btn-primary" onclick="saveConfig()" data-i18n="cfg.save">Save Configuration</button>
   </div>
 </div>
 
@@ -940,6 +1006,214 @@ var BASE = '/plugins/guardclaw/stats/api';
 var hourlyChart = null;
 var _detections = [];
 var _detectionFilter = 'all';
+
+// ── i18n ──
+var LANG = localStorage.getItem('gc-lang') || 'en';
+var T = {
+  'tab.overview':{en:'Overview',zh:'概览'},
+  'tab.sessions':{en:'Sessions',zh:'会话'},
+  'tab.detections':{en:'Detection Log',zh:'检测日志'},
+  'tab.rules':{en:'Router Rules',zh:'路由规则'},
+  'tab.config':{en:'Configuration',zh:'配置'},
+  'header.title':{en:'GuardClaw Dashboard',zh:'GuardClaw 控制台'},
+  'header.connecting':{en:'Connecting...',zh:'连接中...'},
+  'header.refresh':{en:'Refresh',zh:'刷新'},
+  'header.online':{en:'Online',zh:'在线'},
+  'overview.cloud':{en:'Cloud Tokens',zh:'云端 Tokens'},
+  'overview.local':{en:'Local Tokens',zh:'本地 Tokens'},
+  'overview.redacted':{en:'Redacted Tokens',zh:'脱敏 Tokens'},
+  'overview.protection':{en:'Data Protection Rate',zh:'数据保护率'},
+  'overview.sub':{en:'of total tokens protected',zh:'受保护的 Token 占比'},
+  'overview.chart':{en:'Hourly Token Usage',zh:'每小时 Token 用量'},
+  'overview.requests':{en:'requests',zh:'请求'},
+  'overview.no_data':{en:'No data yet',zh:'暂无数据'},
+  'overview.reset_btn':{en:'Reset Stats',zh:'重置统计'},
+  'overview.reset_confirm':{en:'Reset all token statistics? This cannot be undone.',zh:'确定要重置所有 Token 统计数据吗？此操作不可撤销。'},
+  'overview.reset_ok':{en:'Stats reset successfully',zh:'统计数据已重置'},
+  'overview.reset_fail':{en:'Failed to reset stats: ',zh:'重置统计失败：'},
+  'table.category':{en:'Category',zh:'分类'},
+  'table.input':{en:'Input',zh:'输入'},
+  'table.output':{en:'Output',zh:'输出'},
+  'table.cache':{en:'Cache Read',zh:'缓存读取'},
+  'table.total':{en:'Total',zh:'总计'},
+  'table.requests':{en:'Requests',zh:'请求数'},
+  'sessions.session':{en:'Session',zh:'会话'},
+  'sessions.level':{en:'Level',zh:'等级'},
+  'sessions.cloud':{en:'Cloud',zh:'云端'},
+  'sessions.local':{en:'Local',zh:'本地'},
+  'sessions.redacted':{en:'Redacted',zh:'脱敏'},
+  'sessions.total':{en:'Total',zh:'总计'},
+  'sessions.requests':{en:'Requests',zh:'请求数'},
+  'sessions.last_active':{en:'Last Active',zh:'最近活跃'},
+  'sessions.empty':{en:'No session data yet',zh:'暂无会话数据'},
+  'det.time':{en:'Time',zh:'时间'},
+  'det.session':{en:'Session',zh:'会话'},
+  'det.level':{en:'Level',zh:'等级'},
+  'det.checkpoint':{en:'Checkpoint',zh:'检查点'},
+  'det.reason':{en:'Reason',zh:'原因'},
+  'det.empty':{en:'No detections yet',zh:'暂无检测记录'},
+  'det.empty_for':{en:'No detections for ',zh:'暂无检测记录：'},
+  'det.all':{en:'All',zh:'全部'},
+  'test.title':{en:'Test Classification',zh:'分类测试'},
+  'test.hint':{en:'Test how the router pipeline would classify a message (no changes applied).',zh:'测试路由管道如何对消息进行分类（不会实际生效）。'},
+  'test.placeholder':{en:'e.g. "帮我分析一下这个月的工资单" or "write a poem about spring"',zh:'例如 "帮我分析一下这个月的工资单" 或 "write a poem about spring"'},
+  'test.run':{en:'Run Test',zh:'运行测试'},
+  'test.merged':{en:'Merged Result',zh:'合并结果'},
+  'test.level':{en:'Level',zh:'等级'},
+  'test.action':{en:'Action',zh:'动作'},
+  'test.target':{en:'Target',zh:'目标'},
+  'test.deciding':{en:'Deciding Router',zh:'决策路由'},
+  'test.reason':{en:'Reason',zh:'原因'},
+  'test.confidence':{en:'Confidence',zh:'置信度'},
+  'test.classifying':{en:'Classifying...',zh:'分类中...'},
+  'test.testing':{en:'Testing...',zh:'测试中...'},
+  'test.individual':{en:'Individual Router Results',zh:'各路由独立结果'},
+  'test.enter_msg':{en:'Enter a test message',zh:'请输入测试消息'},
+  'test.failed':{en:'Test failed: ',zh:'测试失败：'},
+  'ck.user_message':{en:'User Message',zh:'用户消息'},
+  'ck.before_tool':{en:'Before Tool Runs',zh:'工具执行前'},
+  'ck.after_tool':{en:'After Tool Runs',zh:'工具执行后'},
+  'pipe.title':{en:'Router Execution Order (Advanced)',zh:'路由执行顺序（高级）'},
+  'pipe.hint':{en:'Click a router to add it to a stage. Drag tags to reorder. Click \\u00d7 to remove.',zh:'点击路由添加到对应阶段。拖拽标签调整顺序，点击 \\u00d7 移除。'},
+  'pipe.save':{en:'Save Execution Order',zh:'保存执行顺序'},
+  'pipe.saved':{en:'Execution order saved',zh:'执行顺序已保存'},
+  'priv.title':{en:'Privacy Router',zh:'隐私路由'},
+  'priv.desc':{en:'Detects sensitive data in messages and routes to local or redacted cloud models.',zh:'检测消息中的敏感数据，路由到本地模型或脱敏后发送云端。'},
+  'priv.keywords':{en:'Keywords',zh:'关键词'},
+  'priv.s2':{en:'S2 \\u2014 Sensitive (Redact \\u2192 Cloud)',zh:'S2 \\u2014 敏感（脱敏后走云端）'},
+  'priv.s3':{en:'S3 \\u2014 Confidential (Local Model Only)',zh:'S3 \\u2014 机密（仅本地模型）'},
+  'priv.llm_prompt':{en:'LLM Prompt',zh:'LLM 提示词'},
+  'priv.llm_hint':{en:'Prompt used by the local LLM to classify data sensitivity (S1/S2/S3).',zh:'本地 LLM 用于分类数据敏感等级（S1/S2/S3）的提示词。'},
+  'priv.test_title':{en:'Test (Privacy Router Only)',zh:'测试（仅隐私路由）'},
+  'priv.test_ph':{en:'Enter a message to test the privacy router alone...',zh:'输入消息以单独测试隐私路由...'},
+  'priv.test_btn':{en:'Test Privacy Router',zh:'测试隐私路由'},
+  'priv.save':{en:'Save Privacy Router',zh:'保存隐私路由'},
+  'priv.saved':{en:'Privacy Router saved',zh:'隐私路由已保存'},
+  'priv.adv':{en:'Advanced Configuration',zh:'高级配置'},
+  'priv.when':{en:'When to Run',zh:'何时运行'},
+  'priv.when_hint':{en:'Select which detectors run at each stage for the privacy router.',zh:'选择隐私路由在每个阶段运行的检测器。'},
+  'priv.kw_regex':{en:'Keyword \\u0026 Regex',zh:'关键词和正则'},
+  'priv.llm_cls':{en:'LLM Classifier',zh:'LLM 分类器'},
+  'priv.det_rules':{en:'Detection Rules (Regex \\u0026 Tool Filters)',zh:'检测规则（正则和工具过滤）'},
+  'priv.regex':{en:'Regex Patterns',zh:'正则表达式'},
+  'priv.tools':{en:'Sensitive Tool Names',zh:'敏感工具名'},
+  'priv.paths':{en:'Sensitive File Paths',zh:'敏感文件路径'},
+  'priv.pii':{en:'Personal Info Redaction Prompt',zh:'个人信息脱敏提示词'},
+  'priv.pii_hint':{en:'Prompt used by the local LLM to extract and redact personal info.',zh:'本地 LLM 用于提取和脱敏个人信息的提示词。'},
+  'co.title':{en:'Cost-Optimizer Router',zh:'成本优化路由'},
+  'co.desc':{en:'Classifies task complexity and routes to the most cost-effective model.',zh:'判断任务复杂度，自动选择性价比最高的模型。'},
+  'co.tier':{en:'Complexity Level \\u2192 Model',zh:'复杂度等级 \\u2192 模型'},
+  'co.complexity':{en:'Complexity',zh:'复杂度'},
+  'co.provider':{en:'Provider',zh:'供应商'},
+  'co.model':{en:'Model',zh:'模型'},
+  'co.llm_prompt':{en:'LLM Prompt',zh:'LLM 提示词'},
+  'co.llm_hint':{en:'Prompt used by the classifier LLM to determine task complexity.',zh:'分类 LLM 用于判断任务复杂度的提示词。'},
+  'co.test_title':{en:'Test (Cost-Optimizer Only)',zh:'测试（仅成本优化）'},
+  'co.test_ph':{en:'Enter a message to test the cost-optimizer router alone...',zh:'输入消息以单独测试成本优化路由...'},
+  'co.test_btn':{en:'Test Cost-Optimizer',zh:'测试成本优化'},
+  'co.save':{en:'Save Cost-Optimizer',zh:'保存成本优化'},
+  'co.saved':{en:'Cost-Optimizer config saved',zh:'成本优化配置已保存'},
+  'co.adv':{en:'Advanced Configuration',zh:'高级配置'},
+  'co.cache':{en:'Cache',zh:'缓存'},
+  'co.cache_dur':{en:'Cache Duration (ms)',zh:'缓存时长（毫秒）'},
+  'cr.add_ph':{en:'Router ID (e.g. content-filter)',zh:'路由 ID（如 content-filter）'},
+  'cr.add_btn':{en:'+ Add Custom Router',zh:'+ 添加自定义路由'},
+  'cr.add_hint':{en:'Create a new router with keyword rules and an optional LLM classification prompt. Added routers appear above and can be included in Router Execution Order.',zh:'创建一个带有关键词规则和可选 LLM 分类提示词的新路由。添加后显示在上方，可加入路由执行顺序。'},
+  'cr.kw_rules':{en:'Keyword Rules',zh:'关键词规则'},
+  'cr.s2_kw':{en:'S2 \\u2014 Sensitive Keywords',zh:'S2 \\u2014 敏感关键词'},
+  'cr.s3_kw':{en:'S3 \\u2014 Confidential Keywords',zh:'S3 \\u2014 机密关键词'},
+  'cr.s2_pat':{en:'S2 \\u2014 Sensitive Patterns (regex)',zh:'S2 \\u2014 敏感模式（正则）'},
+  'cr.s3_pat':{en:'S3 \\u2014 Confidential Patterns (regex)',zh:'S3 \\u2014 机密模式（正则）'},
+  'cr.cls_prompt':{en:'Classification Prompt',zh:'分类提示词'},
+  'cr.cls_hint':{en:'If set, the local LLM will classify messages using this prompt. Should output JSON with {level, reason}.',zh:'如果设置，本地 LLM 将使用此提示词分类消息。应输出包含 {level, reason} 的 JSON。'},
+  'cr.enter_id':{en:'Enter a router ID',zh:'请输入路由 ID'},
+  'cr.exists':{en:'" already exists',zh:'" 已存在'},
+  'cr.created':{en:'" created \\u2014 configure and save it below',zh:'" 已创建 \\u2014 请在下方配置并保存'},
+  'cr.del_pre':{en:'Delete router "',zh:'确认删除路由 "'},
+  'cr.del_suf':{en:'"? This cannot be undone.',zh:'"？此操作不可撤销。'},
+  'cr.deleted':{en:'" deleted',zh:'" 已删除'},
+  'cr.saved':{en:'" saved',zh:'" 已保存'},
+  'cfg.enabled':{en:'GuardClaw Enabled',zh:'GuardClaw 启用'},
+  'cfg.lm':{en:'Local Model',zh:'本地模型'},
+  'cfg.lm_desc':{en:'Configure the LLM used locally for privacy classification and PII redaction.',zh:'配置用于隐私分类和个人信息脱敏的本地 LLM。'},
+  'cfg.lm_enabled':{en:'Enabled',zh:'启用'},
+  'cfg.api_proto':{en:'API Protocol',zh:'API 协议'},
+  'cfg.provider':{en:'Provider',zh:'供应商'},
+  'cfg.endpoint':{en:'Endpoint',zh:'端点'},
+  'cfg.model':{en:'Model',zh:'模型'},
+  'cfg.api_key':{en:'API Key',zh:'API 密钥'},
+  'cfg.custom_mod':{en:'Custom Module Path',zh:'自定义模块路径'},
+  'cfg.cls':{en:'Cost-Optimizer Classifier',zh:'成本优化分类器'},
+  'cfg.cls_desc':{en:'LLM used by the Cost-Optimizer to determine task complexity. Falls back to the Local Model settings above if empty.',zh:'成本优化路由用于判断任务复杂度的 LLM。留空则使用上方本地模型配置。'},
+  'cfg.guard':{en:'Privacy Guard Agent',zh:'隐私守护 Agent'},
+  'cfg.guard_desc':{en:'A local agent that handles sensitive tasks entirely on-device.',zh:'完全在本地运行的隐私守护 Agent。'},
+  'cfg.agent_id':{en:'Agent ID',zh:'Agent ID'},
+  'cfg.workspace':{en:'Workspace',zh:'工作目录'},
+  'cfg.model_prov':{en:'Model (provider/model)',zh:'模型（供应商/模型）'},
+  'cfg.routing':{en:'Routing Policy',zh:'路由策略'},
+  'cfg.routing_desc':{en:'How S2-level sensitive data is handled before reaching the cloud.',zh:'S2 级敏感数据发送云端前的处理策略。'},
+  'cfg.sens_route':{en:'Sensitive Data Routing',zh:'敏感数据路由'},
+  'cfg.s2_proxy':{en:'Proxy (redact personal info before sending)',zh:'代理（发送前脱敏个人信息）'},
+  'cfg.s2_local':{en:'Local only (process on-device, no cloud)',zh:'仅本地（设备端处理，不上云）'},
+  'cfg.proxy_port':{en:'Proxy Port',zh:'代理端口'},
+  'cfg.restart_hint':{en:'Requires restart to take effect',zh:'需要重启生效'},
+  'cfg.session':{en:'Session Settings',zh:'会话设置'},
+  'cfg.session_desc':{en:'Manage isolation and storage of guard-related session data.',zh:'管理隔离与存储守护相关的会话数据。'},
+  'cfg.isolate':{en:'Separate Guard Chat History',zh:'隔离守护聊天记录'},
+  'cfg.base_dir':{en:'Base Directory',zh:'基础目录'},
+  'cfg.local_prov':{en:'Local Providers',zh:'本地供应商'},
+  'cfg.local_prov_hint':{en:'Additional providers treated as "local" (safe for confidential data routing)',zh:'额外视为"本地"的供应商（可安全路由机密数据）'},
+  'cfg.save':{en:'Save Configuration',zh:'保存配置'},
+  'cfg.saved':{en:'Configuration saved',zh:'配置已保存'},
+  'common.add':{en:'Add',zh:'添加'},
+  'common.save':{en:'Save',zh:'保存'},
+  'common.delete':{en:'Delete',zh:'删除'},
+  'common.test':{en:'Test',zh:'测试'},
+  'common.enabled':{en:'Enabled',zh:'启用'},
+  'common.optional':{en:'(optional)',zh:'（可选）'},
+  'common.none':{en:'(none)',zh:'（无）'},
+  'common.customized':{en:'customized',zh:'已自定义'},
+  'common.reset':{en:'Reset Default',zh:'恢复默认'},
+  'common.save_failed':{en:'Save failed: ',zh:'保存失败：'},
+  'common.loading':{en:'Loading prompts...',zh:'加载提示词中...'},
+  'common.prompt_saved':{en:'" saved & applied',zh:'" 已保存并生效'},
+  'chart.cloud':{en:'Cloud',zh:'云端'},
+  'chart.local':{en:'Local',zh:'本地'},
+  'chart.redacted':{en:'Redacted',zh:'脱敏'},
+  'status.uptime':{en:'Uptime: ',zh:'运行时间：'},
+  'status.activity':{en:'Last activity: ',zh:'最近活动：'},
+  'status.updated':{en:'Updated ',zh:'已更新 '},
+  'status.error':{en:'Error: ',zh:'错误：'},
+};
+function t(k){return(T[k]&&T[k][LANG])||k;}
+
+function setLang(lang){
+  LANG=lang;
+  localStorage.setItem('gc-lang',lang);
+  document.querySelectorAll('[data-i18n]').forEach(function(el){
+    var k=el.getAttribute('data-i18n');
+    if(T[k]) el.textContent=t(k);
+  });
+  document.querySelectorAll('[data-i18n-html]').forEach(function(el){
+    var k=el.getAttribute('data-i18n-html');
+    if(T[k]) el.innerHTML=t(k);
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(function(el){
+    var k=el.getAttribute('data-i18n-ph');
+    if(T[k]) el.placeholder=t(k);
+  });
+  document.querySelectorAll('[data-i18n-opt]').forEach(function(el){
+    var k=el.getAttribute('data-i18n-opt');
+    if(T[k]) el.textContent=t(k);
+  });
+  document.getElementById('lang-toggle').textContent=lang==='en'?'中文':'EN';
+  document.querySelectorAll('.add-row .btn-outline').forEach(function(el){el.textContent=t('common.add');});
+  hourlyChart=null;
+  refreshAll();
+  renderCustomRouterCards();
+  updateAvailableRouters();
+  loadPrompts();
+}
 // ── Generic tag management ──
 var _tags = {
   'kw-s2': [], 'kw-s3': [], 'pat-s2': [], 'pat-s3': [],
@@ -1109,36 +1383,50 @@ async function refreshStats() {
 
     var lt = summary.lifetime;
     document.getElementById('cloud-tokens').textContent = fmt(lt.cloud.totalTokens);
-    document.getElementById('cloud-reqs').textContent = lt.cloud.requestCount + ' requests';
+    document.getElementById('cloud-reqs').textContent = lt.cloud.requestCount + ' ' + t('overview.requests');
     document.getElementById('local-tokens').textContent = fmt(lt.local.totalTokens);
-    document.getElementById('local-reqs').textContent = lt.local.requestCount + ' requests';
+    document.getElementById('local-reqs').textContent = lt.local.requestCount + ' ' + t('overview.requests');
     document.getElementById('proxy-tokens').textContent = fmt(lt.proxy.totalTokens);
-    document.getElementById('proxy-reqs').textContent = lt.proxy.requestCount + ' requests';
+    document.getElementById('proxy-reqs').textContent = lt.proxy.requestCount + ' ' + t('overview.requests');
 
     var total = lt.cloud.totalTokens + lt.local.totalTokens + lt.proxy.totalTokens;
     var prot = lt.local.totalTokens + lt.proxy.totalTokens;
     var rate = total > 0 ? (prot / total * 100).toFixed(1) + '%' : '--';
     document.getElementById('privacy-rate').textContent = rate;
     document.getElementById('privacy-sub').textContent = total > 0
-      ? fmt(prot) + ' of ' + fmt(total) + ' tokens protected'
-      : 'No data yet';
+      ? fmt(prot) + ' / ' + fmt(total) + ' ' + t('overview.sub')
+      : t('overview.no_data');
 
     document.getElementById('detail-body').innerHTML =
-      fillRow('Cloud', lt.cloud) + fillRow('Local', lt.local) + fillRow('Proxy', lt.proxy);
+      fillRow(t('chart.cloud'), lt.cloud) + fillRow(t('chart.local'), lt.local) + fillRow(t('chart.redacted'), lt.proxy);
 
     var infoHtml = '';
-    if (summary.startedAt) infoHtml += 'Uptime: ' + timeAgo(summary.startedAt);
-    if (summary.lastUpdatedAt) infoHtml += ' &middot; Last activity: ' + timeAgo(summary.lastUpdatedAt);
+    if (summary.startedAt) infoHtml += t('status.uptime') + timeAgo(summary.startedAt);
+    if (summary.lastUpdatedAt) infoHtml += ' &middot; ' + t('status.activity') + timeAgo(summary.lastUpdatedAt);
     document.getElementById('info-bar').innerHTML = infoHtml;
 
     document.getElementById('status-dot').className = 'status-dot';
-    document.getElementById('status-text').textContent = 'Online';
-    document.getElementById('last-updated').textContent = 'Updated ' + fmtTime(Date.now());
+    document.getElementById('status-text').textContent = t('header.online');
+    document.getElementById('last-updated').textContent = t('status.updated') + fmtTime(Date.now());
 
     updateChart(hourly);
   } catch (e) {
     document.getElementById('status-dot').className = 'status-dot err';
-    document.getElementById('status-text').textContent = 'Error: ' + (e.message || 'unavailable');
+    document.getElementById('status-text').textContent = t('status.error') + (e.message || 'unavailable');
+  }
+}
+
+async function resetStats() {
+  if (!confirm(t('overview.reset_confirm'))) return;
+  try {
+    var r = await fetch(BASE + '/reset', { method: 'POST' });
+    var body = await r.json();
+    if (body.error) throw new Error(body.error);
+    showToast(t('overview.reset_ok'));
+    refreshStats();
+    refreshSessions();
+  } catch (e) {
+    showToast(t('overview.reset_fail') + (e.message || ''), true);
   }
 }
 
@@ -1161,9 +1449,9 @@ function updateChart(hourly) {
       data: {
         labels: labels,
         datasets: [
-          { label: 'Cloud', data: cloudData, borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3 },
-          { label: 'Local', data: localData, borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.1)', fill: true, tension: 0.3 },
-          { label: 'Proxy', data: proxyData, borderColor: '#fb923c', backgroundColor: 'rgba(251,146,60,0.1)', fill: true, tension: 0.3 },
+          { label: t('chart.cloud'), data: cloudData, borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3 },
+          { label: t('chart.local'), data: localData, borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.1)', fill: true, tension: 0.3 },
+          { label: t('chart.redacted'), data: proxyData, borderColor: '#fb923c', backgroundColor: 'rgba(251,146,60,0.1)', fill: true, tension: 0.3 },
         ],
       },
       options: {
@@ -1191,7 +1479,7 @@ async function refreshSessions() {
     var sessions = await fetch(BASE + '/sessions').then(function(r) { return r.json(); });
     var tbody = document.getElementById('sessions-body');
     if (!sessions || !sessions.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No session data yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">' + t('sessions.empty') + '</td></tr>';
       return;
     }
     tbody.innerHTML = sessions.map(function(s) {
@@ -1231,8 +1519,8 @@ function renderDetections() {
     ? _detections
     : _detections.filter(function(d) { return d.level === _detectionFilter; });
   if (!filtered || !filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No detections' +
-      (_detectionFilter !== 'all' ? ' for ' + _detectionFilter : '') + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">' +
+      (_detectionFilter !== 'all' ? t('det.empty_for') + _detectionFilter : t('det.empty')) + '</td></tr>';
     return;
   }
   tbody.innerHTML = filtered.slice(0, 100).map(function(d) {
@@ -1365,12 +1653,12 @@ async function saveConfig() {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast('Configuration saved');
+      showToast(t('cfg.saved'));
     } else {
-      showToast('Save failed: ' + (result.error || 'unknown'), true);
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
   } catch (e) {
-    showToast('Save failed: ' + e.message, true);
+    showToast(t('common.save_failed') + e.message, true);
   }
 }
 
@@ -1395,7 +1683,8 @@ var _prompts = {};
 async function loadPrompts() {
   try {
     _prompts = await fetch(BASE + '/prompts').then(function(r) { return r.json(); });
-    renderRouterPrompts('privacy-prompt-editors', PRIVACY_PROMPTS);
+    renderRouterPrompts('privacy-prompt-main', PRIVACY_PROMPTS_MAIN);
+    renderRouterPrompts('privacy-prompt-adv', PRIVACY_PROMPTS_ADV);
     renderRouterPrompts('tokensaver-prompt-editors', TOKENSAVER_PROMPTS);
   } catch (e) { /* non-critical */ }
 }
@@ -1411,13 +1700,13 @@ async function savePrompt(name) {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast('Prompt "' + name + '" saved & applied');
+      showToast('"' + name + t('common.prompt_saved'));
       loadPrompts();
     } else {
-      showToast('Save failed: ' + (result.error || 'unknown'), true);
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
   } catch (e) {
-    showToast('Save failed: ' + e.message, true);
+    showToast(t('common.save_failed') + e.message, true);
   }
 }
 
@@ -1431,7 +1720,7 @@ function resetPrompt(name) {
 
 async function runTestClassify() {
   var msg = document.getElementById('test-message').value.trim();
-  if (!msg) { showToast('Enter a test message', true); return; }
+  if (!msg) { showToast(t('test.enter_msg'), true); return; }
   var checkpoint = document.getElementById('test-checkpoint').value;
   var resultEl = document.getElementById('test-result');
   var loadingEl = document.getElementById('test-loading');
@@ -1446,87 +1735,22 @@ async function runTestClassify() {
     var data = await res.json();
     loadingEl.style.display = 'none';
     if (data.error) {
-      showToast('Test failed: ' + data.error, true);
+      showToast(t('test.failed') + data.error, true);
       return;
     }
     document.getElementById('tr-level').innerHTML = '<span class="level-tag level-' + data.level + '">' + data.level + '</span>';
     document.getElementById('tr-action').textContent = data.action || 'passthrough';
-    document.getElementById('tr-target').textContent = data.target ? (data.target.provider + '/' + data.target.model) : '(none)';
-    document.getElementById('tr-router').textContent = data.routerId || '(none)';
-    document.getElementById('tr-reason').textContent = data.reason || '(none)';
+    document.getElementById('tr-target').textContent = data.target ? (data.target.provider + '/' + data.target.model) : t('common.none');
+    document.getElementById('tr-router').textContent = data.routerId || t('common.none');
+    document.getElementById('tr-reason').textContent = data.reason || t('common.none');
     document.getElementById('tr-confidence').textContent = data.confidence != null ? (data.confidence * 100).toFixed(0) + '%' : '-';
-    resultEl.classList.add('visible');
-  } catch (e) {
-    loadingEl.style.display = 'none';
-    showToast('Test failed: ' + e.message, true);
-  }
-}
-
-// ── Token-Saver Config ──
-
-function loadTokenSaverConfig() {
-  try {
-    var cfg = _prompts; // reuse config load
-    var routers = _routers || {};
-    var ts = routers['token-saver'] || {};
-    var opts = ts.options || {};
-    document.getElementById('cfg-ts-enabled').checked = ts.enabled === true;
-    document.getElementById('cfg-ts-endpoint').value = opts.judgeEndpoint || '';
-    document.getElementById('cfg-ts-model').value = opts.judgeModel || '';
-    document.getElementById('cfg-ts-providertype').value = opts.judgeProviderType || 'openai-compatible';
-    document.getElementById('cfg-ts-cachettl').value = opts.cacheTtlMs || '';
-    var tiers = opts.tiers || {};
-    ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'].forEach(function(t) {
-      var tier = tiers[t] || {};
-      var pEl = document.getElementById('cfg-ts-tier-' + t + '-provider');
-      var mEl = document.getElementById('cfg-ts-tier-' + t + '-model');
-      if (pEl) pEl.value = tier.provider || '';
-      if (mEl) mEl.value = tier.model || '';
-    });
-  } catch (e) { /* non-critical */ }
-}
-
-async function saveTokenSaverConfig() {
-  try {
-    var tiers = {};
-    ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'].forEach(function(t) {
-      var pVal = document.getElementById('cfg-ts-tier-' + t + '-provider').value.trim();
-      var mVal = document.getElementById('cfg-ts-tier-' + t + '-model').value.trim();
-      if (pVal || mVal) tiers[t] = { provider: pVal, model: mVal };
-    });
-    var options = {};
-    var ep = document.getElementById('cfg-ts-endpoint').value.trim();
-    var md = document.getElementById('cfg-ts-model').value.trim();
-    var pt = document.getElementById('cfg-ts-providertype').value;
-    var ct = document.getElementById('cfg-ts-cachettl').value;
-    if (ep) options.judgeEndpoint = ep;
-    if (md) options.judgeModel = md;
-    if (pt) options.judgeProviderType = pt;
-    if (ct) options.cacheTtlMs = parseInt(ct);
-    if (Object.keys(tiers).length) options.tiers = tiers;
-
-    var currentRouters = Object.assign({}, _routers);
-    currentRouters['token-saver'] = {
-      enabled: document.getElementById('cfg-ts-enabled').checked,
-      type: 'builtin',
-      options: options,
-    };
-
-    var payload = { privacy: { routers: currentRouters } };
-    var res = await fetch(BASE + '/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    var result = await res.json();
-    if (result.ok) {
-      showToast('Token-Saver config saved');
+      showToast(t('co.saved'));
       loadConfig();
     } else {
-      showToast('Save failed: ' + (result.error || 'unknown'), true);
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
   } catch (e) {
-    showToast('Save failed: ' + e.message, true);
+    showToast(t('common.save_failed') + e.message, true);
   }
 }
 
@@ -1538,9 +1762,16 @@ function toggleSection(el) {
   if (body) body.classList.toggle('collapsed');
 }
 
+function toggleAdv(el) {
+  el.classList.toggle('open');
+  var body = el.nextElementSibling;
+  if (body) body.classList.toggle('open');
+}
+
 // ── Per-Router Prompt Rendering ──
 
-var PRIVACY_PROMPTS = ['detection-system', 'pii-extraction'];
+var PRIVACY_PROMPTS_MAIN = ['detection-system'];
+var PRIVACY_PROMPTS_ADV = ['pii-extraction'];
 var TOKENSAVER_PROMPTS = ['token-saver-judge'];
 
 function renderRouterPrompts(containerId, promptNames) {
@@ -1550,19 +1781,19 @@ function renderRouterPrompts(containerId, promptNames) {
   promptNames.forEach(function(name) {
     var p = _prompts[name];
     if (!p) return;
-    var customBadge = p.isCustom ? '<span class="custom-badge">customized</span>' : '';
+    var customBadge = p.isCustom ? '<span class="custom-badge">' + t('common.customized') + '</span>' : '';
     html += '<div style="margin-bottom:16px">' +
       '<div class="prompt-header">' +
         '<h4>' + escHtml(p.label) + customBadge + '</h4>' +
         '<div class="prompt-actions">' +
-          '<button class="btn btn-sm btn-outline" onclick="resetPrompt(\\'' + escHtml(name) + '\\')">Reset Default</button>' +
-          '<button class="btn btn-sm btn-primary" onclick="savePrompt(\\'' + escHtml(name) + '\\')">Save</button>' +
+          '<button class="btn btn-sm btn-outline" onclick="resetPrompt(\\'' + escHtml(name) + '\\')">' + t('common.reset') + '</button>' +
+          '<button class="btn btn-sm btn-primary" onclick="savePrompt(\\'' + escHtml(name) + '\\')">' + t('common.save') + '</button>' +
         '</div>' +
       '</div>' +
       '<textarea class="prompt-editor" id="prompt-' + escHtml(name) + '">' + escHtml(p.content) + '</textarea>' +
     '</div>';
   });
-  c.innerHTML = html || '<div style="color:#64748b;font-size:13px">Loading prompts...</div>';
+  c.innerHTML = html || '<div style="color:#64748b;font-size:13px">' + t('common.loading') + '</div>';
 }
 
 // ── Per-Router Test ──
@@ -1570,7 +1801,7 @@ function renderRouterPrompts(containerId, promptNames) {
 async function runRouterTest(routerId) {
   var msgEl = document.getElementById('test-' + routerId + '-message');
   var msg = msgEl ? msgEl.value.trim() : '';
-  if (!msg) { showToast('Enter a test message', true); return; }
+  if (!msg) { showToast(t('test.enter_msg'), true); return; }
   var resultEl = document.getElementById('test-' + routerId + '-result');
   var loadingEl = document.getElementById('test-' + routerId + '-loading');
   resultEl.classList.remove('visible');
@@ -1584,18 +1815,18 @@ async function runRouterTest(routerId) {
     var data = await res.json();
     loadingEl.style.display = 'none';
     if (data.error) {
-      showToast('Test failed: ' + data.error, true);
+      showToast(t('test.failed') + data.error, true);
       return;
     }
     document.getElementById('tr-' + routerId + '-level').innerHTML = '<span class="level-tag level-' + data.level + '">' + data.level + '</span>';
     document.getElementById('tr-' + routerId + '-action').textContent = data.action || 'passthrough';
-    document.getElementById('tr-' + routerId + '-target').textContent = data.target ? (data.target.provider + '/' + data.target.model) : '(none)';
-    document.getElementById('tr-' + routerId + '-reason').textContent = data.reason || '(none)';
+    document.getElementById('tr-' + routerId + '-target').textContent = data.target ? (data.target.provider + '/' + data.target.model) : t('common.none');
+    document.getElementById('tr-' + routerId + '-reason').textContent = data.reason || t('common.none');
     document.getElementById('tr-' + routerId + '-confidence').textContent = data.confidence != null ? (data.confidence * 100).toFixed(0) + '%' : '-';
     resultEl.classList.add('visible');
   } catch (e) {
     loadingEl.style.display = 'none';
-    showToast('Test failed: ' + e.message, true);
+    showToast(t('test.failed') + e.message, true);
   }
 }
 
@@ -1627,12 +1858,12 @@ async function savePrivacyRouter() {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast('Privacy Router saved');
+      showToast(t('priv.saved'));
     } else {
-      showToast('Save failed: ' + (result.error || 'unknown'), true);
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
   } catch (e) {
-    showToast('Save failed: ' + e.message, true);
+    showToast(t('common.save_failed') + e.message, true);
   }
 }
 
@@ -1656,12 +1887,12 @@ async function savePipelineOrder() {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast('Pipeline order saved');
+      showToast(t('pipe.saved'));
     } else {
-      showToast('Save failed: ' + (result.error || 'unknown'), true);
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
   } catch (e) {
-    showToast('Save failed: ' + e.message, true);
+    showToast(t('common.save_failed') + e.message, true);
   }
 }
 
@@ -1703,36 +1934,36 @@ function renderCustomRouterCards() {
         '<span class="section-arrow">&#9660;</span>' +
         '<h3>' + escHtml(id) + '</h3>' +
         '<span class="router-id-badge">configurable</span>' +
-        '<button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="event.stopPropagation();removeCustomRouter(\\'' + escHtml(id) + '\\')">Delete</button>' +
+        '<button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="event.stopPropagation();removeCustomRouter(\\'' + escHtml(id) + '\\')">' + t('common.delete') + '</button>' +
       '</div>' +
       '<div class="router-section-body">' +
         '<div class="field-toggle" style="margin-bottom:18px">' +
-          '<label>Enabled</label>' +
+          '<label>' + t('common.enabled') + '</label>' +
           '<label class="toggle"><input type="checkbox" id="cfg-cr-enabled-' + escHtml(id) + '"' + checked + '><span class="slider"></span></label>' +
         '</div>' +
 
         '<div class="subsection">' +
-          '<h4>Keyword Rules</h4>' +
+          '<h4>' + t('cr.kw_rules') + '</h4>' +
           '<div class="rules-grid">' +
             '<div class="rules-col">' +
-              '<h4>S2 Keywords</h4>' +
+              '<h4>' + t('cr.s2_kw') + '</h4>' +
               '<div class="tag-list" id="cfg-tags-cr-kw-s2-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-kw-s2-' + escHtml(id) + '-input" placeholder="Add S2 keyword" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-kw-s2-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-kw-s2-' + escHtml(id) + '\\')">Add</button>' +
               '</div>' +
-              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S2 Patterns (regex)</h4></div>' +
+              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">' + t('cr.s2_pat') + '</h4></div>' +
               '<div class="tag-list" id="cfg-tags-cr-pat-s2-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-pat-s2-' + escHtml(id) + '-input" placeholder="Add S2 pattern" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-pat-s2-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-pat-s2-' + escHtml(id) + '\\')">Add</button>' +
               '</div>' +
             '</div>' +
             '<div class="rules-col">' +
-              '<h4>S3 Keywords</h4>' +
+              '<h4>' + t('cr.s3_kw') + '</h4>' +
               '<div class="tag-list" id="cfg-tags-cr-kw-s3-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-kw-s3-' + escHtml(id) + '-input" placeholder="Add S3 keyword" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-kw-s3-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-kw-s3-' + escHtml(id) + '\\')">Add</button>' +
               '</div>' +
-              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S3 Patterns (regex)</h4></div>' +
+              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">' + t('cr.s3_pat') + '</h4></div>' +
               '<div class="tag-list" id="cfg-tags-cr-pat-s3-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-pat-s3-' + escHtml(id) + '-input" placeholder="Add S3 pattern" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-pat-s3-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-pat-s3-' + escHtml(id) + '\\')">Add</button>' +
@@ -1742,28 +1973,28 @@ function renderCustomRouterCards() {
         '</div>' +
 
         '<div class="subsection">' +
-          '<h4>LLM System Prompt <span style="font-size:11px;color:#64748b;text-transform:none;letter-spacing:0">(optional)</span></h4>' +
-          '<div class="hint" style="margin-bottom:10px">If set, the local LLM will classify messages using this prompt. Should output JSON with {level, reason}.</div>' +
+          '<h4>' + t('cr.cls_prompt') + ' <span style="font-size:11px;color:#64748b;text-transform:none;letter-spacing:0">' + t('common.optional') + '</span></h4>' +
+          '<div class="hint" style="margin-bottom:10px">' + t('cr.cls_hint') + '</div>' +
           '<textarea class="prompt-editor" id="cr-prompt-' + escHtml(id) + '">' + escHtml(prompt) + '</textarea>' +
         '</div>' +
 
         '<div class="subsection">' +
-          '<h4>Test (' + escHtml(id) + ' Only)</h4>' +
-          '<textarea class="test-input" id="test-' + escHtml(id) + '-message" placeholder="Enter a message to test this router..."></textarea>' +
+          '<h4>' + t('common.test') + ' (' + escHtml(id) + ')</h4>' +
+          '<textarea class="test-input" id="test-' + escHtml(id) + '-message" placeholder="' + escHtml(t('test.enter_msg')) + '..."></textarea>' +
           '<div style="display:flex;gap:8px;margin-top:10px;align-items:center">' +
-            '<button class="btn btn-primary btn-sm" onclick="runRouterTest(\\'' + escHtml(id) + '\\')">Test</button>' +
+            '<button class="btn btn-primary btn-sm" onclick="runRouterTest(\\'' + escHtml(id) + '\\')">' + t('common.test') + '</button>' +
           '</div>' +
           '<div class="test-result" id="test-' + escHtml(id) + '-result">' +
-            '<div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-' + escHtml(id) + '-level">-</span></div>' +
-            '<div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-' + escHtml(id) + '-action">-</span></div>' +
-            '<div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-' + escHtml(id) + '-target">-</span></div>' +
-            '<div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-' + escHtml(id) + '-reason">-</span></div>' +
-            '<div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-' + escHtml(id) + '-confidence">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">' + t('test.level') + '</span><span class="test-result-value" id="tr-' + escHtml(id) + '-level">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">' + t('test.action') + '</span><span class="test-result-value" id="tr-' + escHtml(id) + '-action">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">' + t('test.target') + '</span><span class="test-result-value" id="tr-' + escHtml(id) + '-target">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">' + t('test.reason') + '</span><span class="test-result-value" id="tr-' + escHtml(id) + '-reason">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">' + t('test.confidence') + '</span><span class="test-result-value" id="tr-' + escHtml(id) + '-confidence">-</span></div>' +
           '</div>' +
-          '<div class="test-loading" id="test-' + escHtml(id) + '-loading" style="display:none">Testing...</div>' +
+          '<div class="test-loading" id="test-' + escHtml(id) + '-loading" style="display:none">' + t('test.testing') + '</div>' +
         '</div>' +
 
-        '<div class="save-bar"><button class="btn btn-primary" onclick="saveCustomRouter(\\'' + escHtml(id) + '\\')">Save ' + escHtml(id) + '</button></div>' +
+        '<div class="save-bar"><button class="btn btn-primary" onclick="saveCustomRouter(\\'' + escHtml(id) + '\\')">' + t('common.save') + ' ' + escHtml(id) + '</button></div>' +
       '</div>' +
     '</div>';
   }).join('');
@@ -1868,8 +2099,8 @@ function updateAvailableRouters() {
 function addCustomRouter() {
   var idInput = document.getElementById('new-router-id');
   var id = idInput.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-  if (!id) { showToast('Enter a router ID', true); return; }
-  if (_routers[id]) { showToast('Router "' + id + '" already exists', true); return; }
+  if (!id) { showToast(t('cr.enter_id'), true); return; }
+  if (_routers[id]) { showToast('"' + id + t('cr.exists'), true); return; }
   _routers[id] = {
     enabled: true,
     type: 'configurable',
@@ -1878,11 +2109,11 @@ function addCustomRouter() {
   idInput.value = '';
   renderCustomRouterCards();
   updateAvailableRouters();
-  showToast('Router "' + id + '" created — configure and save it below');
+  showToast('"' + id + t('cr.created'));
 }
 
 function removeCustomRouter(id) {
-  if (!confirm('Delete router "' + id + '"? This cannot be undone.')) return;
+  if (!confirm(t('cr.del_pre') + id + t('cr.del_suf'))) return;
   delete _routers[id];
   // Clean up tag arrays
   delete _tags['cr-kw-s2-' + id];
@@ -1899,13 +2130,13 @@ function removeCustomRouter(id) {
     body: JSON.stringify(payload),
   }).then(function(r) { return r.json(); }).then(function(result) {
     if (result.ok) {
-      showToast('Router "' + id + '" deleted');
+      showToast('"' + id + t('cr.deleted'));
       renderCustomRouterCards();
     } else {
-      showToast('Delete failed: ' + (result.error || 'unknown'), true);
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
   }).catch(function(e) {
-    showToast('Delete failed: ' + e.message, true);
+    showToast(t('common.save_failed') + e.message, true);
   });
 }
 
@@ -1942,12 +2173,12 @@ async function saveCustomRouter(id) {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast('Router "' + id + '" saved');
+      showToast('"' + id + t('cr.saved'));
     } else {
-      showToast('Save failed: ' + (result.error || 'unknown'), true);
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
   } catch (e) {
-    showToast('Save failed: ' + e.message, true);
+    showToast(t('common.save_failed') + e.message, true);
   }
 }
 
@@ -1956,6 +2187,7 @@ refreshAll();
 loadConfig();
 loadPrompts();
 setInterval(refreshAll, 30000);
+if (LANG !== 'en') setLang(LANG);
 </script>
 </body>
 </html>`;

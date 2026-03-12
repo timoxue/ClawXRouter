@@ -248,6 +248,13 @@ export class TokenStatsCollector {
     );
   }
 
+  /** Reset all stats to empty and flush to disk. */
+  async reset(): Promise<void> {
+    this.data = emptyStats();
+    this.dirty = true;
+    await this.flush();
+  }
+
   /** Flush to disk. */
   async flush(): Promise<void> {
     try {

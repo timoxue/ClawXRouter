@@ -65,20 +65,27 @@ export function recordDetection(
   checkpoint: Checkpoint,
   reason?: string
 ): void {
-  const state = sessionStates.get(sessionKey);
-  
-  if (state) {
-    state.detectionHistory.push({
-      timestamp: Date.now(),
-      level,
-      checkpoint,
-      reason,
-    });
+  let state = sessionStates.get(sessionKey);
 
-    // Keep only the last 50 detections to avoid memory bloat
-    if (state.detectionHistory.length > 50) {
-      state.detectionHistory = state.detectionHistory.slice(-50);
-    }
+  if (!state) {
+    state = {
+      sessionKey,
+      isPrivate: false,
+      highestLevel: "S1",
+      detectionHistory: [],
+    };
+    sessionStates.set(sessionKey, state);
+  }
+
+  state.detectionHistory.push({
+    timestamp: Date.now(),
+    level,
+    checkpoint,
+    reason,
+  });
+
+  if (state.detectionHistory.length > 50) {
+    state.detectionHistory = state.detectionHistory.slice(-50);
   }
 }
 
