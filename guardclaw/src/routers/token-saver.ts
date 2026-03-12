@@ -27,6 +27,7 @@ type TokenSaverConfig = {
   judgeModel: string;
   judgeProviderType: EdgeProviderType;
   judgeCustomModule?: string;
+  judgeApiKey?: string;
   tiers: Record<Tier, { provider: string; model: string }>;
   cacheTtlMs: number;
 };
@@ -126,7 +127,7 @@ function resolveConfig(pluginConfig: Record<string, unknown>): TokenSaverConfig 
   const options = (tsConfig?.options ?? {}) as Record<string, unknown>;
 
   const privacyLocalModel = (pluginConfig?.privacy as Record<string, unknown>)?.localModel as
-    | { endpoint?: string; model?: string; type?: EdgeProviderType; module?: string }
+    | { endpoint?: string; model?: string; type?: EdgeProviderType; module?: string; apiKey?: string }
     | undefined;
 
   return {
@@ -146,6 +147,9 @@ function resolveConfig(pluginConfig: Record<string, unknown>): TokenSaverConfig 
     judgeCustomModule:
       (options.judgeCustomModule as string) ??
       privacyLocalModel?.module,
+    judgeApiKey:
+      (options.judgeApiKey as string) ??
+      privacyLocalModel?.apiKey,
     tiers: {
       ...DEFAULT_CONFIG.tiers,
       ...((options.tiers as Record<string, { provider: string; model: string }>) ?? {}),
@@ -164,7 +168,7 @@ export const tokenSaverRouter: GuardClawRouter = {
     pluginConfig: Record<string, unknown>,
   ): Promise<RouterDecision> {
     const config = resolveConfig(pluginConfig);
-    if (!config.enabled) {
+    if (!config.enabled && !context.dryRun) {
       return { level: "S1", action: "passthrough" };
     }
 
@@ -204,6 +208,7 @@ export const tokenSaverRouter: GuardClawRouter = {
           maxTokens: 20,
           providerType: config.judgeProviderType,
           customModule: config.judgeCustomModule,
+          apiKey: config.judgeApiKey,
         },
       );
 
@@ -219,5 +224,5 @@ export const tokenSaverRouter: GuardClawRouter = {
 
 // ── Exports for testing ──
 
-export { parseTier, hashPrompt, classificationCache, resolveConfig };
+export { parseTier, hashPrompt, classificationCache, resolveConfig, DEFAULT_CONFIG, DEFAULT_JUDGE_PROMPT };
 export type { Tier, TokenSaverConfig };

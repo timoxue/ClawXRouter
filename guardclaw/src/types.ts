@@ -92,6 +92,8 @@ export type DetectionContext = {
   sessionKey?: string;
   agentId?: string;
   recentContext?: string[];
+  /** When true, routers should skip the `enabled` check (dry-run from dashboard). */
+  dryRun?: boolean;
 };
 
 export type DetectionResult = {
@@ -133,8 +135,8 @@ export interface GuardClawRouter {
 
 export type RouterRegistration = {
   enabled?: boolean;
-  /** "builtin" for privacy/rules, "custom" for user modules */
-  type?: "builtin" | "custom";
+  /** "builtin" for privacy/rules, "custom" for user modules, "configurable" for dashboard-created */
+  type?: "builtin" | "custom" | "configurable";
   /** Path to custom router module (type="custom" only) */
   module?: string;
   /** Arbitrary config passed to the router's detect() */

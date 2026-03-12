@@ -104,7 +104,7 @@ export const privacyRouter: GuardClawRouter = {
   ): Promise<RouterDecision> {
     const privacyConfig = getPrivacyConfig(pluginConfig);
 
-    if (privacyConfig.enabled === false) {
+    if (privacyConfig.enabled === false && !context.dryRun) {
       return { level: "S1", action: "passthrough", reason: "Privacy detection disabled" };
     }
 

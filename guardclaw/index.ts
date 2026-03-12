@@ -18,6 +18,7 @@ import { startPrivacyProxy, setDefaultProviderTarget } from "./src/privacy-proxy
 import { RouterPipeline, setGlobalPipeline } from "./src/router-pipeline.js";
 import { privacyRouter } from "./src/routers/privacy.js";
 import { tokenSaverRouter } from "./src/routers/token-saver.js";
+import { createConfigurableRouter } from "./src/routers/configurable.js";
 import { TokenStatsCollector, setGlobalCollector } from "./src/token-stats.js";
 import { initLiveConfig } from "./src/live-config.js";
 import { initDashboard, statsHttpHandler } from "./src/stats-dashboard.js";
@@ -168,6 +169,15 @@ const plugin = {
     pipeline.register(privacyRouter, routerConfigs?.privacy ?? { enabled: true, type: "builtin" });
     pipeline.register(tokenSaverRouter, routerConfigs?.["token-saver"] ?? { enabled: false, type: "builtin" });
 
+    // Register configurable routers (dashboard-created)
+    if (routerConfigs) {
+      for (const [id, reg] of Object.entries(routerConfigs)) {
+        if (reg.type === "configurable" && !pipeline.hasRouter(id)) {
+          pipeline.register(createConfigurableRouter(id), reg);
+        }
+      }
+    }
+
     // Configure pipeline from user config
     pipeline.configure({
       routers: routerConfigs,
@@ -205,6 +215,8 @@ const plugin = {
       loadConfig: api.runtime.config.loadConfig,
       writeConfigFile: api.runtime.config.writeConfigFile,
       pluginId: "guardclaw",
+      pluginConfig: api.pluginConfig ?? {},
+      pipeline,
     });
 
     api.registerHttpRoute({

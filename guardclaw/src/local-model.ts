@@ -201,7 +201,7 @@ export async function detectByLocalModel(
 
     return {
       level: parsed.level,
-      levelNumeric: levelToNumeric(level),
+      levelNumeric: levelToNumeric(parsed.level),
       reason: parsed.reason,
       detectorType: "localModelDetector",
       confidence: parsed.confidence ?? 0.8,
@@ -220,7 +220,7 @@ export async function detectByLocalModel(
 }
 
 /** Default detection system prompt (fallback if prompts/detection-system.md is missing) */
-const DEFAULT_DETECTION_SYSTEM_PROMPT = `[SYSTEM] You are a strict privacy classifier. Output ONLY a single JSON object — nothing else.
+export const DEFAULT_DETECTION_SYSTEM_PROMPT = `[SYSTEM] You are a strict privacy classifier. Output ONLY a single JSON object — nothing else.
 
 Classify by BOTH actual data AND intent. If the user asks to read/analyze a file, classify based on what the file WILL contain.
 
@@ -432,7 +432,7 @@ function replaceAll(str: string, search: string, replacement: string): string {
 }
 
 /** Default PII extraction system prompt (fallback if prompts/pii-extraction.md is missing) */
-const DEFAULT_PII_EXTRACTION_PROMPT = `You are a PII extraction engine. Extract ALL PII (personally identifiable information) from the given text as a JSON array.
+export const DEFAULT_PII_EXTRACTION_PROMPT = `You are a PII extraction engine. Extract ALL PII (personally identifiable information) from the given text as a JSON array.
 
 Types: NAME (every person), PHONE, ADDRESS (all variants including shortened), ACCESS_CODE (gate/door/门禁码), DELIVERY (tracking numbers, pickup codes/取件码), ID (SSN/身份证), CARD (bank/medical/insurance), LICENSE_PLATE (plate numbers/车牌), EMAIL, PASSWORD, PAYMENT (Venmo/PayPal/支付宝), BIRTHDAY, TIME (appointment/delivery times), NOTE (private instructions)
 

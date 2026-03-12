@@ -9,12 +9,20 @@
  *   - GET  /plugins/guardclaw/stats/api/detections → JSON detection event log
  *   - GET  /plugins/guardclaw/stats/api/config   → current guardclaw config
  *   - POST /plugins/guardclaw/stats/api/config   → update config (hot-reload + persist)
+ *   - GET  /plugins/guardclaw/stats/api/prompts  → all editable prompts
+ *   - POST /plugins/guardclaw/stats/api/prompts  → save a prompt (hot-reload)
+ *   - POST /plugins/guardclaw/stats/api/test-classify → dry-run pipeline classification
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getGlobalCollector } from "./token-stats.js";
 import { getLiveConfig, updateLiveConfig } from "./live-config.js";
 import { getAllSessionStates } from "./session-state.js";
+import { loadPrompt, readPromptFromDisk, writePrompt } from "./prompt-loader.js";
+import { DEFAULT_JUDGE_PROMPT } from "./routers/token-saver.js";
+import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "./local-model.js";
+import type { RouterPipeline } from "./router-pipeline.js";
+import { createConfigurableRouter } from "./routers/configurable.js";
 
 type ConfigWriteFn = (cfg: unknown) => Promise<void>;
 type ConfigLoadFn = () => Promise<unknown>;
@@ -23,6 +31,8 @@ export type DashboardDeps = {
   loadConfig: ConfigLoadFn;
   writeConfigFile: ConfigWriteFn;
   pluginId: string;
+  pluginConfig: Record<string, unknown>;
+  pipeline: RouterPipeline | null;
 };
 
 let deps: DashboardDeps | null = null;
@@ -167,11 +177,127 @@ export async function statsHttpHandler(
         };
 
         await deps.writeConfigFile(updatedConfig);
+
+        // Dynamically register/update configurable routers in the pipeline
+        if (body.privacy.routers && deps.pipeline) {
+          const routers = body.privacy.routers as Record<string, { type?: string; enabled?: boolean }>;
+          for (const [id, reg] of Object.entries(routers)) {
+            if (reg.type === "configurable" && !deps.pipeline.hasRouter(id)) {
+              deps.pipeline.register(
+                createConfigurableRouter(id),
+                reg as Parameters<typeof deps.pipeline.register>[1],
+              );
+            }
+          }
+          // Re-configure pipeline with updated router configs and order
+          const mergedPrivacy = { ...existingPrivacy, ...body.privacy } as Record<string, unknown>;
+          deps.pipeline.configure({
+            routers: mergedPrivacy.routers as Record<string, Parameters<typeof deps.pipeline.register>[1]>,
+            pipeline: mergedPrivacy.pipeline as Record<string, string[]>,
+          });
+          // Update deps.pluginConfig so test-classify picks up new options
+          (deps.pluginConfig as Record<string, unknown>).privacy = mergedPrivacy;
+        }
       }
 
       json(res, { ok: true });
     } catch (err) {
       json(res, { error: String(err) }, 400);
+    }
+    return true;
+  }
+
+  // ── Prompts API ──
+
+  const EDITABLE_PROMPTS: Record<string, { label: string; defaultContent: string }> = {
+    "detection-system": { label: "Privacy Detection (S1/S2/S3 Classifier)", defaultContent: DEFAULT_DETECTION_SYSTEM_PROMPT },
+    "token-saver-judge": { label: "Token-Saver (Task Complexity Judge)", defaultContent: DEFAULT_JUDGE_PROMPT },
+    "pii-extraction": { label: "PII Extraction Engine", defaultContent: DEFAULT_PII_EXTRACTION_PROMPT },
+  };
+
+  if (req.method === "GET" && sub === "/api/prompts") {
+    const result: Record<string, { label: string; content: string; isCustom: boolean; defaultContent: string }> = {};
+    for (const [name, meta] of Object.entries(EDITABLE_PROMPTS)) {
+      const fromDisk = readPromptFromDisk(name);
+      result[name] = {
+        label: meta.label,
+        content: fromDisk ?? meta.defaultContent,
+        isCustom: fromDisk !== null,
+        defaultContent: meta.defaultContent,
+      };
+    }
+    json(res, result);
+    return true;
+  }
+
+  if (req.method === "POST" && sub === "/api/prompts") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { name: string; content: string };
+      if (!body.name || typeof body.content !== "string") {
+        json(res, { error: "name and content required" }, 400);
+        return true;
+      }
+      // Allow both built-in prompts and custom router prompts (custom-*)
+      if (!EDITABLE_PROMPTS[body.name] && !body.name.startsWith("custom-")) {
+        json(res, { error: `Unknown prompt: ${body.name}` }, 400);
+        return true;
+      }
+      writePrompt(body.name, body.content);
+      json(res, { ok: true });
+    } catch (err) {
+      json(res, { error: String(err) }, 400);
+    }
+    return true;
+  }
+
+  // ── Test Classify API ──
+
+  if (req.method === "POST" && sub === "/api/test-classify") {
+    if (!deps?.pipeline) { json(res, { error: "pipeline not initialized" }, 503); return true; }
+    try {
+      const body = JSON.parse(await readBody(req)) as { message: string; checkpoint?: string; router?: string };
+      if (!body.message?.trim()) {
+        json(res, { error: "message required" }, 400);
+        return true;
+      }
+      const checkpoint = (body.checkpoint ?? "onUserMessage") as "onUserMessage" | "onToolCallProposed" | "onToolCallExecuted";
+
+      if (body.router) {
+        const decision = await deps.pipeline.runSingle(
+          body.router,
+          { checkpoint, message: body.message, sessionKey: "__test__" },
+          deps.pluginConfig,
+        );
+        if (!decision) {
+          json(res, { error: `Router not found: ${body.router}` }, 404);
+          return true;
+        }
+        json(res, {
+          level: decision.level,
+          action: decision.action,
+          target: decision.target,
+          reason: decision.reason,
+          confidence: decision.confidence,
+          routerId: decision.routerId,
+        });
+      } else {
+        // Full pipeline test
+        const decision = await deps.pipeline.run(
+          checkpoint,
+          { checkpoint, message: body.message, sessionKey: "__test__" },
+          deps.pluginConfig,
+        );
+        json(res, {
+          level: decision.level,
+          action: decision.action,
+          target: decision.target,
+          reason: decision.reason,
+          confidence: decision.confidence,
+          routerId: decision.routerId,
+        });
+      }
+    } catch (err) {
+      json(res, { error: String(err) }, 500);
     }
     return true;
   }
@@ -206,7 +332,7 @@ function dashboardHtml(): string {
   .tab.active{color:#38bdf8;border-bottom-color:#38bdf8}
   .tab:hover{color:#e2e8f0}
 
-  .panel{display:none;padding:24px;max-width:1200px}
+  .panel{display:none;padding:24px}
   .panel.active{display:block}
 
   .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
@@ -246,27 +372,28 @@ function dashboardHtml(): string {
   .filter-btn.active{background:#334155;color:#e2e8f0;border-color:#475569}
   .filter-btn:hover{border-color:#475569;color:#e2e8f0}
 
-  .config-section{background:#1e293b;border-radius:12px;padding:20px;margin-bottom:16px}
+  .config-section{background:#1e293b;border-radius:12px;padding:24px;margin-bottom:16px}
   .config-section h3{font-size:14px;color:#94a3b8;margin-bottom:16px;text-transform:uppercase;letter-spacing:.5px}
   .field{margin-bottom:14px}
-  .field label{display:block;font-size:13px;color:#94a3b8;margin-bottom:4px}
-  .field input,.field select{width:100%;padding:8px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px;outline:none}
+  .field label{display:block;font-size:13px;color:#94a3b8;margin-bottom:6px}
+  .field input,.field select{width:100%;padding:9px 14px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px;outline:none}
+  .field select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}
   .field input:focus,.field select:focus{border-color:#38bdf8}
 
-  .tag-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;min-height:28px}
+  .tag-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;min-height:32px}
   .tag{background:#334155;color:#e2e8f0;padding:4px 10px;border-radius:4px;font-size:12px;display:flex;align-items:center;gap:4px}
   .tag button{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;line-height:1}
   .tag button:hover{color:#f87171}
-  .add-row{display:flex;gap:8px;margin-top:8px}
-  .add-row input{flex:1}
+  .add-row{display:flex;gap:10px;margin-top:8px;align-items:center}
+  .add-row input{flex:1;min-width:0}
 
-  .btn{padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
+  .btn{padding:9px 18px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;white-space:nowrap;flex-shrink:0}
   .btn-primary{background:#38bdf8;color:#0f172a}
   .btn-primary:hover{background:#7dd3fc}
-  .btn-sm{padding:6px 12px;font-size:12px}
+  .btn-sm{padding:7px 14px;font-size:12px}
   .btn-outline{background:transparent;border:1px solid #334155;color:#e2e8f0}
   .btn-outline:hover{border-color:#38bdf8;color:#38bdf8}
-  .save-bar{display:flex;justify-content:flex-end;gap:8px;padding-top:8px}
+  .save-bar{display:flex;justify-content:flex-end;gap:10px;padding-top:12px;margin-top:8px}
 
   .badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:8px;vertical-align:middle}
   .badge-hot{background:#065f46;color:#6ee7b7}
@@ -274,11 +401,12 @@ function dashboardHtml(): string {
   .toast{position:fixed;bottom:24px;right:24px;background:#065f46;color:#d1fae5;padding:12px 20px;border-radius:8px;font-size:13px;display:none;z-index:100}
   .toast.error{background:#7f1d1d;color:#fecaca}
 
-  .rules-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .rules-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
   @media(max-width:700px){.rules-grid{grid-template-columns:1fr}}
-  .rules-col h4{font-size:12px;color:#64748b;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #334155;padding-bottom:6px}
+  .rules-col{background:#0f172a;border-radius:8px;padding:16px}
+  .rules-col h4{font-size:12px;color:#64748b;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #334155;padding-bottom:8px}
 
-  .toggle-bar{display:flex;align-items:center;justify-content:space-between;background:#1e293b;border-radius:12px;padding:16px 20px;margin-bottom:16px}
+  .toggle-bar{display:flex;align-items:center;justify-content:space-between;background:#1e293b;border-radius:12px;padding:18px 24px;margin-bottom:16px}
   .toggle-bar label{font-size:14px;color:#e2e8f0}
   .toggle{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0}
   .toggle input{opacity:0;width:0;height:0}
@@ -287,8 +415,8 @@ function dashboardHtml(): string {
   .toggle input:checked+.slider{background:#38bdf8}
   .toggle input:checked+.slider::before{transform:translateX(20px);background:#fff}
 
-  .chip-group{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-  .chip{padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid #334155;background:transparent;color:#94a3b8;transition:all .15s}
+  .chip-group{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid #334155;background:transparent;color:#94a3b8;transition:all .15s}
   .chip.active{background:#334155;color:#e2e8f0;border-color:#475569}
   .chip:hover{border-color:#475569;color:#e2e8f0}
 
@@ -303,6 +431,60 @@ function dashboardHtml(): string {
   .field-toggle{display:flex;align-items:center;gap:12px;margin-bottom:14px}
   .field-toggle>label{font-size:13px;color:#94a3b8;margin-bottom:0}
   .hint{font-size:11px;color:#64748b;margin-top:4px}
+
+  .prompt-editor{width:100%;min-height:200px;padding:14px 16px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-family:ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical;outline:none;tab-size:2}
+  .prompt-editor:focus{border-color:#38bdf8}
+  .prompt-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .prompt-header h4{font-size:13px;color:#e2e8f0;font-weight:500}
+  .prompt-actions{display:flex;gap:6px}
+  .custom-badge{font-size:10px;padding:2px 6px;border-radius:3px;background:#1e40af;color:#93c5fd;margin-left:8px}
+
+  .test-panel{background:#1e293b;border-radius:12px;padding:24px;margin-bottom:16px}
+  .test-input{width:100%;min-height:80px;padding:12px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;resize:vertical;outline:none}
+  .test-input:focus{border-color:#38bdf8}
+  .test-result{margin-top:16px;padding:16px 18px;background:#0f172a;border-radius:8px;border:1px solid #334155;display:none}
+  .test-result.visible{display:block}
+  .test-result-row{display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #1e293b}
+  .test-result-row:last-child{border-bottom:none}
+  .test-result-label{color:#94a3b8}
+  .test-result-value{color:#e2e8f0;font-weight:500}
+  .test-loading{color:#94a3b8;font-size:13px;padding:12px 0}
+
+  .tier-grid{display:grid;grid-template-columns:120px 1fr 1fr;gap:10px;align-items:center}
+  .tier-grid .tier-label{font-size:12px;color:#94a3b8;font-weight:600}
+  .tier-grid input{padding:8px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:12px;outline:none}
+  .tier-grid input:focus{border-color:#38bdf8}
+  .tier-grid-header{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;padding-bottom:6px}
+
+  .section-collapse{cursor:pointer;user-select:none}
+  .section-collapse::before{content:'\\25BC';display:inline-block;margin-right:8px;font-size:10px;transition:transform .2s}
+  .section-collapse.collapsed::before{transform:rotate(-90deg)}
+  .section-body{overflow:hidden;transition:max-height .3s ease}
+  .section-body.collapsed{max-height:0 !important;padding:0;overflow:hidden}
+
+  .router-section{background:#1e293b;border-radius:12px;margin-bottom:16px;border:1px solid #334155;overflow:hidden}
+  .router-section-header{display:flex;align-items:center;gap:12px;padding:18px 24px;cursor:pointer;user-select:none;transition:background .15s}
+  .router-section-header:hover{background:#243044}
+  .router-section-header h3{font-size:15px;color:#e2e8f0;font-weight:600;margin:0}
+  .router-section-header .section-arrow{font-size:10px;color:#64748b;transition:transform .2s;display:inline-block}
+  .router-section-header.collapsed .section-arrow{transform:rotate(-90deg)}
+  .router-id-badge{font-size:11px;padding:2px 8px;border-radius:4px;background:#0f172a;color:#64748b;font-family:ui-monospace,monospace}
+  .router-section-body{padding:0 24px 24px}
+  .router-section-body.collapsed{display:none}
+  .subsection{margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #334155}
+  .subsection:last-of-type{border-bottom:none;margin-bottom:0;padding-bottom:0}
+  .subsection>h4{font-size:13px;color:#94a3b8;margin-bottom:14px;text-transform:uppercase;letter-spacing:.5px}
+  .add-custom-router{background:#1e293b;border:2px dashed #334155;border-radius:12px;padding:24px;margin-bottom:16px;transition:border-color .15s}
+  .add-custom-router:hover{border-color:#475569}
+  .btn-danger{background:#7f1d1d;color:#fecaca;border:none}
+  .btn-danger:hover{background:#991b1b}
+  .pipe-picker{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .pipe-pick-btn{padding:5px 12px;border-radius:5px;font-size:12px;cursor:pointer;border:1px dashed #475569;background:transparent;color:#64748b;transition:all .15s;font-family:ui-monospace,monospace}
+  .pipe-pick-btn:hover{border-color:#38bdf8;color:#38bdf8}
+  .pipe-pick-btn.in-use{opacity:.35;cursor:default;border-style:solid}
+  .pipe-pick-btn.in-use:hover{border-color:#475569;color:#64748b}
+  .tag.pipe-tag{cursor:grab;user-select:none}
+  .tag.pipe-tag.dragging{opacity:.4}
 </style>
 </head>
 <body>
@@ -323,6 +505,7 @@ function dashboardHtml(): string {
   <div class="tab active" data-tab="stats">Overview</div>
   <div class="tab" data-tab="sessions">Sessions</div>
   <div class="tab" data-tab="detections">Detection Log</div>
+  <div class="tab" data-tab="rules">Router Rules <span class="badge badge-hot">live</span></div>
   <div class="tab" data-tab="config">Configuration <span class="badge badge-hot">live</span></div>
 </div>
 
@@ -383,8 +566,298 @@ function dashboardHtml(): string {
   </table>
 </div>
 
+<!-- Router Rules -->
+<div id="rules-panel" class="panel">
+
+  <!-- Pipeline Test (full pipeline) -->
+  <div class="test-panel">
+    <h3 style="font-size:14px;color:#94a3b8;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px">Test Classification</h3>
+    <div class="hint" style="margin-bottom:10px">Dry-run the full router pipeline on a message (no side effects).</div>
+    <textarea class="test-input" id="test-message" placeholder="e.g. &quot;帮我分析一下这个月的工资单&quot; or &quot;write a poem about spring&quot;"></textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <select id="test-checkpoint" style="padding:9px 36px 9px 14px;background:#0f172a url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E&quot;) no-repeat right 14px center;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:12px;appearance:none;-webkit-appearance:none">
+        <option value="onUserMessage">onUserMessage</option>
+        <option value="onToolCallProposed">onToolCallProposed</option>
+        <option value="onToolCallExecuted">onToolCallExecuted</option>
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="runTestClassify()">Classify (Full Pipeline)</button>
+    </div>
+    <div class="test-result" id="test-result">
+      <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-level">-</span></div>
+      <div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-action">-</span></div>
+      <div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-target">-</span></div>
+      <div class="test-result-row"><span class="test-result-label">Router</span><span class="test-result-value" id="tr-router">-</span></div>
+      <div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-reason">-</span></div>
+      <div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-confidence">-</span></div>
+    </div>
+    <div class="test-loading" id="test-loading" style="display:none">Classifying...</div>
+  </div>
+
+  <!-- Pipeline Order -->
+  <div class="config-section">
+    <h3>Pipeline Order <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:12px">Click a router to add it to a checkpoint. Drag tags to reorder. Click &times; to remove.</div>
+    <div class="field">
+      <label>onUserMessage</label>
+      <div class="tag-list" id="cfg-tags-pipe-um"></div>
+      <div class="pipe-picker" id="pipe-picker-um"></div>
+    </div>
+    <div class="field">
+      <label>onToolCallProposed</label>
+      <div class="tag-list" id="cfg-tags-pipe-tcp"></div>
+      <div class="pipe-picker" id="pipe-picker-tcp"></div>
+    </div>
+    <div class="field">
+      <label>onToolCallExecuted</label>
+      <div class="tag-list" id="cfg-tags-pipe-tce"></div>
+      <div class="pipe-picker" id="pipe-picker-tce"></div>
+    </div>
+    <div class="save-bar"><button class="btn btn-primary btn-sm" onclick="savePipelineOrder()">Save Pipeline Order</button></div>
+  </div>
+
+  <!-- ═══ Privacy Router Card ═══ -->
+  <div class="router-section">
+    <div class="router-section-header" onclick="toggleSection(this)">
+      <span class="section-arrow">&#9660;</span>
+      <h3>Privacy Router</h3>
+      <span class="router-id-badge">privacy</span>
+    </div>
+    <div class="router-section-body">
+
+      <div class="field-toggle" style="margin-bottom:18px">
+        <label>Enabled</label>
+        <label class="toggle"><input type="checkbox" id="cfg-privacy-enabled" checked><span class="slider"></span></label>
+      </div>
+
+      <!-- Checkpoints -->
+      <div class="subsection">
+        <h4>Checkpoints</h4>
+        <div class="hint" style="margin-bottom:10px">Select which detectors run at each checkpoint for the privacy router.</div>
+        <div class="field">
+          <label>onUserMessage</label>
+          <div class="chip-group" id="ck-um">
+            <button class="chip" data-ck="um" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
+            <button class="chip" data-ck="um" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>onToolCallProposed</label>
+          <div class="chip-group" id="ck-tcp">
+            <button class="chip" data-ck="tcp" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
+            <button class="chip" data-ck="tcp" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>onToolCallExecuted</label>
+          <div class="chip-group" id="ck-tce">
+            <button class="chip" data-ck="tce" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
+            <button class="chip" data-ck="tce" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detection Rules -->
+      <div class="subsection">
+        <h4>Detection Rules</h4>
+        <div class="rules-grid">
+          <div class="rules-col">
+            <h4>S2 &mdash; Moderate Sensitivity</h4>
+            <div class="field">
+              <label>Keywords</label>
+              <div class="tag-list" id="cfg-tags-kw-s2"></div>
+              <div class="add-row">
+                <input id="cfg-tags-kw-s2-input" placeholder="e.g. salary, phone number" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('kw-s2')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('kw-s2')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Regex Patterns</label>
+              <div class="tag-list" id="cfg-tags-pat-s2"></div>
+              <div class="add-row">
+                <input id="cfg-tags-pat-s2-input" placeholder="e.g. \\d{3}-\\d{4}" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s2')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('pat-s2')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Names</label>
+              <div class="tag-list" id="cfg-tags-tool-s2"></div>
+              <div class="add-row">
+                <input id="cfg-tags-tool-s2-input" placeholder="e.g. read_file, execute_sql" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s2')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('tool-s2')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Paths</label>
+              <div class="tag-list" id="cfg-tags-toolpath-s2"></div>
+              <div class="add-row">
+                <input id="cfg-tags-toolpath-s2-input" placeholder="e.g. /secrets/, *.env" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s2')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s2')">Add</button>
+              </div>
+            </div>
+          </div>
+          <div class="rules-col">
+            <h4>S3 &mdash; High Sensitivity</h4>
+            <div class="field">
+              <label>Keywords</label>
+              <div class="tag-list" id="cfg-tags-kw-s3"></div>
+              <div class="add-row">
+                <input id="cfg-tags-kw-s3-input" placeholder="e.g. SSN, bank account" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('kw-s3')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('kw-s3')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Regex Patterns</label>
+              <div class="tag-list" id="cfg-tags-pat-s3"></div>
+              <div class="add-row">
+                <input id="cfg-tags-pat-s3-input" placeholder="e.g. \\b\\d{3}-\\d{2}-\\d{4}\\b" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s3')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('pat-s3')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Names</label>
+              <div class="tag-list" id="cfg-tags-tool-s3"></div>
+              <div class="add-row">
+                <input id="cfg-tags-tool-s3-input" placeholder="e.g. execute_command" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s3')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('tool-s3')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Paths</label>
+              <div class="tag-list" id="cfg-tags-toolpath-s3"></div>
+              <div class="add-row">
+                <input id="cfg-tags-toolpath-s3-input" placeholder="e.g. /credentials/" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s3')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s3')">Add</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LLM Prompts (privacy-specific) -->
+      <div class="subsection">
+        <h4>LLM Prompts</h4>
+        <div class="hint" style="margin-bottom:12px">Prompts used by the local LLM for sensitivity classification and PII extraction.</div>
+        <div id="privacy-prompt-editors"></div>
+      </div>
+
+      <!-- Per-router Test -->
+      <div class="subsection">
+        <h4>Test (Privacy Router Only)</h4>
+        <textarea class="test-input" id="test-privacy-message" placeholder="Enter a message to test the privacy router alone..."></textarea>
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+          <button class="btn btn-primary btn-sm" onclick="runRouterTest('privacy')">Test Privacy Router</button>
+        </div>
+        <div class="test-result" id="test-privacy-result">
+          <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-privacy-level">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-privacy-action">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-privacy-target">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-privacy-reason">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-privacy-confidence">-</span></div>
+        </div>
+        <div class="test-loading" id="test-privacy-loading" style="display:none">Testing...</div>
+      </div>
+
+      <div class="save-bar"><button class="btn btn-primary" onclick="savePrivacyRouter()">Save Privacy Router</button></div>
+    </div>
+  </div>
+
+  <!-- ═══ Token-Saver Router Card ═══ -->
+  <div class="router-section">
+    <div class="router-section-header" onclick="toggleSection(this)">
+      <span class="section-arrow">&#9660;</span>
+      <h3>Token-Saver Router</h3>
+      <span class="router-id-badge">token-saver</span>
+    </div>
+    <div class="router-section-body">
+
+      <div class="field-toggle" style="margin-bottom:18px">
+        <label>Enabled</label>
+        <label class="toggle"><input type="checkbox" id="cfg-ts-enabled"><span class="slider"></span></label>
+      </div>
+
+      <!-- Judge Model -->
+      <div class="subsection">
+        <h4>Judge Model</h4>
+        <div class="hint" style="margin-bottom:10px">LLM used to classify task complexity. Falls back to the global Local Model settings if empty.</div>
+        <div class="field"><label>Judge Endpoint</label><input id="cfg-ts-endpoint" placeholder="(inherits from Local Model)"></div>
+        <div class="field"><label>Judge Model</label><input id="cfg-ts-model" placeholder="(inherits from Local Model)"></div>
+        <div class="field">
+          <label>Judge API Protocol</label>
+          <select id="cfg-ts-providertype">
+            <option value="openai-compatible">openai-compatible</option>
+            <option value="ollama-native">ollama-native</option>
+            <option value="custom">custom</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Tier-to-Model -->
+      <div class="subsection">
+        <h4>Tier &rarr; Model Mapping</h4>
+        <div class="tier-grid">
+          <div class="tier-grid-header">Tier</div>
+          <div class="tier-grid-header">Provider</div>
+          <div class="tier-grid-header">Model</div>
+          <div class="tier-label">SIMPLE</div><input id="cfg-ts-tier-SIMPLE-provider" placeholder="openai"><input id="cfg-ts-tier-SIMPLE-model" placeholder="gpt-4o-mini">
+          <div class="tier-label">MEDIUM</div><input id="cfg-ts-tier-MEDIUM-provider" placeholder="openai"><input id="cfg-ts-tier-MEDIUM-model" placeholder="gpt-4o">
+          <div class="tier-label">COMPLEX</div><input id="cfg-ts-tier-COMPLEX-provider" placeholder="anthropic"><input id="cfg-ts-tier-COMPLEX-model" placeholder="claude-sonnet-4.6">
+          <div class="tier-label">REASONING</div><input id="cfg-ts-tier-REASONING-provider" placeholder="openai"><input id="cfg-ts-tier-REASONING-model" placeholder="o4-mini">
+        </div>
+      </div>
+
+      <!-- Cache TTL -->
+      <div class="subsection">
+        <h4>Cache</h4>
+        <div class="field">
+          <label>Cache TTL (ms)</label>
+          <input id="cfg-ts-cachettl" type="number" placeholder="300000" style="max-width:180px">
+        </div>
+      </div>
+
+      <!-- LLM Prompt (token-saver-specific) -->
+      <div class="subsection">
+        <h4>LLM Prompt</h4>
+        <div class="hint" style="margin-bottom:12px">Prompt used by the judge LLM to classify task complexity.</div>
+        <div id="tokensaver-prompt-editors"></div>
+      </div>
+
+      <!-- Per-router Test -->
+      <div class="subsection">
+        <h4>Test (Token-Saver Only)</h4>
+        <textarea class="test-input" id="test-token-saver-message" placeholder="Enter a message to test the token-saver router alone..."></textarea>
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+          <button class="btn btn-primary btn-sm" onclick="runRouterTest('token-saver')">Test Token-Saver</button>
+        </div>
+        <div class="test-result" id="test-token-saver-result">
+          <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-token-saver-level">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-token-saver-action">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-token-saver-target">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-token-saver-reason">-</span></div>
+          <div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-token-saver-confidence">-</span></div>
+        </div>
+        <div class="test-loading" id="test-token-saver-loading" style="display:none">Testing...</div>
+      </div>
+
+      <div class="save-bar"><button class="btn btn-primary" onclick="saveTokenSaverConfig()">Save Token-Saver</button></div>
+    </div>
+  </div>
+
+  <!-- ═══ Custom Router Cards (rendered dynamically) ═══ -->
+  <div id="custom-router-cards"></div>
+
+  <!-- Add Custom Router -->
+  <div class="add-custom-router">
+    <div style="display:flex;gap:10px;align-items:center">
+      <input id="new-router-id" placeholder="Router ID (e.g. content-filter)" style="flex:1;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;outline:none">
+      <button class="btn btn-primary" onclick="addCustomRouter()">+ Add Custom Router</button>
+    </div>
+    <div class="hint" style="margin-top:8px">Create a new router with keyword rules and an optional LLM classification prompt. Added routers appear above and can be included in Pipeline Order.</div>
+  </div>
+
+</div>
+
 <!-- Configuration -->
-<div id="config-panel" class="panel" style="max-width:1200px">
+<div id="config-panel" class="panel">
 
   <div class="toggle-bar">
     <label>GuardClaw Enabled</label>
@@ -445,107 +918,6 @@ function dashboardHtml(): string {
   </div>
 
   <div class="config-section">
-    <h3>Checkpoints <span class="badge badge-hot">instant</span></h3>
-    <div class="field">
-      <label>onUserMessage</label>
-      <div class="chip-group" id="ck-um">
-        <button class="chip" data-ck="um" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
-        <button class="chip" data-ck="um" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>onToolCallProposed</label>
-      <div class="chip-group" id="ck-tcp">
-        <button class="chip" data-ck="tcp" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
-        <button class="chip" data-ck="tcp" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>onToolCallExecuted</label>
-      <div class="chip-group" id="ck-tce">
-        <button class="chip" data-ck="tce" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
-        <button class="chip" data-ck="tce" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="config-section">
-    <h3>Detection Rules <span class="badge badge-hot">instant</span></h3>
-    <div class="rules-grid">
-      <div class="rules-col">
-        <h4>S2 &mdash; Moderate Sensitivity</h4>
-        <div class="field">
-          <label>Keywords</label>
-          <div class="tag-list" id="cfg-tags-kw-s2"></div>
-          <div class="add-row">
-            <input id="cfg-tags-kw-s2-input" placeholder="e.g. salary, phone number" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('kw-s2')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('kw-s2')">Add</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Regex Patterns</label>
-          <div class="tag-list" id="cfg-tags-pat-s2"></div>
-          <div class="add-row">
-            <input id="cfg-tags-pat-s2-input" placeholder="e.g. \\d{3}-\\d{4}" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s2')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('pat-s2')">Add</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Tool Names</label>
-          <div class="tag-list" id="cfg-tags-tool-s2"></div>
-          <div class="add-row">
-            <input id="cfg-tags-tool-s2-input" placeholder="e.g. read_file, execute_sql" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s2')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('tool-s2')">Add</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Tool Paths</label>
-          <div class="tag-list" id="cfg-tags-toolpath-s2"></div>
-          <div class="add-row">
-            <input id="cfg-tags-toolpath-s2-input" placeholder="e.g. /secrets/, *.env" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s2')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s2')">Add</button>
-          </div>
-        </div>
-      </div>
-      <div class="rules-col">
-        <h4>S3 &mdash; High Sensitivity</h4>
-        <div class="field">
-          <label>Keywords</label>
-          <div class="tag-list" id="cfg-tags-kw-s3"></div>
-          <div class="add-row">
-            <input id="cfg-tags-kw-s3-input" placeholder="e.g. SSN, bank account" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('kw-s3')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('kw-s3')">Add</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Regex Patterns</label>
-          <div class="tag-list" id="cfg-tags-pat-s3"></div>
-          <div class="add-row">
-            <input id="cfg-tags-pat-s3-input" placeholder="e.g. \\b\\d{3}-\\d{2}-\\d{4}\\b" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s3')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('pat-s3')">Add</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Tool Names</label>
-          <div class="tag-list" id="cfg-tags-tool-s3"></div>
-          <div class="add-row">
-            <input id="cfg-tags-tool-s3-input" placeholder="e.g. execute_command" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s3')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('tool-s3')">Add</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Tool Paths</label>
-          <div class="tag-list" id="cfg-tags-toolpath-s3"></div>
-          <div class="add-row">
-            <input id="cfg-tags-toolpath-s3-input" placeholder="e.g. /credentials/" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s3')}">
-            <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s3')">Add</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="config-section">
     <h3>Local Providers <span class="badge badge-hot">instant</span></h3>
     <div class="field">
       <label>Additional providers treated as &quot;local&quot; (safe for S3 routing)</label>
@@ -557,52 +929,8 @@ function dashboardHtml(): string {
     </div>
   </div>
 
-  <div class="config-section">
-    <h3>Routers</h3>
-    <div id="cfg-routers-list"></div>
-    <div style="margin-top:12px">
-      <div class="add-row">
-        <input id="cfg-router-id-input" placeholder="Router ID" style="flex:0.4">
-        <select id="cfg-router-type-input" style="flex:0.3;padding:8px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px">
-          <option value="builtin">builtin</option>
-          <option value="custom">custom</option>
-        </select>
-        <input id="cfg-router-module-input" placeholder="Module path (custom only)" style="flex:1">
-        <button class="btn btn-sm btn-outline" onclick="addRouter()">Add</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="config-section">
-    <h3>Pipeline Order <span class="badge badge-hot">instant</span></h3>
-    <div class="field">
-      <label>onUserMessage</label>
-      <div class="tag-list" id="cfg-tags-pipe-um"></div>
-      <div class="add-row">
-        <input id="cfg-tags-pipe-um-input" placeholder="Router ID, e.g. privacy" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pipe-um')}">
-        <button class="btn btn-sm btn-outline" onclick="addTag('pipe-um')">Add</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>onToolCallProposed</label>
-      <div class="tag-list" id="cfg-tags-pipe-tcp"></div>
-      <div class="add-row">
-        <input id="cfg-tags-pipe-tcp-input" placeholder="Router ID" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pipe-tcp')}">
-        <button class="btn btn-sm btn-outline" onclick="addTag('pipe-tcp')">Add</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>onToolCallExecuted</label>
-      <div class="tag-list" id="cfg-tags-pipe-tce"></div>
-      <div class="add-row">
-        <input id="cfg-tags-pipe-tce-input" placeholder="Router ID" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pipe-tce')}">
-        <button class="btn btn-sm btn-outline" onclick="addTag('pipe-tce')">Add</button>
-      </div>
-    </div>
-  </div>
-
   <div class="save-bar">
-    <button class="btn btn-primary" onclick="saveConfig()">Save All</button>
+    <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
   </div>
 </div>
 
@@ -684,6 +1012,7 @@ function syncChips() {
 // ── Router management ──
 function renderRouters() {
   var c = document.getElementById('cfg-routers-list');
+  if (!c) return;
   var ids = Object.keys(_routers);
   if (!ids.length) {
     c.innerHTML = '<div style="color:#64748b;font-size:13px;padding:8px 0">No routers configured</div>';
@@ -980,10 +1309,20 @@ async function loadConfig() {
     if (routers && typeof routers === 'object') {
       Object.keys(routers).forEach(function(k) { _routers[k] = Object.assign({}, routers[k]); });
     }
-    renderRouters();
 
-    Object.keys(_tags).forEach(function(k) { renderTags(k); });
+    // Privacy router enable toggle
+    var privacyReg = _routers['privacy'] || {};
+    var privacyEl = document.getElementById('cfg-privacy-enabled');
+    if (privacyEl) privacyEl.checked = privacyReg.enabled !== false;
+
+    Object.keys(_tags).forEach(function(k) {
+      if (k.indexOf('pipe-') === 0) return;
+      renderTags(k);
+    });
     toggleModuleField();
+    loadTokenSaverConfig();
+    renderCustomRouterCards();
+    updateAvailableRouters();
   } catch (e) { /* non-critical, fields stay at defaults */ }
 }
 
@@ -1013,29 +1352,10 @@ async function saveConfig() {
         },
         s2Policy: document.getElementById('cfg-s2policy').value,
         proxyPort: portVal ? parseInt(portVal) : undefined,
-        checkpoints: {
-          onUserMessage: _checkpoints.um.length ? _checkpoints.um : undefined,
-          onToolCallProposed: _checkpoints.tcp.length ? _checkpoints.tcp : undefined,
-          onToolCallExecuted: _checkpoints.tce.length ? _checkpoints.tce : undefined,
-        },
-        rules: {
-          keywords: { S2: _tags['kw-s2'], S3: _tags['kw-s3'] },
-          patterns: { S2: _tags['pat-s2'], S3: _tags['pat-s3'] },
-          tools: {
-            S2: { tools: _tags['tool-s2'], paths: _tags['toolpath-s2'] },
-            S3: { tools: _tags['tool-s3'], paths: _tags['toolpath-s3'] },
-          },
-        },
         localProviders: _tags['lp'].length > 0 ? _tags['lp'] : [],
         session: {
           isolateGuardHistory: document.getElementById('cfg-sess-isolate').checked,
           baseDir: document.getElementById('cfg-sess-basedir').value || undefined,
-        },
-        routers: Object.keys(_routers).length > 0 ? _routers : undefined,
-        pipeline: {
-          onUserMessage: _tags['pipe-um'].length ? _tags['pipe-um'] : undefined,
-          onToolCallProposed: _tags['pipe-tcp'].length ? _tags['pipe-tcp'] : undefined,
-          onToolCallExecuted: _tags['pipe-tce'].length ? _tags['pipe-tce'] : undefined,
         },
       },
     };
@@ -1069,9 +1389,573 @@ function refreshAll() {
   refreshDetections();
 }
 
+// ── Prompt Editors ──
+
+var _prompts = {};
+
+async function loadPrompts() {
+  try {
+    _prompts = await fetch(BASE + '/prompts').then(function(r) { return r.json(); });
+    renderRouterPrompts('privacy-prompt-editors', PRIVACY_PROMPTS);
+    renderRouterPrompts('tokensaver-prompt-editors', TOKENSAVER_PROMPTS);
+  } catch (e) { /* non-critical */ }
+}
+
+async function savePrompt(name) {
+  var el = document.getElementById('prompt-' + name);
+  if (!el) return;
+  try {
+    var res = await fetch(BASE + '/prompts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, content: el.value }),
+    });
+    var result = await res.json();
+    if (result.ok) {
+      showToast('Prompt "' + name + '" saved & applied');
+      loadPrompts();
+    } else {
+      showToast('Save failed: ' + (result.error || 'unknown'), true);
+    }
+  } catch (e) {
+    showToast('Save failed: ' + e.message, true);
+  }
+}
+
+function resetPrompt(name) {
+  if (!_prompts[name]) return;
+  var el = document.getElementById('prompt-' + name);
+  if (el) el.value = _prompts[name].defaultContent;
+}
+
+// ── Test Classify ──
+
+async function runTestClassify() {
+  var msg = document.getElementById('test-message').value.trim();
+  if (!msg) { showToast('Enter a test message', true); return; }
+  var checkpoint = document.getElementById('test-checkpoint').value;
+  var resultEl = document.getElementById('test-result');
+  var loadingEl = document.getElementById('test-loading');
+  resultEl.classList.remove('visible');
+  loadingEl.style.display = 'block';
+  try {
+    var res = await fetch(BASE + '/test-classify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, checkpoint: checkpoint }),
+    });
+    var data = await res.json();
+    loadingEl.style.display = 'none';
+    if (data.error) {
+      showToast('Test failed: ' + data.error, true);
+      return;
+    }
+    document.getElementById('tr-level').innerHTML = '<span class="level-tag level-' + data.level + '">' + data.level + '</span>';
+    document.getElementById('tr-action').textContent = data.action || 'passthrough';
+    document.getElementById('tr-target').textContent = data.target ? (data.target.provider + '/' + data.target.model) : '(none)';
+    document.getElementById('tr-router').textContent = data.routerId || '(none)';
+    document.getElementById('tr-reason').textContent = data.reason || '(none)';
+    document.getElementById('tr-confidence').textContent = data.confidence != null ? (data.confidence * 100).toFixed(0) + '%' : '-';
+    resultEl.classList.add('visible');
+  } catch (e) {
+    loadingEl.style.display = 'none';
+    showToast('Test failed: ' + e.message, true);
+  }
+}
+
+// ── Token-Saver Config ──
+
+function loadTokenSaverConfig() {
+  try {
+    var cfg = _prompts; // reuse config load
+    var routers = _routers || {};
+    var ts = routers['token-saver'] || {};
+    var opts = ts.options || {};
+    document.getElementById('cfg-ts-enabled').checked = ts.enabled === true;
+    document.getElementById('cfg-ts-endpoint').value = opts.judgeEndpoint || '';
+    document.getElementById('cfg-ts-model').value = opts.judgeModel || '';
+    document.getElementById('cfg-ts-providertype').value = opts.judgeProviderType || 'openai-compatible';
+    document.getElementById('cfg-ts-cachettl').value = opts.cacheTtlMs || '';
+    var tiers = opts.tiers || {};
+    ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'].forEach(function(t) {
+      var tier = tiers[t] || {};
+      var pEl = document.getElementById('cfg-ts-tier-' + t + '-provider');
+      var mEl = document.getElementById('cfg-ts-tier-' + t + '-model');
+      if (pEl) pEl.value = tier.provider || '';
+      if (mEl) mEl.value = tier.model || '';
+    });
+  } catch (e) { /* non-critical */ }
+}
+
+async function saveTokenSaverConfig() {
+  try {
+    var tiers = {};
+    ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'].forEach(function(t) {
+      var pVal = document.getElementById('cfg-ts-tier-' + t + '-provider').value.trim();
+      var mVal = document.getElementById('cfg-ts-tier-' + t + '-model').value.trim();
+      if (pVal || mVal) tiers[t] = { provider: pVal, model: mVal };
+    });
+    var options = {};
+    var ep = document.getElementById('cfg-ts-endpoint').value.trim();
+    var md = document.getElementById('cfg-ts-model').value.trim();
+    var pt = document.getElementById('cfg-ts-providertype').value;
+    var ct = document.getElementById('cfg-ts-cachettl').value;
+    if (ep) options.judgeEndpoint = ep;
+    if (md) options.judgeModel = md;
+    if (pt) options.judgeProviderType = pt;
+    if (ct) options.cacheTtlMs = parseInt(ct);
+    if (Object.keys(tiers).length) options.tiers = tiers;
+
+    var currentRouters = Object.assign({}, _routers);
+    currentRouters['token-saver'] = {
+      enabled: document.getElementById('cfg-ts-enabled').checked,
+      type: 'builtin',
+      options: options,
+    };
+
+    var payload = { privacy: { routers: currentRouters } };
+    var res = await fetch(BASE + '/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var result = await res.json();
+    if (result.ok) {
+      showToast('Token-Saver config saved');
+      loadConfig();
+    } else {
+      showToast('Save failed: ' + (result.error || 'unknown'), true);
+    }
+  } catch (e) {
+    showToast('Save failed: ' + e.message, true);
+  }
+}
+
+// ── Section Collapse ──
+
+function toggleSection(el) {
+  el.classList.toggle('collapsed');
+  var body = el.nextElementSibling;
+  if (body) body.classList.toggle('collapsed');
+}
+
+// ── Per-Router Prompt Rendering ──
+
+var PRIVACY_PROMPTS = ['detection-system', 'pii-extraction'];
+var TOKENSAVER_PROMPTS = ['token-saver-judge'];
+
+function renderRouterPrompts(containerId, promptNames) {
+  var c = document.getElementById(containerId);
+  if (!c) return;
+  var html = '';
+  promptNames.forEach(function(name) {
+    var p = _prompts[name];
+    if (!p) return;
+    var customBadge = p.isCustom ? '<span class="custom-badge">customized</span>' : '';
+    html += '<div style="margin-bottom:16px">' +
+      '<div class="prompt-header">' +
+        '<h4>' + escHtml(p.label) + customBadge + '</h4>' +
+        '<div class="prompt-actions">' +
+          '<button class="btn btn-sm btn-outline" onclick="resetPrompt(\\'' + escHtml(name) + '\\')">Reset Default</button>' +
+          '<button class="btn btn-sm btn-primary" onclick="savePrompt(\\'' + escHtml(name) + '\\')">Save</button>' +
+        '</div>' +
+      '</div>' +
+      '<textarea class="prompt-editor" id="prompt-' + escHtml(name) + '">' + escHtml(p.content) + '</textarea>' +
+    '</div>';
+  });
+  c.innerHTML = html || '<div style="color:#64748b;font-size:13px">Loading prompts...</div>';
+}
+
+// ── Per-Router Test ──
+
+async function runRouterTest(routerId) {
+  var msgEl = document.getElementById('test-' + routerId + '-message');
+  var msg = msgEl ? msgEl.value.trim() : '';
+  if (!msg) { showToast('Enter a test message', true); return; }
+  var resultEl = document.getElementById('test-' + routerId + '-result');
+  var loadingEl = document.getElementById('test-' + routerId + '-loading');
+  resultEl.classList.remove('visible');
+  loadingEl.style.display = 'block';
+  try {
+    var res = await fetch(BASE + '/test-classify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, router: routerId }),
+    });
+    var data = await res.json();
+    loadingEl.style.display = 'none';
+    if (data.error) {
+      showToast('Test failed: ' + data.error, true);
+      return;
+    }
+    document.getElementById('tr-' + routerId + '-level').innerHTML = '<span class="level-tag level-' + data.level + '">' + data.level + '</span>';
+    document.getElementById('tr-' + routerId + '-action').textContent = data.action || 'passthrough';
+    document.getElementById('tr-' + routerId + '-target').textContent = data.target ? (data.target.provider + '/' + data.target.model) : '(none)';
+    document.getElementById('tr-' + routerId + '-reason').textContent = data.reason || '(none)';
+    document.getElementById('tr-' + routerId + '-confidence').textContent = data.confidence != null ? (data.confidence * 100).toFixed(0) + '%' : '-';
+    resultEl.classList.add('visible');
+  } catch (e) {
+    loadingEl.style.display = 'none';
+    showToast('Test failed: ' + e.message, true);
+  }
+}
+
+// ── Save Privacy Router ──
+
+async function savePrivacyRouter() {
+  try {
+    var payload = {
+      privacy: {
+        checkpoints: {
+          onUserMessage: _checkpoints.um.length ? _checkpoints.um : undefined,
+          onToolCallProposed: _checkpoints.tcp.length ? _checkpoints.tcp : undefined,
+          onToolCallExecuted: _checkpoints.tce.length ? _checkpoints.tce : undefined,
+        },
+        rules: {
+          keywords: { S2: _tags['kw-s2'], S3: _tags['kw-s3'] },
+          patterns: { S2: _tags['pat-s2'], S3: _tags['pat-s3'] },
+          tools: {
+            S2: { tools: _tags['tool-s2'], paths: _tags['toolpath-s2'] },
+            S3: { tools: _tags['tool-s3'], paths: _tags['toolpath-s3'] },
+          },
+        },
+      },
+    };
+    var res = await fetch(BASE + '/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var result = await res.json();
+    if (result.ok) {
+      showToast('Privacy Router saved');
+    } else {
+      showToast('Save failed: ' + (result.error || 'unknown'), true);
+    }
+  } catch (e) {
+    showToast('Save failed: ' + e.message, true);
+  }
+}
+
+// ── Save Pipeline Order ──
+
+async function savePipelineOrder() {
+  try {
+    var payload = {
+      privacy: {
+        pipeline: {
+          onUserMessage: _tags['pipe-um'].length ? _tags['pipe-um'] : undefined,
+          onToolCallProposed: _tags['pipe-tcp'].length ? _tags['pipe-tcp'] : undefined,
+          onToolCallExecuted: _tags['pipe-tce'].length ? _tags['pipe-tce'] : undefined,
+        },
+      },
+    };
+    var res = await fetch(BASE + '/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var result = await res.json();
+    if (result.ok) {
+      showToast('Pipeline order saved');
+    } else {
+      showToast('Save failed: ' + (result.error || 'unknown'), true);
+    }
+  } catch (e) {
+    showToast('Save failed: ' + e.message, true);
+  }
+}
+
+// ── Custom Routers ──
+
+var BUILTIN_ROUTERS = ['privacy', 'token-saver'];
+var _customRouterData = {};
+
+function getCustomRouterIds() {
+  return Object.keys(_routers).filter(function(id) {
+    return BUILTIN_ROUTERS.indexOf(id) === -1 && _routers[id].type === 'configurable';
+  });
+}
+
+function renderCustomRouterCards() {
+  var container = document.getElementById('custom-router-cards');
+  if (!container) return;
+  var ids = getCustomRouterIds();
+  if (!ids.length) { container.innerHTML = ''; return; }
+
+  container.innerHTML = ids.map(function(id) {
+    var r = _routers[id] || {};
+    var opts = r.options || {};
+    var checked = r.enabled !== false ? ' checked' : '';
+    var kwS2 = (opts.keywords && opts.keywords.S2) ? opts.keywords.S2 : [];
+    var kwS3 = (opts.keywords && opts.keywords.S3) ? opts.keywords.S3 : [];
+    var patS2 = (opts.patterns && opts.patterns.S2) ? opts.patterns.S2 : [];
+    var patS3 = (opts.patterns && opts.patterns.S3) ? opts.patterns.S3 : [];
+    var prompt = opts.prompt || '';
+
+    // init tag arrays for this custom router
+    _tags['cr-kw-s2-' + id] = kwS2.slice();
+    _tags['cr-kw-s3-' + id] = kwS3.slice();
+    _tags['cr-pat-s2-' + id] = patS2.slice();
+    _tags['cr-pat-s3-' + id] = patS3.slice();
+
+    return '<div class="router-section" id="cr-card-' + escHtml(id) + '">' +
+      '<div class="router-section-header" onclick="toggleSection(this)">' +
+        '<span class="section-arrow">&#9660;</span>' +
+        '<h3>' + escHtml(id) + '</h3>' +
+        '<span class="router-id-badge">configurable</span>' +
+        '<button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="event.stopPropagation();removeCustomRouter(\\'' + escHtml(id) + '\\')">Delete</button>' +
+      '</div>' +
+      '<div class="router-section-body">' +
+        '<div class="field-toggle" style="margin-bottom:18px">' +
+          '<label>Enabled</label>' +
+          '<label class="toggle"><input type="checkbox" id="cfg-cr-enabled-' + escHtml(id) + '"' + checked + '><span class="slider"></span></label>' +
+        '</div>' +
+
+        '<div class="subsection">' +
+          '<h4>Keyword Rules</h4>' +
+          '<div class="rules-grid">' +
+            '<div class="rules-col">' +
+              '<h4>S2 Keywords</h4>' +
+              '<div class="tag-list" id="cfg-tags-cr-kw-s2-' + escHtml(id) + '"></div>' +
+              '<div class="add-row">' +
+                '<input id="cfg-tags-cr-kw-s2-' + escHtml(id) + '-input" placeholder="Add S2 keyword" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-kw-s2-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-kw-s2-' + escHtml(id) + '\\')">Add</button>' +
+              '</div>' +
+              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S2 Patterns (regex)</h4></div>' +
+              '<div class="tag-list" id="cfg-tags-cr-pat-s2-' + escHtml(id) + '"></div>' +
+              '<div class="add-row">' +
+                '<input id="cfg-tags-cr-pat-s2-' + escHtml(id) + '-input" placeholder="Add S2 pattern" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-pat-s2-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-pat-s2-' + escHtml(id) + '\\')">Add</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="rules-col">' +
+              '<h4>S3 Keywords</h4>' +
+              '<div class="tag-list" id="cfg-tags-cr-kw-s3-' + escHtml(id) + '"></div>' +
+              '<div class="add-row">' +
+                '<input id="cfg-tags-cr-kw-s3-' + escHtml(id) + '-input" placeholder="Add S3 keyword" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-kw-s3-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-kw-s3-' + escHtml(id) + '\\')">Add</button>' +
+              '</div>' +
+              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S3 Patterns (regex)</h4></div>' +
+              '<div class="tag-list" id="cfg-tags-cr-pat-s3-' + escHtml(id) + '"></div>' +
+              '<div class="add-row">' +
+                '<input id="cfg-tags-cr-pat-s3-' + escHtml(id) + '-input" placeholder="Add S3 pattern" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-pat-s3-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-pat-s3-' + escHtml(id) + '\\')">Add</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="subsection">' +
+          '<h4>LLM System Prompt <span style="font-size:11px;color:#64748b;text-transform:none;letter-spacing:0">(optional)</span></h4>' +
+          '<div class="hint" style="margin-bottom:10px">If set, the local LLM will classify messages using this prompt. Should output JSON with {level, reason}.</div>' +
+          '<textarea class="prompt-editor" id="cr-prompt-' + escHtml(id) + '">' + escHtml(prompt) + '</textarea>' +
+        '</div>' +
+
+        '<div class="subsection">' +
+          '<h4>Test (' + escHtml(id) + ' Only)</h4>' +
+          '<textarea class="test-input" id="test-' + escHtml(id) + '-message" placeholder="Enter a message to test this router..."></textarea>' +
+          '<div style="display:flex;gap:8px;margin-top:10px;align-items:center">' +
+            '<button class="btn btn-primary btn-sm" onclick="runRouterTest(\\'' + escHtml(id) + '\\')">Test</button>' +
+          '</div>' +
+          '<div class="test-result" id="test-' + escHtml(id) + '-result">' +
+            '<div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-' + escHtml(id) + '-level">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-' + escHtml(id) + '-action">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-' + escHtml(id) + '-target">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-' + escHtml(id) + '-reason">-</span></div>' +
+            '<div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-' + escHtml(id) + '-confidence">-</span></div>' +
+          '</div>' +
+          '<div class="test-loading" id="test-' + escHtml(id) + '-loading" style="display:none">Testing...</div>' +
+        '</div>' +
+
+        '<div class="save-bar"><button class="btn btn-primary" onclick="saveCustomRouter(\\'' + escHtml(id) + '\\')">Save ' + escHtml(id) + '</button></div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  // render tags for custom routers after DOM is built
+  ids.forEach(function(id) {
+    renderTags('cr-kw-s2-' + id);
+    renderTags('cr-kw-s3-' + id);
+    renderTags('cr-pat-s2-' + id);
+    renderTags('cr-pat-s3-' + id);
+  });
+}
+
+function getAllRouterIds() {
+  var allIds = Object.keys(_routers);
+  if (!allIds.length) allIds = BUILTIN_ROUTERS.slice();
+  BUILTIN_ROUTERS.forEach(function(b) {
+    if (allIds.indexOf(b) === -1) allIds.unshift(b);
+  });
+  return allIds;
+}
+
+function renderPipePicker(pipeKey) {
+  var suffix = pipeKey.replace('pipe-', '');
+  var container = document.getElementById('pipe-picker-' + suffix);
+  if (!container) return;
+  var current = _tags[pipeKey] || [];
+  var allIds = getAllRouterIds();
+  container.innerHTML = allIds.map(function(id) {
+    var inUse = current.indexOf(id) !== -1;
+    return '<button class="pipe-pick-btn' + (inUse ? ' in-use' : '') + '" onclick="togglePipeRouter(\\'' + escHtml(pipeKey) + '\\',\\'' + escHtml(id) + '\\')">' +
+      '+ ' + escHtml(id) + '</button>';
+  }).join('');
+}
+
+function renderPipeTags(pipeKey) {
+  var c = document.getElementById('cfg-tags-' + pipeKey);
+  if (!c) return;
+  c.innerHTML = _tags[pipeKey].map(function(v, i) {
+    return '<span class="tag pipe-tag" draggable="true" data-pipe="' + pipeKey + '" data-idx="' + i + '">' +
+      '<span style="color:#64748b;font-size:10px;margin-right:4px">' + (i + 1) + '</span>' +
+      escHtml(v) +
+      ' <button data-key="' + pipeKey + '" data-idx="' + i + '" onclick="removePipeTag(this)">&times;</button></span>';
+  }).join('');
+  initPipeDrag(pipeKey);
+  renderPipePicker(pipeKey);
+}
+
+function togglePipeRouter(pipeKey, routerId) {
+  var arr = _tags[pipeKey];
+  var idx = arr.indexOf(routerId);
+  if (idx !== -1) return;
+  arr.push(routerId);
+  renderPipeTags(pipeKey);
+}
+
+function removePipeTag(el) {
+  var key = el.getAttribute('data-key');
+  var idx = parseInt(el.getAttribute('data-idx'));
+  if (key && _tags[key]) {
+    _tags[key].splice(idx, 1);
+    renderPipeTags(key);
+  }
+}
+
+function initPipeDrag(pipeKey) {
+  var container = document.getElementById('cfg-tags-' + pipeKey);
+  if (!container) return;
+  var tags = container.querySelectorAll('.pipe-tag');
+  tags.forEach(function(tag) {
+    tag.addEventListener('dragstart', function(e) {
+      e.dataTransfer.setData('text/plain', tag.getAttribute('data-idx'));
+      e.dataTransfer.effectAllowed = 'move';
+      tag.classList.add('dragging');
+    });
+    tag.addEventListener('dragend', function() {
+      tag.classList.remove('dragging');
+    });
+    tag.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    tag.addEventListener('drop', function(e) {
+      e.preventDefault();
+      var fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+      var toIdx = parseInt(tag.getAttribute('data-idx'));
+      if (isNaN(fromIdx) || isNaN(toIdx) || fromIdx === toIdx) return;
+      var arr = _tags[pipeKey];
+      var item = arr.splice(fromIdx, 1)[0];
+      arr.splice(toIdx, 0, item);
+      renderPipeTags(pipeKey);
+    });
+  });
+}
+
+function updateAvailableRouters() {
+  renderPipeTags('pipe-um');
+  renderPipeTags('pipe-tcp');
+  renderPipeTags('pipe-tce');
+}
+
+function addCustomRouter() {
+  var idInput = document.getElementById('new-router-id');
+  var id = idInput.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  if (!id) { showToast('Enter a router ID', true); return; }
+  if (_routers[id]) { showToast('Router "' + id + '" already exists', true); return; }
+  _routers[id] = {
+    enabled: true,
+    type: 'configurable',
+    options: { keywords: { S2: [], S3: [] }, patterns: { S2: [], S3: [] }, prompt: '' }
+  };
+  idInput.value = '';
+  renderCustomRouterCards();
+  updateAvailableRouters();
+  showToast('Router "' + id + '" created — configure and save it below');
+}
+
+function removeCustomRouter(id) {
+  if (!confirm('Delete router "' + id + '"? This cannot be undone.')) return;
+  delete _routers[id];
+  // Clean up tag arrays
+  delete _tags['cr-kw-s2-' + id];
+  delete _tags['cr-kw-s3-' + id];
+  delete _tags['cr-pat-s2-' + id];
+  delete _tags['cr-pat-s3-' + id];
+
+  // Save the removal to config
+  var currentRouters = Object.assign({}, _routers);
+  var payload = { privacy: { routers: currentRouters } };
+  fetch(BASE + '/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(function(r) { return r.json(); }).then(function(result) {
+    if (result.ok) {
+      showToast('Router "' + id + '" deleted');
+      renderCustomRouterCards();
+    } else {
+      showToast('Delete failed: ' + (result.error || 'unknown'), true);
+    }
+  }).catch(function(e) {
+    showToast('Delete failed: ' + e.message, true);
+  });
+}
+
+async function saveCustomRouter(id) {
+  try {
+    var kwS2 = _tags['cr-kw-s2-' + id] || [];
+    var kwS3 = _tags['cr-kw-s3-' + id] || [];
+    var patS2 = _tags['cr-pat-s2-' + id] || [];
+    var patS3 = _tags['cr-pat-s3-' + id] || [];
+    var promptEl = document.getElementById('cr-prompt-' + id);
+    var prompt = promptEl ? promptEl.value.trim() : '';
+    var enabledEl = document.getElementById('cfg-cr-enabled-' + id);
+    var enabled = enabledEl ? enabledEl.checked : true;
+
+    var options = {
+      keywords: { S2: kwS2, S3: kwS3 },
+      patterns: { S2: patS2, S3: patS3 },
+    };
+    if (prompt) options.prompt = prompt;
+
+    var currentRouters = Object.assign({}, _routers);
+    currentRouters[id] = {
+      enabled: enabled,
+      type: 'configurable',
+      options: options,
+    };
+    _routers[id] = currentRouters[id];
+
+    var payload = { privacy: { routers: currentRouters } };
+    var res = await fetch(BASE + '/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var result = await res.json();
+    if (result.ok) {
+      showToast('Router "' + id + '" saved');
+    } else {
+      showToast('Save failed: ' + (result.error || 'unknown'), true);
+    }
+  } catch (e) {
+    showToast('Save failed: ' + e.message, true);
+  }
+}
+
 // ── Init ──
 refreshAll();
 loadConfig();
+loadPrompts();
 setInterval(refreshAll, 30000);
 </script>
 </body>

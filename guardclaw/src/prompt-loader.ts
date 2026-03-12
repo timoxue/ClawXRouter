@@ -8,7 +8,7 @@
  * Falls back to hardcoded defaults if the file is missing or unreadable.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,7 +32,9 @@ function resolvePromptsDir(): string {
 
 const PROMPTS_DIR = resolvePromptsDir();
 
-/** Cache loaded prompts in memory (loaded once, never re-read) */
+export { PROMPTS_DIR };
+
+/** Cache loaded prompts in memory — invalidated on dashboard save */
 const cache = new Map<string, string>();
 
 /**
@@ -77,5 +79,40 @@ export function loadPromptWithVars(
     prompt = prompt.replaceAll(`{{${key}}}`, value);
   }
   return prompt;
+}
+
+/** Invalidate a cached prompt so the next loadPrompt() re-reads from disk. */
+export function invalidatePrompt(name: string): void {
+  cache.delete(name);
+}
+
+/** Invalidate all cached prompts. */
+export function invalidateAllPrompts(): void {
+  cache.clear();
+}
+
+/**
+ * Write a prompt to `prompts/{name}.md` and invalidate its cache.
+ * Creates the prompts directory if it doesn't exist.
+ */
+export function writePrompt(name: string, content: string): void {
+  mkdirSync(PROMPTS_DIR, { recursive: true });
+  const filePath = resolve(PROMPTS_DIR, `${name}.md`);
+  writeFileSync(filePath, content, "utf-8");
+  invalidatePrompt(name);
+}
+
+/**
+ * Read a prompt file directly from disk (bypasses cache).
+ * Returns null if the file doesn't exist.
+ */
+export function readPromptFromDisk(name: string): string | null {
+  const filePath = resolve(PROMPTS_DIR, `${name}.md`);
+  try {
+    if (existsSync(filePath)) {
+      return readFileSync(filePath, "utf-8").trim();
+    }
+  } catch { /* file unreadable */ }
+  return null;
 }
 

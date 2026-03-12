@@ -215,6 +215,21 @@ export class RouterPipeline {
   }
 
   /**
+   * Run a single router by ID (for per-router testing).
+   */
+  async runSingle(
+    id: string,
+    context: DetectionContext,
+    pluginConfig: Record<string, unknown>,
+  ): Promise<RouterDecision | null> {
+    const router = this.routers.get(id);
+    if (!router) return null;
+    const decision = await router.detect({ ...context, dryRun: true }, pluginConfig);
+    decision.routerId = id;
+    return decision;
+  }
+
+  /**
    * List all registered router IDs.
    */
   listRouters(): string[] {
