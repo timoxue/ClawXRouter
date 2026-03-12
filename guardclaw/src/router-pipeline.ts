@@ -70,12 +70,12 @@ export class RouterPipeline {
    * Configure the pipeline from the plugin config.
    */
   configure(config: {
-    routers?: Record<string, RouterRegistration>;
+    routers?: Record<string, RouterRegistration | undefined>;
     pipeline?: PipelineConfig;
   }): void {
     if (config.routers) {
       for (const [id, reg] of Object.entries(config.routers)) {
-        this.routerConfigs.set(id, reg);
+        if (reg) this.routerConfigs.set(id, reg);
       }
     }
     if (config.pipeline) {

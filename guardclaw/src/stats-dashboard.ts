@@ -24,12 +24,11 @@ import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "
 import type { RouterPipeline } from "./router-pipeline.js";
 import { createConfigurableRouter } from "./routers/configurable.js";
 
-type ConfigWriteFn = (cfg: unknown) => Promise<void>;
-type ConfigLoadFn = () => Promise<unknown>;
-
 export type DashboardDeps = {
-  loadConfig: ConfigLoadFn;
-  writeConfigFile: ConfigWriteFn;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  loadConfig: (...args: any[]) => any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  writeConfigFile: (...args: any[]) => Promise<void>;
   pluginId: string;
   pluginConfig: Record<string, unknown>;
   pipeline: RouterPipeline | null;

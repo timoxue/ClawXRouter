@@ -16,6 +16,7 @@
 import type {
   DetectionContext,
   GuardClawRouter,
+  RouterAction,
   RouterDecision,
   SensitivityLevel,
   RouterRegistration,
@@ -106,9 +107,9 @@ async function classifyWithPrompt(
         temperature: 0,
         maxTokens: 256,
         apiKey: lm.apiKey,
+        providerType: (lm.type ?? "openai-compatible") as "openai-compatible" | "ollama-native" | "custom",
+        customModule: lm.module,
       },
-      (lm.type ?? "openai-compatible") as "openai-compatible" | "ollama-native" | "custom",
-      lm.module,
     );
     const text = raw.trim();
     const jsonMatch = text.match(/\{[\s\S]*?\}/);
@@ -173,7 +174,7 @@ export function createConfigurableRouter(id: string): GuardClawRouter {
       }
 
       const finalLevel = maxLevel(...levels);
-      const action = opts.action ?? "redirect";
+      const action = (opts.action ?? "redirect") as RouterAction;
       return {
         level: finalLevel,
         action,

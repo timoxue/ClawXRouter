@@ -382,7 +382,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   // Hook 5: tool_result_persist — PII detection, memory_search filtering
   // =========================================================================
-  api.on("tool_result_persist", (event, ctx) => {
+  api.on("tool_result_persist", (event, ctx): ReturnType<Parameters<typeof api.on<"tool_result_persist">>[1]> => {
     try {
       const sessionKey = ctx.sessionKey ?? "";
       if (!sessionKey) return;
@@ -395,7 +395,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // Filter out the wrong track so each session type only sees its own.
       if (ctx.toolName === "memory_search") {
         const filtered = filterMemorySearchResults(msg, isSessionMarkedPrivate(sessionKey));
-        if (filtered) return { message: filtered };
+        if (filtered) return { message: filtered } as { message: typeof event.message };
         return;
       }
 
@@ -411,7 +411,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         markSessionAsPrivate(sessionKey, "S2");
         api.logger.info(`[GuardClaw] PII redacted in tool result (tool=${ctx.toolName ?? "unknown"})`);
         const modified = replaceMessageText(msg, redacted);
-        if (modified) return { message: modified };
+        if (modified) return { message: modified } as { message: typeof event.message };
       }
 
       // Persist to dual history if session is private
