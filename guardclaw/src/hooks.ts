@@ -126,15 +126,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason);
       if (decision.level === "S1" && decision.action === "passthrough") {
-        // Restore real provider so the session doesn't persist "guardclaw-privacy"
-        const agentDefaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
-        const primaryRef = (agentDefaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
-        const [realProvider, realModel] = primaryRef.includes("/")
-          ? [primaryRef.slice(0, primaryRef.indexOf("/")), primaryRef.slice(primaryRef.indexOf("/") + 1)]
-          : [undefined, undefined];
-        if (realProvider) {
-          return { providerOverride: realProvider, ...(realModel ? { modelOverride: realModel } : {}) };
-        }
         return;
       }
 
@@ -175,12 +166,14 @@ export function registerHooks(api: OpenClawPluginApi): void {
         const providerConfig = api.config.models?.providers?.[defaultProvider];
         if (providerConfig) {
           const pc = providerConfig as Record<string, unknown>;
-          stashOriginalProvider(sessionKey, {
-            baseUrl: (pc.baseUrl as string) ?? "https://api.openai.com/v1",
+          const providerApi = (pc.api as string) ?? undefined;
+          const stashTarget = {
+            baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(defaultProvider, providerApi),
             apiKey: (pc.apiKey as string) ?? "",
             provider: defaultProvider,
-            api: (pc.api as string) ?? undefined,
-          });
+            api: providerApi,
+          };
+          stashOriginalProvider(sessionKey, stashTarget);
         }
         api.logger.info(`[GuardClaw] S2 — routing through privacy proxy [${decision.routerId}]`);
         return { providerOverride: "guardclaw-privacy" };
@@ -382,7 +375,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   // Hook 5: tool_result_persist — PII detection, memory_search filtering
   // =========================================================================
-  api.on("tool_result_persist", (event, ctx): ReturnType<Parameters<typeof api.on<"tool_result_persist">>[1]> => {
+  api.on("tool_result_persist", (event, ctx) => {
     try {
       const sessionKey = ctx.sessionKey ?? "";
       if (!sessionKey) return;
@@ -395,7 +388,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // Filter out the wrong track so each session type only sees its own.
       if (ctx.toolName === "memory_search") {
         const filtered = filterMemorySearchResults(msg, isSessionMarkedPrivate(sessionKey));
-        if (filtered) return { message: filtered } as { message: typeof event.message };
+        if (filtered) return { message: filtered };
         return;
       }
 
@@ -411,7 +404,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         markSessionAsPrivate(sessionKey, "S2");
         api.logger.info(`[GuardClaw] PII redacted in tool result (tool=${ctx.toolName ?? "unknown"})`);
         const modified = replaceMessageText(msg, redacted);
-        if (modified) return { message: modified } as { message: typeof event.message };
+        if (modified) return { message: modified };
       }
 
       // Persist to dual history if session is private
@@ -615,6 +608,19 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
 function getPrivacyConfigFromApi(_api: OpenClawPluginApi): PrivacyConfig {
   return getLiveConfig();
+}
+
+function resolveDefaultBaseUrl(provider: string, api?: string): string {
+  const p = provider.toLowerCase();
+  const a = (api ?? "").toLowerCase();
+  if (p === "google" || p.includes("gemini") || p.includes("vertex") ||
+      a.includes("google") || a.includes("gemini")) {
+    return "https://generativelanguage.googleapis.com/v1beta";
+  }
+  if (p === "anthropic" || a === "anthropic-messages") {
+    return "https://api.anthropic.com";
+  }
+  return "https://api.openai.com/v1";
 }
 
 function shouldSkipMessage(msg: string): boolean {

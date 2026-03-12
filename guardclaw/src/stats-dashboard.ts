@@ -15,8 +15,6 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { getGlobalCollector } from "./token-stats.js";
 import { getLiveConfig, updateLiveConfig } from "./live-config.js";
 import { getAllSessionStates } from "./session-state.js";
@@ -25,29 +23,6 @@ import { DEFAULT_JUDGE_PROMPT } from "./routers/token-saver.js";
 import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "./local-model.js";
 import type { RouterPipeline } from "./router-pipeline.js";
 import { createConfigurableRouter } from "./routers/configurable.js";
-
-const DASHBOARD_CONFIG_PATH = join(
-  process.env.HOME ?? "/tmp",
-  ".openclaw",
-  "guardclaw-dashboard.json",
-);
-
-export function loadDashboardOverrides(): Record<string, unknown> | null {
-  try {
-    return JSON.parse(readFileSync(DASHBOARD_CONFIG_PATH, "utf-8")) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function saveDashboardOverrides(privacy: Record<string, unknown>): void {
-  try {
-    mkdirSync(join(process.env.HOME ?? "/tmp", ".openclaw"), { recursive: true });
-    writeFileSync(DASHBOARD_CONFIG_PATH, JSON.stringify(privacy, null, 2), "utf-8");
-  } catch {
-    // best-effort persistence
-  }
-}
 
 export type DashboardDeps = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -176,11 +151,31 @@ export async function statsHttpHandler(
       if (body.privacy) {
         updateLiveConfig(body.privacy);
 
-        const existingPrivacy = ((deps.pluginConfig as Record<string, unknown>).privacy ?? {}) as Record<string, unknown>;
-        const mergedPrivacy = { ...existingPrivacy, ...body.privacy } as Record<string, unknown>;
+        const fullConfig = await deps.loadConfig() as Record<string, unknown>;
+        const plugins = (fullConfig.plugins ?? {}) as Record<string, unknown>;
+        const entries = (plugins.entries ?? {}) as Record<string, unknown>;
+        const guardclaw = (entries[deps.pluginId] ?? {}) as Record<string, unknown>;
+        const existingConfig = (guardclaw.config ?? {}) as Record<string, unknown>;
+        const existingPrivacy = (existingConfig.privacy ?? {}) as Record<string, unknown>;
 
-        // Persist to guardclaw-local file (does NOT touch openclaw.json → no restart)
-        saveDashboardOverrides(mergedPrivacy);
+        const updatedConfig = {
+          ...fullConfig,
+          plugins: {
+            ...plugins,
+            entries: {
+              ...entries,
+              [deps.pluginId]: {
+                ...guardclaw,
+                config: {
+                  ...existingConfig,
+                  privacy: { ...existingPrivacy, ...body.privacy },
+                },
+              },
+            },
+          },
+        };
+
+        await deps.writeConfigFile(updatedConfig);
 
         // Dynamically register/update configurable routers in the pipeline
         if (body.privacy.routers && deps.pipeline) {
@@ -193,13 +188,15 @@ export async function statsHttpHandler(
               );
             }
           }
+          // Re-configure pipeline with updated router configs and order
+          const mergedPrivacy = { ...existingPrivacy, ...body.privacy } as Record<string, unknown>;
           deps.pipeline.configure({
             routers: mergedPrivacy.routers as Record<string, Parameters<typeof deps.pipeline.register>[1]>,
             pipeline: mergedPrivacy.pipeline as Record<string, string[]>,
           });
+          // Update deps.pluginConfig so test-classify picks up new options
+          (deps.pluginConfig as Record<string, unknown>).privacy = mergedPrivacy;
         }
-        // Update deps.pluginConfig so test-classify picks up new options
-        (deps.pluginConfig as Record<string, unknown>).privacy = mergedPrivacy;
       }
 
       json(res, { ok: true });
@@ -212,9 +209,9 @@ export async function statsHttpHandler(
   // ── Prompts API ──
 
   const EDITABLE_PROMPTS: Record<string, { label: string; defaultContent: string }> = {
-    "detection-system": { label: "Sensitivity Classifier Prompt", defaultContent: DEFAULT_DETECTION_SYSTEM_PROMPT },
-    "token-saver-judge": { label: "Cost-Optimizer (Task Complexity Classifier)", defaultContent: DEFAULT_JUDGE_PROMPT },
-    "pii-extraction": { label: "Personal Info Redaction Prompt", defaultContent: DEFAULT_PII_EXTRACTION_PROMPT },
+    "detection-system": { label: "Privacy Detection (S1/S2/S3 Classifier)", defaultContent: DEFAULT_DETECTION_SYSTEM_PROMPT },
+    "token-saver-judge": { label: "Token-Saver (Task Complexity Judge)", defaultContent: DEFAULT_JUDGE_PROMPT },
+    "pii-extraction": { label: "PII Extraction Engine", defaultContent: DEFAULT_PII_EXTRACTION_PROMPT },
   };
 
   if (req.method === "GET" && sub === "/api/prompts") {
@@ -283,34 +280,19 @@ export async function statsHttpHandler(
           routerId: decision.routerId,
         });
       } else {
-        // Full pipeline test — return merged result + individual router results
-        const [merged, individual] = await Promise.all([
-          deps.pipeline.run(
-            checkpoint,
-            { checkpoint, message: body.message, sessionKey: "__test__" },
-            deps.pluginConfig,
-          ),
-          deps.pipeline.runEach(
-            checkpoint,
-            { checkpoint, message: body.message, sessionKey: "__test__" },
-            deps.pluginConfig,
-          ),
-        ]);
+        // Full pipeline test
+        const decision = await deps.pipeline.run(
+          checkpoint,
+          { checkpoint, message: body.message, sessionKey: "__test__" },
+          deps.pluginConfig,
+        );
         json(res, {
-          level: merged.level,
-          action: merged.action,
-          target: merged.target,
-          reason: merged.reason,
-          confidence: merged.confidence,
-          routerId: merged.routerId,
-          routers: individual.map((d) => ({
-            routerId: d.routerId,
-            level: d.level,
-            action: d.action,
-            target: d.target,
-            reason: d.reason,
-            confidence: d.confidence,
-          })),
+          level: decision.level,
+          action: decision.action,
+          target: decision.target,
+          reason: decision.reason,
+          confidence: decision.confidence,
+          routerId: decision.routerId,
         });
       }
     } catch (err) {
@@ -502,12 +484,6 @@ function dashboardHtml(): string {
   .pipe-pick-btn.in-use:hover{border-color:#475569;color:#64748b}
   .tag.pipe-tag{cursor:grab;user-select:none}
   .tag.pipe-tag.dragging{opacity:.4}
-  .adv-toggle{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;font-size:12px;color:#64748b;margin:16px 0 8px;padding:6px 0}
-  .adv-toggle:hover{color:#94a3b8}
-  .adv-toggle .adv-arrow{font-size:10px;transition:transform .2s;display:inline-block}
-  .adv-toggle.open .adv-arrow{transform:rotate(90deg)}
-  .adv-body{display:none}
-  .adv-body.open{display:block}
 </style>
 </head>
 <body>
@@ -546,12 +522,12 @@ function dashboardHtml(): string {
       <div class="card-sub" id="local-reqs">0 requests</div>
     </div>
     <div class="card proxy">
-      <div class="card-label">Redacted Tokens</div>
+      <div class="card-label">Proxy Tokens</div>
       <div class="card-value" id="proxy-tokens">-</div>
       <div class="card-sub" id="proxy-reqs">0 requests</div>
     </div>
     <div class="card privacy">
-      <div class="card-label">Data Protection Rate</div>
+      <div class="card-label">Privacy Rate</div>
       <div class="card-value" id="privacy-rate">-</div>
       <div class="card-sub" id="privacy-sub">of total tokens protected</div>
     </div>
@@ -570,7 +546,7 @@ function dashboardHtml(): string {
 <!-- Sessions -->
 <div id="sessions-panel" class="panel">
   <table class="data-table">
-    <thead><tr><th>Session</th><th>Level</th><th>Cloud</th><th>Local</th><th>Redacted</th><th>Total</th><th>Requests</th><th>Last Active</th></tr></thead>
+    <thead><tr><th>Session</th><th>Level</th><th>Cloud</th><th>Local</th><th>Proxy</th><th>Total</th><th>Requests</th><th>Last Active</th></tr></thead>
     <tbody id="sessions-body"><tr><td colspan="8" class="empty-state">No session data yet</td></tr></tbody>
   </table>
 </div>
@@ -595,53 +571,47 @@ function dashboardHtml(): string {
   <!-- Pipeline Test (full pipeline) -->
   <div class="test-panel">
     <h3 style="font-size:14px;color:#94a3b8;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px">Test Classification</h3>
-    <div class="hint" style="margin-bottom:10px">Test how the router pipeline would classify a message (no changes applied).</div>
+    <div class="hint" style="margin-bottom:10px">Dry-run the full router pipeline on a message (no side effects).</div>
     <textarea class="test-input" id="test-message" placeholder="e.g. &quot;帮我分析一下这个月的工资单&quot; or &quot;write a poem about spring&quot;"></textarea>
     <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
       <select id="test-checkpoint" style="padding:9px 36px 9px 14px;background:#0f172a url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E&quot;) no-repeat right 14px center;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:12px;appearance:none;-webkit-appearance:none">
-        <option value="onUserMessage">User Message</option>
-        <option value="onToolCallProposed">Before Tool Runs</option>
-        <option value="onToolCallExecuted">After Tool Runs</option>
+        <option value="onUserMessage">onUserMessage</option>
+        <option value="onToolCallProposed">onToolCallProposed</option>
+        <option value="onToolCallExecuted">onToolCallExecuted</option>
       </select>
-      <button class="btn btn-primary btn-sm" onclick="runTestClassify()">Run Test</button>
+      <button class="btn btn-primary btn-sm" onclick="runTestClassify()">Classify (Full Pipeline)</button>
     </div>
     <div class="test-result" id="test-result">
-      <div style="font-size:11px;text-transform:uppercase;color:#64748b;letter-spacing:.5px;margin-bottom:8px">Merged Result</div>
       <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-level">-</span></div>
       <div class="test-result-row"><span class="test-result-label">Action</span><span class="test-result-value" id="tr-action">-</span></div>
       <div class="test-result-row"><span class="test-result-label">Target</span><span class="test-result-value" id="tr-target">-</span></div>
-      <div class="test-result-row"><span class="test-result-label">Deciding Router</span><span class="test-result-value" id="tr-router">-</span></div>
+      <div class="test-result-row"><span class="test-result-label">Router</span><span class="test-result-value" id="tr-router">-</span></div>
       <div class="test-result-row"><span class="test-result-label">Reason</span><span class="test-result-value" id="tr-reason">-</span></div>
       <div class="test-result-row"><span class="test-result-label">Confidence</span><span class="test-result-value" id="tr-confidence">-</span></div>
-      <div id="tr-per-router"></div>
     </div>
     <div class="test-loading" id="test-loading" style="display:none">Classifying...</div>
   </div>
 
-  <!-- Pipeline Order (Advanced) -->
-  <div class="adv-toggle" onclick="toggleAdv(this)">
-    <span class="adv-arrow">&#9654;</span> Router Execution Order (Advanced)
-  </div>
-  <div class="adv-body">
-    <div class="config-section">
-      <div class="hint" style="margin-bottom:12px">Click a router to add it to a stage. Drag tags to reorder. Click &times; to remove.</div>
-      <div class="field">
-        <label>User Message</label>
-        <div class="tag-list" id="cfg-tags-pipe-um"></div>
-        <div class="pipe-picker" id="pipe-picker-um"></div>
-      </div>
-      <div class="field">
-        <label>Before Tool Runs</label>
-        <div class="tag-list" id="cfg-tags-pipe-tcp"></div>
-        <div class="pipe-picker" id="pipe-picker-tcp"></div>
-      </div>
-      <div class="field">
-        <label>After Tool Runs</label>
-        <div class="tag-list" id="cfg-tags-pipe-tce"></div>
-        <div class="pipe-picker" id="pipe-picker-tce"></div>
-      </div>
-      <div class="save-bar"><button class="btn btn-primary btn-sm" onclick="savePipelineOrder()">Save Execution Order</button></div>
+  <!-- Pipeline Order -->
+  <div class="config-section">
+    <h3>Pipeline Order <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:12px">Click a router to add it to a checkpoint. Drag tags to reorder. Click &times; to remove.</div>
+    <div class="field">
+      <label>onUserMessage</label>
+      <div class="tag-list" id="cfg-tags-pipe-um"></div>
+      <div class="pipe-picker" id="pipe-picker-um"></div>
     </div>
+    <div class="field">
+      <label>onToolCallProposed</label>
+      <div class="tag-list" id="cfg-tags-pipe-tcp"></div>
+      <div class="pipe-picker" id="pipe-picker-tcp"></div>
+    </div>
+    <div class="field">
+      <label>onToolCallExecuted</label>
+      <div class="tag-list" id="cfg-tags-pipe-tce"></div>
+      <div class="pipe-picker" id="pipe-picker-tce"></div>
+    </div>
+    <div class="save-bar"><button class="btn btn-primary btn-sm" onclick="savePipelineOrder()">Save Pipeline Order</button></div>
   </div>
 
   <!-- ═══ Privacy Router Card ═══ -->
@@ -658,12 +628,39 @@ function dashboardHtml(): string {
         <label class="toggle"><input type="checkbox" id="cfg-privacy-enabled" checked><span class="slider"></span></label>
       </div>
 
-      <!-- Keywords (always visible) -->
+      <!-- Checkpoints -->
       <div class="subsection">
-        <h4>Keywords</h4>
+        <h4>Checkpoints</h4>
+        <div class="hint" style="margin-bottom:10px">Select which detectors run at each checkpoint for the privacy router.</div>
+        <div class="field">
+          <label>onUserMessage</label>
+          <div class="chip-group" id="ck-um">
+            <button class="chip" data-ck="um" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
+            <button class="chip" data-ck="um" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>onToolCallProposed</label>
+          <div class="chip-group" id="ck-tcp">
+            <button class="chip" data-ck="tcp" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
+            <button class="chip" data-ck="tcp" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>onToolCallExecuted</label>
+          <div class="chip-group" id="ck-tce">
+            <button class="chip" data-ck="tce" data-det="ruleDetector" onclick="toggleChip(this)">ruleDetector</button>
+            <button class="chip" data-ck="tce" data-det="localModelDetector" onclick="toggleChip(this)">localModelDetector</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detection Rules -->
+      <div class="subsection">
+        <h4>Detection Rules</h4>
         <div class="rules-grid">
           <div class="rules-col">
-            <h4>S2 &mdash; Sensitive (Redact &rarr; Cloud)</h4>
+            <h4>S2 &mdash; Moderate Sensitivity</h4>
             <div class="field">
               <label>Keywords</label>
               <div class="tag-list" id="cfg-tags-kw-s2"></div>
@@ -672,9 +669,33 @@ function dashboardHtml(): string {
                 <button class="btn btn-sm btn-outline" onclick="addTag('kw-s2')">Add</button>
               </div>
             </div>
+            <div class="field">
+              <label>Regex Patterns</label>
+              <div class="tag-list" id="cfg-tags-pat-s2"></div>
+              <div class="add-row">
+                <input id="cfg-tags-pat-s2-input" placeholder="e.g. \\d{3}-\\d{4}" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s2')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('pat-s2')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Names</label>
+              <div class="tag-list" id="cfg-tags-tool-s2"></div>
+              <div class="add-row">
+                <input id="cfg-tags-tool-s2-input" placeholder="e.g. read_file, execute_sql" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s2')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('tool-s2')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Paths</label>
+              <div class="tag-list" id="cfg-tags-toolpath-s2"></div>
+              <div class="add-row">
+                <input id="cfg-tags-toolpath-s2-input" placeholder="e.g. /secrets/, *.env" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s2')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s2')">Add</button>
+              </div>
+            </div>
           </div>
           <div class="rules-col">
-            <h4>S3 &mdash; Confidential (Local Model Only)</h4>
+            <h4>S3 &mdash; High Sensitivity</h4>
             <div class="field">
               <label>Keywords</label>
               <div class="tag-list" id="cfg-tags-kw-s3"></div>
@@ -683,15 +704,39 @@ function dashboardHtml(): string {
                 <button class="btn btn-sm btn-outline" onclick="addTag('kw-s3')">Add</button>
               </div>
             </div>
+            <div class="field">
+              <label>Regex Patterns</label>
+              <div class="tag-list" id="cfg-tags-pat-s3"></div>
+              <div class="add-row">
+                <input id="cfg-tags-pat-s3-input" placeholder="e.g. \\b\\d{3}-\\d{2}-\\d{4}\\b" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s3')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('pat-s3')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Names</label>
+              <div class="tag-list" id="cfg-tags-tool-s3"></div>
+              <div class="add-row">
+                <input id="cfg-tags-tool-s3-input" placeholder="e.g. execute_command" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s3')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('tool-s3')">Add</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tool Paths</label>
+              <div class="tag-list" id="cfg-tags-toolpath-s3"></div>
+              <div class="add-row">
+                <input id="cfg-tags-toolpath-s3-input" placeholder="e.g. /credentials/" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s3')}">
+                <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s3')">Add</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- LLM Prompt: Privacy Detection only (always visible) -->
+      <!-- LLM Prompts (privacy-specific) -->
       <div class="subsection">
-        <h4>LLM Prompt</h4>
-        <div class="hint" style="margin-bottom:12px">Prompt used by the local LLM to classify data sensitivity (S1/S2/S3).</div>
-        <div id="privacy-prompt-main"></div>
+        <h4>LLM Prompts</h4>
+        <div class="hint" style="margin-bottom:12px">Prompts used by the local LLM for sensitivity classification and PII extraction.</div>
+        <div id="privacy-prompt-editors"></div>
       </div>
 
       <!-- Per-router Test -->
@@ -711,118 +756,15 @@ function dashboardHtml(): string {
         <div class="test-loading" id="test-privacy-loading" style="display:none">Testing...</div>
       </div>
 
-      <!-- Advanced Configuration -->
-      <div class="adv-toggle" onclick="toggleAdv(this)">
-        <span class="adv-arrow">&#9654;</span> Advanced Configuration
-      </div>
-      <div class="adv-body">
-
-        <!-- When to Run -->
-        <div class="subsection">
-          <h4>When to Run</h4>
-          <div class="hint" style="margin-bottom:10px">Select which detectors run at each stage for the privacy router.</div>
-          <div class="field">
-            <label>User Message</label>
-            <div class="chip-group" id="ck-um">
-              <button class="chip" data-ck="um" data-det="ruleDetector" onclick="toggleChip(this)">Keyword &amp; Regex</button>
-              <button class="chip" data-ck="um" data-det="localModelDetector" onclick="toggleChip(this)">LLM Classifier</button>
-            </div>
-          </div>
-          <div class="field">
-            <label>Before Tool Runs</label>
-            <div class="chip-group" id="ck-tcp">
-              <button class="chip" data-ck="tcp" data-det="ruleDetector" onclick="toggleChip(this)">Keyword &amp; Regex</button>
-              <button class="chip" data-ck="tcp" data-det="localModelDetector" onclick="toggleChip(this)">LLM Classifier</button>
-            </div>
-          </div>
-          <div class="field">
-            <label>After Tool Runs</label>
-            <div class="chip-group" id="ck-tce">
-              <button class="chip" data-ck="tce" data-det="ruleDetector" onclick="toggleChip(this)">Keyword &amp; Regex</button>
-              <button class="chip" data-ck="tce" data-det="localModelDetector" onclick="toggleChip(this)">LLM Classifier</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Regex Patterns, Sensitive Tool Names, Sensitive File Paths -->
-        <div class="subsection">
-          <h4>Detection Rules (Regex &amp; Tool Filters)</h4>
-          <div class="rules-grid">
-            <div class="rules-col">
-              <h4>S2 &mdash; Sensitive (Redact &rarr; Cloud)</h4>
-              <div class="field">
-                <label>Regex Patterns</label>
-                <div class="tag-list" id="cfg-tags-pat-s2"></div>
-                <div class="add-row">
-                  <input id="cfg-tags-pat-s2-input" placeholder="e.g. \\d{3}-\\d{4}" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s2')}">
-                  <button class="btn btn-sm btn-outline" onclick="addTag('pat-s2')">Add</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Sensitive Tool Names</label>
-                <div class="tag-list" id="cfg-tags-tool-s2"></div>
-                <div class="add-row">
-                  <input id="cfg-tags-tool-s2-input" placeholder="e.g. read_file, execute_sql" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s2')}">
-                  <button class="btn btn-sm btn-outline" onclick="addTag('tool-s2')">Add</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Sensitive File Paths</label>
-                <div class="tag-list" id="cfg-tags-toolpath-s2"></div>
-                <div class="add-row">
-                  <input id="cfg-tags-toolpath-s2-input" placeholder="e.g. /secrets/, *.env" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s2')}">
-                  <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s2')">Add</button>
-                </div>
-              </div>
-            </div>
-            <div class="rules-col">
-              <h4>S3 &mdash; Confidential (Local Model Only)</h4>
-              <div class="field">
-                <label>Regex Patterns</label>
-                <div class="tag-list" id="cfg-tags-pat-s3"></div>
-                <div class="add-row">
-                  <input id="cfg-tags-pat-s3-input" placeholder="e.g. \\b\\d{3}-\\d{2}-\\d{4}\\b" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('pat-s3')}">
-                  <button class="btn btn-sm btn-outline" onclick="addTag('pat-s3')">Add</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Sensitive Tool Names</label>
-                <div class="tag-list" id="cfg-tags-tool-s3"></div>
-                <div class="add-row">
-                  <input id="cfg-tags-tool-s3-input" placeholder="e.g. execute_command" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('tool-s3')}">
-                  <button class="btn btn-sm btn-outline" onclick="addTag('tool-s3')">Add</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Sensitive File Paths</label>
-                <div class="tag-list" id="cfg-tags-toolpath-s3"></div>
-                <div class="add-row">
-                  <input id="cfg-tags-toolpath-s3-input" placeholder="e.g. /credentials/" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('toolpath-s3')}">
-                  <button class="btn btn-sm btn-outline" onclick="addTag('toolpath-s3')">Add</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Personal Info Redaction Prompt -->
-        <div class="subsection">
-          <h4>Personal Info Redaction Prompt</h4>
-          <div class="hint" style="margin-bottom:12px">Prompt used by the local LLM to extract and redact personal info.</div>
-          <div id="privacy-prompt-adv"></div>
-        </div>
-
-      </div>
-
       <div class="save-bar"><button class="btn btn-primary" onclick="savePrivacyRouter()">Save Privacy Router</button></div>
     </div>
   </div>
 
-  <!-- ═══ Cost-Optimizer Router Card ═══ -->
+  <!-- ═══ Token-Saver Router Card ═══ -->
   <div class="router-section">
     <div class="router-section-header" onclick="toggleSection(this)">
       <span class="section-arrow">&#9660;</span>
-      <h3>Cost-Optimizer Router</h3>
+      <h3>Token-Saver Router</h3>
       <span class="router-id-badge">token-saver</span>
     </div>
     <div class="router-section-body">
@@ -832,11 +774,27 @@ function dashboardHtml(): string {
         <label class="toggle"><input type="checkbox" id="cfg-ts-enabled"><span class="slider"></span></label>
       </div>
 
-      <!-- Tier-to-Model (always visible) -->
+      <!-- Judge Model -->
       <div class="subsection">
-        <h4>Complexity Level &rarr; Model</h4>
+        <h4>Judge Model</h4>
+        <div class="hint" style="margin-bottom:10px">LLM used to classify task complexity. Falls back to the global Local Model settings if empty.</div>
+        <div class="field"><label>Judge Endpoint</label><input id="cfg-ts-endpoint" placeholder="(inherits from Local Model)"></div>
+        <div class="field"><label>Judge Model</label><input id="cfg-ts-model" placeholder="(inherits from Local Model)"></div>
+        <div class="field">
+          <label>Judge API Protocol</label>
+          <select id="cfg-ts-providertype">
+            <option value="openai-compatible">openai-compatible</option>
+            <option value="ollama-native">ollama-native</option>
+            <option value="custom">custom</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Tier-to-Model -->
+      <div class="subsection">
+        <h4>Tier &rarr; Model Mapping</h4>
         <div class="tier-grid">
-          <div class="tier-grid-header">Complexity</div>
+          <div class="tier-grid-header">Tier</div>
           <div class="tier-grid-header">Provider</div>
           <div class="tier-grid-header">Model</div>
           <div class="tier-label">SIMPLE</div><input id="cfg-ts-tier-SIMPLE-provider" placeholder="openai"><input id="cfg-ts-tier-SIMPLE-model" placeholder="gpt-4o-mini">
@@ -846,19 +804,28 @@ function dashboardHtml(): string {
         </div>
       </div>
 
-      <!-- LLM Prompt (always visible) -->
+      <!-- Cache TTL -->
+      <div class="subsection">
+        <h4>Cache</h4>
+        <div class="field">
+          <label>Cache TTL (ms)</label>
+          <input id="cfg-ts-cachettl" type="number" placeholder="300000" style="max-width:180px">
+        </div>
+      </div>
+
+      <!-- LLM Prompt (token-saver-specific) -->
       <div class="subsection">
         <h4>LLM Prompt</h4>
-        <div class="hint" style="margin-bottom:12px">Prompt used by the classifier LLM to determine task complexity.</div>
+        <div class="hint" style="margin-bottom:12px">Prompt used by the judge LLM to classify task complexity.</div>
         <div id="tokensaver-prompt-editors"></div>
       </div>
 
-      <!-- Per-router Test (always visible) -->
+      <!-- Per-router Test -->
       <div class="subsection">
-        <h4>Test (Cost-Optimizer Only)</h4>
-        <textarea class="test-input" id="test-token-saver-message" placeholder="Enter a message to test the cost-optimizer router alone..."></textarea>
+        <h4>Test (Token-Saver Only)</h4>
+        <textarea class="test-input" id="test-token-saver-message" placeholder="Enter a message to test the token-saver router alone..."></textarea>
         <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-          <button class="btn btn-primary btn-sm" onclick="runRouterTest('token-saver')">Test Cost-Optimizer</button>
+          <button class="btn btn-primary btn-sm" onclick="runRouterTest('token-saver')">Test Token-Saver</button>
         </div>
         <div class="test-result" id="test-token-saver-result">
           <div class="test-result-row"><span class="test-result-label">Level</span><span class="test-result-value" id="tr-token-saver-level">-</span></div>
@@ -870,24 +837,7 @@ function dashboardHtml(): string {
         <div class="test-loading" id="test-token-saver-loading" style="display:none">Testing...</div>
       </div>
 
-      <!-- Advanced Configuration -->
-      <div class="adv-toggle" onclick="toggleAdv(this)">
-        <span class="adv-arrow">&#9654;</span> Advanced Configuration
-      </div>
-      <div class="adv-body">
-
-        <!-- Cache Duration -->
-        <div class="subsection">
-          <h4>Cache</h4>
-          <div class="field">
-            <label>Cache Duration (ms)</label>
-            <input id="cfg-ts-cachettl" type="number" placeholder="300000" style="max-width:180px">
-          </div>
-        </div>
-
-      </div>
-
-      <div class="save-bar"><button class="btn btn-primary" onclick="saveTokenSaverConfig()">Save Cost-Optimizer</button></div>
+      <div class="save-bar"><button class="btn btn-primary" onclick="saveTokenSaverConfig()">Save Token-Saver</button></div>
     </div>
   </div>
 
@@ -900,7 +850,7 @@ function dashboardHtml(): string {
       <input id="new-router-id" placeholder="Router ID (e.g. content-filter)" style="flex:1;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;outline:none">
       <button class="btn btn-primary" onclick="addCustomRouter()">+ Add Custom Router</button>
     </div>
-    <div class="hint" style="margin-top:8px">Create a new router with keyword rules and an optional LLM classification prompt. Added routers appear above and can be included in Router Execution Order.</div>
+    <div class="hint" style="margin-top:8px">Create a new router with keyword rules and an optional LLM classification prompt. Added routers appear above and can be included in Pipeline Order.</div>
   </div>
 
 </div>
@@ -935,22 +885,7 @@ function dashboardHtml(): string {
   </div>
 
   <div class="config-section">
-    <h3>Cost-Optimizer Classifier <span class="badge badge-hot">instant</span></h3>
-    <div class="hint" style="margin-bottom:14px">LLM used by the Cost-Optimizer to determine task complexity. Falls back to the Local Model settings above if empty.</div>
-    <div class="field"><label>Endpoint</label><input id="cfg-ts-endpoint" placeholder="(inherits from Local Model)"></div>
-    <div class="field"><label>Model</label><input id="cfg-ts-model" placeholder="(inherits from Local Model)"></div>
-    <div class="field">
-      <label>API Protocol</label>
-      <select id="cfg-ts-providertype">
-        <option value="openai-compatible">openai-compatible</option>
-        <option value="ollama-native">ollama-native</option>
-        <option value="custom">custom</option>
-      </select>
-    </div>
-  </div>
-
-  <div class="config-section">
-    <h3>Privacy Guard Agent <span class="badge badge-hot">instant</span></h3>
+    <h3>Guard Agent <span class="badge badge-hot">instant</span></h3>
     <div class="field"><label>Agent ID</label><input id="cfg-ga-id" placeholder="guard"></div>
     <div class="field"><label>Workspace</label><input id="cfg-ga-workspace" placeholder="~/.openclaw/workspace-guard"></div>
     <div class="field"><label>Model (provider/model)</label><input id="cfg-ga-model" placeholder="ollama/qwen3.5-27b"></div>
@@ -959,10 +894,10 @@ function dashboardHtml(): string {
   <div class="config-section">
     <h3>Routing Policy <span class="badge badge-hot">instant</span></h3>
     <div class="field">
-      <label>Sensitive Data Routing</label>
+      <label>S2 Handling Strategy</label>
       <select id="cfg-s2policy">
-        <option value="proxy">Proxy (redact personal info before sending)</option>
-        <option value="local">Local only (process on-device, no cloud)</option>
+        <option value="proxy">proxy (strip PII via privacy proxy)</option>
+        <option value="local">local (route entirely to local model)</option>
       </select>
     </div>
     <div class="field">
@@ -975,7 +910,7 @@ function dashboardHtml(): string {
   <div class="config-section">
     <h3>Session Settings <span class="badge badge-hot">instant</span></h3>
     <div class="field-toggle">
-      <label>Separate Guard Chat History</label>
+      <label>Isolate Guard History</label>
       <label class="toggle"><input type="checkbox" id="cfg-sess-isolate" checked><span class="slider"></span></label>
     </div>
     <div class="field"><label>Base Directory</label><input id="cfg-sess-basedir" placeholder="~/.openclaw"></div>
@@ -984,7 +919,7 @@ function dashboardHtml(): string {
   <div class="config-section">
     <h3>Local Providers <span class="badge badge-hot">instant</span></h3>
     <div class="field">
-      <label>Additional providers treated as &quot;local&quot; (safe for confidential data routing)</label>
+      <label>Additional providers treated as &quot;local&quot; (safe for S3 routing)</label>
       <div class="tag-list" id="cfg-tags-lp"></div>
       <div class="add-row">
         <input id="cfg-tags-lp-input" placeholder="e.g. my-inference-server" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag('lp')}">
@@ -1189,7 +1124,7 @@ async function refreshStats() {
       : 'No data yet';
 
     document.getElementById('detail-body').innerHTML =
-      fillRow('Cloud', lt.cloud) + fillRow('Local', lt.local) + fillRow('Redacted', lt.proxy);
+      fillRow('Cloud', lt.cloud) + fillRow('Local', lt.local) + fillRow('Proxy', lt.proxy);
 
     var infoHtml = '';
     if (summary.startedAt) infoHtml += 'Uptime: ' + timeAgo(summary.startedAt);
@@ -1228,7 +1163,7 @@ function updateChart(hourly) {
         datasets: [
           { label: 'Cloud', data: cloudData, borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3 },
           { label: 'Local', data: localData, borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.1)', fill: true, tension: 0.3 },
-          { label: 'Redacted', data: proxyData, borderColor: '#fb923c', backgroundColor: 'rgba(251,146,60,0.1)', fill: true, tension: 0.3 },
+          { label: 'Proxy', data: proxyData, borderColor: '#fb923c', backgroundColor: 'rgba(251,146,60,0.1)', fill: true, tension: 0.3 },
         ],
       },
       options: {
@@ -1397,20 +1332,6 @@ async function saveConfig() {
     var typeVal = document.getElementById('cfg-lm-type').value;
     var portVal = document.getElementById('cfg-proxyport').value;
 
-    // Collect Cost-Optimizer classifier model fields (displayed in this tab)
-    var tsEp = document.getElementById('cfg-ts-endpoint').value.trim();
-    var tsMd = document.getElementById('cfg-ts-model').value.trim();
-    var tsPt = document.getElementById('cfg-ts-providertype').value;
-    var tsOpts = {};
-    if (tsEp) tsOpts.judgeEndpoint = tsEp;
-    if (tsMd) tsOpts.judgeModel = tsMd;
-    if (tsPt) tsOpts.judgeProviderType = tsPt;
-    var existingTs = _routers['token-saver'] || {};
-    var mergedTsOpts = Object.assign({}, existingTs.options || {}, tsOpts);
-
-    var currentRouters = Object.assign({}, _routers);
-    currentRouters['token-saver'] = Object.assign({}, existingTs, { options: mergedTsOpts });
-
     var payload = {
       privacy: {
         enabled: document.getElementById('cfg-enabled').checked,
@@ -1435,7 +1356,6 @@ async function saveConfig() {
           isolateGuardHistory: document.getElementById('cfg-sess-isolate').checked,
           baseDir: document.getElementById('cfg-sess-basedir').value || undefined,
         },
-        routers: currentRouters,
       },
     };
     var res = await fetch(BASE + '/config', {
@@ -1475,8 +1395,7 @@ var _prompts = {};
 async function loadPrompts() {
   try {
     _prompts = await fetch(BASE + '/prompts').then(function(r) { return r.json(); });
-    renderRouterPrompts('privacy-prompt-main', PRIVACY_PROMPTS_MAIN);
-    renderRouterPrompts('privacy-prompt-adv', PRIVACY_PROMPTS_ADV);
+    renderRouterPrompts('privacy-prompt-editors', PRIVACY_PROMPTS);
     renderRouterPrompts('tokensaver-prompt-editors', TOKENSAVER_PROMPTS);
   } catch (e) { /* non-critical */ }
 }
@@ -1536,27 +1455,6 @@ async function runTestClassify() {
     document.getElementById('tr-router').textContent = data.routerId || '(none)';
     document.getElementById('tr-reason').textContent = data.reason || '(none)';
     document.getElementById('tr-confidence').textContent = data.confidence != null ? (data.confidence * 100).toFixed(0) + '%' : '-';
-    var perEl = document.getElementById('tr-per-router');
-    if (data.routers && data.routers.length > 0) {
-      var html = '<div style="margin-top:14px;padding-top:12px;border-top:1px solid #1e293b">' +
-        '<div style="font-size:11px;text-transform:uppercase;color:#64748b;letter-spacing:.5px;margin-bottom:8px">Individual Router Results</div>';
-      data.routers.forEach(function(r) {
-        html += '<div style="background:#1e293b;border-radius:6px;padding:10px 14px;margin-bottom:6px">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center">' +
-          '<span style="font-weight:600;color:#e2e8f0;font-size:13px">' + (r.routerId || '?') + '</span>' +
-          '<span class="level-tag level-' + r.level + '">' + r.level + '</span></div>' +
-          '<div style="font-size:12px;color:#94a3b8;margin-top:4px">' +
-          (r.action || 'passthrough') +
-          (r.target ? ' → ' + r.target.provider + '/' + r.target.model : '') +
-          '</div>' +
-          '<div style="font-size:12px;color:#64748b;margin-top:2px">' + (r.reason || '-') + '</div>' +
-          '</div>';
-      });
-      html += '</div>';
-      perEl.innerHTML = html;
-    } else {
-      perEl.innerHTML = '';
-    }
     resultEl.classList.add('visible');
   } catch (e) {
     loadingEl.style.display = 'none';
@@ -1622,7 +1520,7 @@ async function saveTokenSaverConfig() {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast('Cost-Optimizer config saved');
+      showToast('Token-Saver config saved');
       loadConfig();
     } else {
       showToast('Save failed: ' + (result.error || 'unknown'), true);
@@ -1640,16 +1538,9 @@ function toggleSection(el) {
   if (body) body.classList.toggle('collapsed');
 }
 
-function toggleAdv(el) {
-  el.classList.toggle('open');
-  var body = el.nextElementSibling;
-  if (body) body.classList.toggle('open');
-}
-
 // ── Per-Router Prompt Rendering ──
 
-var PRIVACY_PROMPTS_MAIN = ['detection-system'];
-var PRIVACY_PROMPTS_ADV = ['pii-extraction'];
+var PRIVACY_PROMPTS = ['detection-system', 'pii-extraction'];
 var TOKENSAVER_PROMPTS = ['token-saver-judge'];
 
 function renderRouterPrompts(containerId, promptNames) {
@@ -1765,7 +1656,7 @@ async function savePipelineOrder() {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast('Execution order saved');
+      showToast('Pipeline order saved');
     } else {
       showToast('Save failed: ' + (result.error || 'unknown'), true);
     }
@@ -1824,24 +1715,24 @@ function renderCustomRouterCards() {
           '<h4>Keyword Rules</h4>' +
           '<div class="rules-grid">' +
             '<div class="rules-col">' +
-              '<h4>S2 &mdash; Sensitive Keywords</h4>' +
+              '<h4>S2 Keywords</h4>' +
               '<div class="tag-list" id="cfg-tags-cr-kw-s2-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-kw-s2-' + escHtml(id) + '-input" placeholder="Add S2 keyword" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-kw-s2-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-kw-s2-' + escHtml(id) + '\\')">Add</button>' +
               '</div>' +
-              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S2 &mdash; Sensitive Patterns (regex)</h4></div>' +
+              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S2 Patterns (regex)</h4></div>' +
               '<div class="tag-list" id="cfg-tags-cr-pat-s2-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-pat-s2-' + escHtml(id) + '-input" placeholder="Add S2 pattern" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-pat-s2-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-pat-s2-' + escHtml(id) + '\\')">Add</button>' +
               '</div>' +
             '</div>' +
             '<div class="rules-col">' +
-              '<h4>S3 &mdash; Confidential Keywords</h4>' +
+              '<h4>S3 Keywords</h4>' +
               '<div class="tag-list" id="cfg-tags-cr-kw-s3-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-kw-s3-' + escHtml(id) + '-input" placeholder="Add S3 keyword" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-kw-s3-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-kw-s3-' + escHtml(id) + '\\')">Add</button>' +
               '</div>' +
-              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S3 &mdash; Confidential Patterns (regex)</h4></div>' +
+              '<div style="margin-top:12px"><h4 style="font-size:12px;color:#64748b;margin-bottom:6px">S3 Patterns (regex)</h4></div>' +
               '<div class="tag-list" id="cfg-tags-cr-pat-s3-' + escHtml(id) + '"></div>' +
               '<div class="add-row">' +
                 '<input id="cfg-tags-cr-pat-s3-' + escHtml(id) + '-input" placeholder="Add S3 pattern" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addTag(\\'cr-pat-s3-' + escHtml(id) + '\\')}"><button class="btn btn-sm btn-outline" onclick="addTag(\\'cr-pat-s3-' + escHtml(id) + '\\')">Add</button>' +
@@ -1851,7 +1742,7 @@ function renderCustomRouterCards() {
         '</div>' +
 
         '<div class="subsection">' +
-          '<h4>Classification Prompt <span style="font-size:11px;color:#64748b;text-transform:none;letter-spacing:0">(optional)</span></h4>' +
+          '<h4>LLM System Prompt <span style="font-size:11px;color:#64748b;text-transform:none;letter-spacing:0">(optional)</span></h4>' +
           '<div class="hint" style="margin-bottom:10px">If set, the local LLM will classify messages using this prompt. Should output JSON with {level, reason}.</div>' +
           '<textarea class="prompt-editor" id="cr-prompt-' + escHtml(id) + '">' + escHtml(prompt) + '</textarea>' +
         '</div>' +

@@ -166,6 +166,12 @@ export class RouterPipeline {
     // Phase 1: fast (high-weight) routers in parallel
     const fastResults = await this.runGroup(fast, context, pluginConfig);
 
+    for (const r of fastResults) {
+      this.logger.info(
+        `[RouterPipeline] ${r.decision.routerId}: level=${r.decision.level} action=${r.decision.action ?? "passthrough"} ${r.decision.reason ? `reason="${r.decision.reason}"` : ""} ${r.decision.target ? `target=${r.decision.target.provider}/${r.decision.target.model}` : ""}`.trim(),
+      );
+    }
+
     const hasNonPassthrough = fastResults.some(
       (r) => r.decision.level !== "S1" && r.decision.action !== "passthrough",
     );
@@ -181,6 +187,11 @@ export class RouterPipeline {
 
     // Phase 2: slow (low-weight) routers — only when fast routers all said S1
     const slowResults = await this.runGroup(slow, context, pluginConfig);
+    for (const r of slowResults) {
+      this.logger.info(
+        `[RouterPipeline] ${r.decision.routerId}: level=${r.decision.level} action=${r.decision.action ?? "passthrough"} ${r.decision.reason ? `reason="${r.decision.reason}"` : ""} ${r.decision.target ? `target=${r.decision.target.provider}/${r.decision.target.model}` : ""}`.trim(),
+      );
+    }
     return mergeDecisionsWeighted([...fastResults, ...slowResults]);
   }
 
@@ -211,34 +222,6 @@ export class RouterPipeline {
       }
     }
 
-    return results;
-  }
-
-  /**
-   * Run all routers for a checkpoint and return individual results (for dashboard testing).
-   */
-  async runEach(
-    checkpoint: Checkpoint,
-    context: DetectionContext,
-    pluginConfig: Record<string, unknown>,
-  ): Promise<RouterDecision[]> {
-    const routerIds = this.getRoutersForCheckpoint(checkpoint);
-    const results: RouterDecision[] = [];
-    const ctx = { ...context, dryRun: true };
-    const tasks = routerIds
-      .filter((id) => this.routers.has(id))
-      .map(async (id) => {
-        const router = this.routers.get(id)!;
-        try {
-          const d = await router.detect(ctx, pluginConfig);
-          d.routerId = id;
-          return d;
-        } catch {
-          return { level: "S1" as const, action: "passthrough" as const, reason: "error", routerId: id };
-        }
-      });
-    const settled = await Promise.all(tasks);
-    results.push(...settled);
     return results;
   }
 

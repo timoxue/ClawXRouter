@@ -214,9 +214,11 @@ export const tokenSaverRouter: GuardClawRouter = {
 
       const tier = parseTier(response);
       classificationCache.set(cacheKey, { tier, ts: Date.now() });
-      return buildDecision(tier, config);
-    } catch {
-      // LLM judge failed — pass through without routing (don't block the request)
+      const decision = buildDecision(tier, config);
+      console.log(`[GuardClaw] [TokenSaver] tier=${tier} → redirect to ${decision.target?.provider}/${decision.target?.model}`);
+      return decision;
+    } catch (err) {
+      console.error(`[GuardClaw] [TokenSaver] judge call failed:`, err);
       return { level: "S1", action: "passthrough", reason: "judge call failed — passthrough" };
     }
   },

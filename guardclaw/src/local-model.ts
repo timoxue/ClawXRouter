@@ -64,21 +64,28 @@ export async function callChatCompletion(
   options?: ChatCompletionOptions & { providerType?: EdgeProviderType; customModule?: string },
 ): Promise<string> {
   const providerType = options?.providerType ?? "openai-compatible";
+  console.log(`[GuardClaw] [DEBUG] calling LLM: ${endpoint} ${model} (${providerType})`);
 
+  let result: string;
   switch (providerType) {
     case "ollama-native":
-      return callOllamaNative(endpoint, model, messages, options);
+      result = await callOllamaNative(endpoint, model, messages, options);
+      break;
     case "custom": {
       if (!options?.customModule) {
         throw new Error("Custom edge provider requires a 'module' path in localModel config");
       }
       const provider = await loadCustomProvider(options.customModule);
-      return provider.callChat(endpoint, model, messages, options);
+      result = await provider.callChat(endpoint, model, messages, options);
+      break;
     }
     case "openai-compatible":
     default:
-      return callOpenAICompatible(endpoint, model, messages, options);
+      result = await callOpenAICompatible(endpoint, model, messages, options);
+      break;
   }
+  console.log(`[GuardClaw] [DEBUG] LLM response (${model}): ${result.slice(0, 200)}`);
+  return result;
 }
 
 /**

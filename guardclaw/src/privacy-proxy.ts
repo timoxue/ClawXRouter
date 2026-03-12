@@ -167,59 +167,6 @@ export function cleanGoogleToolSchemas(
   return cleaned;
 }
 
-// ── Proxy provider name replacement ──
-
-/**
- * Replace "guardclaw-privacy" in system prompt with the real provider name
- * so the LLM never sees the internal routing alias.
- */
-export function replaceProxyProviderInSystemPrompt(
-  parsed: Record<string, unknown>,
-  realProvider: string,
-): boolean {
-  let replaced = false;
-
-  // OpenAI / Anthropic-messages format: messages[].role === "system"
-  const messages = parsed.messages as Array<{ role: string; content: unknown }> | undefined;
-  if (Array.isArray(messages)) {
-    for (const msg of messages) {
-      if (msg.role !== "system" || typeof msg.content !== "string") continue;
-      const updated = msg.content.replace(/guardclaw-privacy/g, realProvider);
-      if (updated !== msg.content) {
-        msg.content = updated;
-        replaced = true;
-      }
-    }
-  }
-
-  // Anthropic top-level "system" field
-  if (typeof parsed.system === "string") {
-    const updated = (parsed.system as string).replace(/guardclaw-privacy/g, realProvider);
-    if (updated !== parsed.system) {
-      parsed.system = updated;
-      replaced = true;
-    }
-  }
-
-  // Google Gemini: system_instruction / systemInstruction
-  for (const key of ["system_instruction", "systemInstruction"]) {
-    const si = parsed[key] as Record<string, unknown> | undefined;
-    if (!si || typeof si !== "object") continue;
-    const parts = si.parts as Array<Record<string, unknown>> | undefined;
-    if (!Array.isArray(parts)) continue;
-    for (const part of parts) {
-      if (typeof part.text !== "string") continue;
-      const updated = part.text.replace(/guardclaw-privacy/g, realProvider);
-      if (updated !== part.text) {
-        part.text = updated;
-        replaced = true;
-      }
-    }
-  }
-
-  return replaced;
-}
-
 // ── PII marker stripping ──
 
 /**
@@ -287,6 +234,20 @@ export function stripPiiMarkersGoogleContents(
 
 const ANTHROPIC_PATTERNS = ["anthropic"];
 const ANTHROPIC_APIS = ["anthropic-messages"];
+
+const GOOGLE_NATIVE_APIS = ["google-generative-ai", "google-gemini-cli", "google-ai-studio"];
+const GOOGLE_URL_MARKERS = ["generativelanguage.googleapis.com", "aiplatform.googleapis.com"];
+
+export function isGoogleTarget(target: OriginalProviderTarget): boolean {
+  const api = (target.api ?? "").toLowerCase();
+  const provider = target.provider.toLowerCase();
+  const url = target.baseUrl.toLowerCase();
+
+  if (GOOGLE_NATIVE_APIS.some((p) => api.includes(p))) return true;
+  if (provider === "google" || provider.includes("gemini") || provider.includes("vertex")) return true;
+  if (GOOGLE_URL_MARKERS.some((p) => url.includes(p))) return true;
+  return false;
+}
 
 export function resolveAuthHeaders(target: OriginalProviderTarget): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -369,14 +330,27 @@ function completionToSSE(responseJson: Record<string, unknown>): string {
  * incoming request path. The proxy is mounted at /v1, so we strip that
  * prefix and append the remainder to the target baseUrl.
  *
+ * For Google providers using native APIs (google-generative-ai, etc.),
+ * the OpenAI-compatible endpoint lives under `/openai/` on the same host.
+ * We insert that segment so the proxy can forward OpenAI-format requests.
+ *
  * Example:
  *   req.url = "/v1/chat/completions"
  *   target.baseUrl = "https://api.openai.com/v1"
  *   → "https://api.openai.com/v1/chat/completions"
+ *
+ *   target.baseUrl = "https://generativelanguage.googleapis.com/v1beta"
+ *   target = Google provider
+ *   → "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
  */
-export function buildUpstreamUrl(targetBaseUrl: string, reqUrl: string | undefined): string {
-  const baseUrl = targetBaseUrl.replace(/\/+$/, "");
+export function buildUpstreamUrl(targetBaseUrl: string, reqUrl: string | undefined, target?: OriginalProviderTarget): string {
+  let baseUrl = targetBaseUrl.replace(/\/+$/, "");
   const forwardPath = (reqUrl ?? "/v1/chat/completions").replace(/^\/v1/, "");
+
+  if (target && isGoogleTarget(target) && !baseUrl.includes("/openai")) {
+    baseUrl = `${baseUrl}/openai`;
+  }
+
   return `${baseUrl}${forwardPath}`;
 }
 
@@ -514,14 +488,8 @@ export async function startPrivacyProxy(
         return;
       }
 
-      // Step 3.5: Replace "guardclaw-privacy" in system prompt with real provider
-      const hadProviderFix = replaceProxyProviderInSystemPrompt(parsed, target.provider);
-      if (hadProviderFix) {
-        log.info(`[GuardClaw Proxy] Replaced proxy provider name → ${target.provider} in system prompt`);
-      }
-
       // Step 4: Build upstream URL (transparent path forwarding)
-      const upstreamUrl = buildUpstreamUrl(target.baseUrl, req.url);
+      const upstreamUrl = buildUpstreamUrl(target.baseUrl, req.url, target);
 
       // Step 5: Forward cleaned request with provider-aware auth
       const upstreamHeaders: Record<string, string> = {
