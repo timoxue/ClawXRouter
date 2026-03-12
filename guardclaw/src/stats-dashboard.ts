@@ -876,22 +876,6 @@ function dashboardHtml(): string {
       </div>
       <div class="adv-body">
 
-        <!-- Classifier Model -->
-        <div class="subsection">
-          <h4>Classifier Model</h4>
-          <div class="hint" style="margin-bottom:10px">LLM used to determine task complexity. Falls back to the global Local Model settings if empty.</div>
-          <div class="field"><label>Classifier Endpoint</label><input id="cfg-ts-endpoint" placeholder="(inherits from Local Model)"></div>
-          <div class="field"><label>Classifier Model</label><input id="cfg-ts-model" placeholder="(inherits from Local Model)"></div>
-          <div class="field">
-            <label>Classifier API Protocol</label>
-            <select id="cfg-ts-providertype">
-              <option value="openai-compatible">openai-compatible</option>
-              <option value="ollama-native">ollama-native</option>
-              <option value="custom">custom</option>
-            </select>
-          </div>
-        </div>
-
         <!-- Cache Duration -->
         <div class="subsection">
           <h4>Cache</h4>
@@ -948,6 +932,21 @@ function dashboardHtml(): string {
     <div class="field"><label>Model</label><input id="cfg-lm-model" placeholder="openbmb/minicpm4.1"></div>
     <div class="field"><label>API Key</label><input id="cfg-lm-apikey" type="password" placeholder="sk-..."></div>
     <div class="field" id="cfg-lm-module-wrap" style="display:none"><label>Custom Module Path</label><input id="cfg-lm-module" placeholder="./my-provider.js"></div>
+  </div>
+
+  <div class="config-section">
+    <h3>Cost-Optimizer Classifier <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px">LLM used by the Cost-Optimizer to determine task complexity. Falls back to the Local Model settings above if empty.</div>
+    <div class="field"><label>Endpoint</label><input id="cfg-ts-endpoint" placeholder="(inherits from Local Model)"></div>
+    <div class="field"><label>Model</label><input id="cfg-ts-model" placeholder="(inherits from Local Model)"></div>
+    <div class="field">
+      <label>API Protocol</label>
+      <select id="cfg-ts-providertype">
+        <option value="openai-compatible">openai-compatible</option>
+        <option value="ollama-native">ollama-native</option>
+        <option value="custom">custom</option>
+      </select>
+    </div>
   </div>
 
   <div class="config-section">
@@ -1398,6 +1397,20 @@ async function saveConfig() {
     var typeVal = document.getElementById('cfg-lm-type').value;
     var portVal = document.getElementById('cfg-proxyport').value;
 
+    // Collect Cost-Optimizer classifier model fields (displayed in this tab)
+    var tsEp = document.getElementById('cfg-ts-endpoint').value.trim();
+    var tsMd = document.getElementById('cfg-ts-model').value.trim();
+    var tsPt = document.getElementById('cfg-ts-providertype').value;
+    var tsOpts = {};
+    if (tsEp) tsOpts.judgeEndpoint = tsEp;
+    if (tsMd) tsOpts.judgeModel = tsMd;
+    if (tsPt) tsOpts.judgeProviderType = tsPt;
+    var existingTs = _routers['token-saver'] || {};
+    var mergedTsOpts = Object.assign({}, existingTs.options || {}, tsOpts);
+
+    var currentRouters = Object.assign({}, _routers);
+    currentRouters['token-saver'] = Object.assign({}, existingTs, { options: mergedTsOpts });
+
     var payload = {
       privacy: {
         enabled: document.getElementById('cfg-enabled').checked,
@@ -1422,6 +1435,7 @@ async function saveConfig() {
           isolateGuardHistory: document.getElementById('cfg-sess-isolate').checked,
           baseDir: document.getElementById('cfg-sess-basedir').value || undefined,
         },
+        routers: currentRouters,
       },
     };
     var res = await fetch(BASE + '/config', {
