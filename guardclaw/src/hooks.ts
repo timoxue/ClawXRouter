@@ -422,16 +422,59 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 6: before_message_write — Sanitize session transcript
+  // Hook 6: before_message_write — Dual history persistence + sanitize transcript
   // =========================================================================
   api.on("before_message_write", (event, ctx) => {
     try {
       const sessionKey = ctx.sessionKey ?? "";
-      const pending = getPendingDetection(sessionKey);
-      if (!pending || pending.level === "S1") return;
+      if (!sessionKey) return;
 
       const msg = event.message;
-      if (!msg || (msg as { role?: string }).role !== "user") return;
+      if (!msg) return;
+
+      const role = (msg as { role?: string }).role ?? "";
+      const pending = getPendingDetection(sessionKey);
+
+      // ── Dual session history persistence ──
+      // Persist every message (user, assistant, system) to full/clean tracks
+      // when the session is private.  Tool messages are handled separately
+      // in tool_result_persist (Hook 5) to avoid double-writes.
+      if (isSessionMarkedPrivate(sessionKey) && role !== "tool") {
+        const sessionManager = getDefaultSessionManager();
+        const msgText = extractMessageText(msg);
+        const ts = Date.now();
+
+        if (role === "user" && pending && pending.level !== "S1") {
+          // S2/S3 user message: original content → full, sanitized → clean
+          const original = pending.originalPrompt ?? msgText;
+          sessionManager.writeToFull(sessionKey, {
+            role: "user", content: original, timestamp: ts, sessionKey,
+          }).catch((err) => {
+            console.error("[GuardClaw] Failed to persist user message to full history:", err);
+          });
+          const cleanContent = pending.level === "S3"
+            ? "🔒 [Private content — processed locally]"
+            : (pending.desensitized ?? msgText);
+          sessionManager.writeToClean(sessionKey, {
+            role: "user", content: cleanContent, timestamp: ts, sessionKey,
+          }).catch((err) => {
+            console.error("[GuardClaw] Failed to persist user message to clean history:", err);
+          });
+        } else if (msgText) {
+          // Assistant / system / S1-user messages: persistMessage handles
+          // the guard-agent filtering (guard → full only, others → both).
+          sessionManager.persistMessage(sessionKey, {
+            role: (role as SessionMessage["role"]) || "assistant",
+            content: msgText, timestamp: ts, sessionKey,
+          }).catch((err) => {
+            console.error("[GuardClaw] Failed to persist message to dual history:", err);
+          });
+        }
+      }
+
+      // ── Sanitize user messages for session transcript ──
+      if (role !== "user") return;
+      if (!pending || pending.level === "S1") return;
 
       if (pending.level === "S3") {
         consumeDetection(sessionKey);

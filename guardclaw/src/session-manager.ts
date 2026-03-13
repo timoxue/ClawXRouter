@@ -50,6 +50,28 @@ export class DualSessionManager {
   }
 
   /**
+   * Write a message to the full history only.
+   */
+  async writeToFull(
+    sessionKey: string,
+    message: SessionMessage,
+    agentId: string = "main"
+  ): Promise<void> {
+    await this.writeToHistory(sessionKey, message, agentId, "full");
+  }
+
+  /**
+   * Write a message to the clean history only.
+   */
+  async writeToClean(
+    sessionKey: string,
+    message: SessionMessage,
+    agentId: string = "main"
+  ): Promise<void> {
+    await this.writeToHistory(sessionKey, message, agentId, "clean");
+  }
+
+  /**
    * Load session history based on model type
    * - Cloud models: get clean history only
    * - Local models: get full history
