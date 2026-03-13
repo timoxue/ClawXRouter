@@ -25,11 +25,28 @@ import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "
 import type { RouterPipeline } from "./router-pipeline.js";
 import { createConfigurableRouter } from "./routers/configurable.js";
 
+const GUARDCLAW_CONFIG_PATH = join(
+  process.env.HOME ?? "/tmp",
+  ".openclaw",
+  "guardclaw.json",
+);
+
+function saveGuardClawConfig(privacy: Record<string, unknown>): void {
+  try {
+    const dir = join(process.env.HOME ?? "/tmp", ".openclaw");
+    mkdirSync(dir, { recursive: true });
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = JSON.parse(readFileSync(GUARDCLAW_CONFIG_PATH, "utf-8")) as Record<string, unknown>;
+    } catch { /* file may not exist yet */ }
+    const updated = { ...existing, privacy };
+    writeFileSync(GUARDCLAW_CONFIG_PATH, JSON.stringify(updated, null, 2), "utf-8");
+  } catch {
+    // best-effort persistence
+  }
+}
+
 export type DashboardDeps = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  loadConfig: (...args: any[]) => any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  writeConfigFile: (...args: any[]) => Promise<void>;
   pluginId: string;
   pluginConfig: Record<string, unknown>;
   pipeline: RouterPipeline | null;
@@ -160,31 +177,11 @@ export async function statsHttpHandler(
       if (body.privacy) {
         updateLiveConfig(body.privacy);
 
-        const fullConfig = await deps.loadConfig() as Record<string, unknown>;
-        const plugins = (fullConfig.plugins ?? {}) as Record<string, unknown>;
-        const entries = (plugins.entries ?? {}) as Record<string, unknown>;
-        const guardclaw = (entries[deps.pluginId] ?? {}) as Record<string, unknown>;
-        const existingConfig = (guardclaw.config ?? {}) as Record<string, unknown>;
-        const existingPrivacy = (existingConfig.privacy ?? {}) as Record<string, unknown>;
+        const existingPrivacy = ((deps.pluginConfig as Record<string, unknown>).privacy ?? {}) as Record<string, unknown>;
+        const mergedPrivacy = { ...existingPrivacy, ...body.privacy } as Record<string, unknown>;
 
-        const updatedConfig = {
-          ...fullConfig,
-          plugins: {
-            ...plugins,
-            entries: {
-              ...entries,
-              [deps.pluginId]: {
-                ...guardclaw,
-                config: {
-                  ...existingConfig,
-                  privacy: { ...existingPrivacy, ...body.privacy },
-                },
-              },
-            },
-          },
-        };
-
-        await deps.writeConfigFile(updatedConfig);
+        // Persist to guardclaw.json (does NOT touch openclaw.json → no restart)
+        saveGuardClawConfig(mergedPrivacy);
 
         // Dynamically register/update configurable routers in the pipeline
         if (body.privacy.routers && deps.pipeline) {

@@ -11,6 +11,7 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { guardClawConfigSchema, defaultPrivacyConfig } from "./src/config-schema.js";
 import { registerHooks } from "./src/hooks.js";
 import { guardClawPrivacyProvider, setActiveProxy, mirrorAllProviderModels } from "./src/provider.js";
@@ -23,6 +24,36 @@ import { initLiveConfig } from "./src/live-config.js";
 import { initDashboard, statsHttpHandler } from "./src/stats-dashboard.js";
 import type { PrivacyConfig, PipelineConfig, RouterRegistration } from "./src/types.js";
 import type { ProxyHandle } from "./src/privacy-proxy.js";
+
+// ── Standalone config file ──
+// guardclaw.json is the single source of truth for all GuardClaw config.
+// Structure: { "privacy": { ... } }
+const OPENCLAW_DIR = join(process.env.HOME ?? "/tmp", ".openclaw");
+const GUARDCLAW_CONFIG_PATH = join(OPENCLAW_DIR, "guardclaw.json");
+const LEGACY_DASHBOARD_PATH = join(OPENCLAW_DIR, "guardclaw-dashboard.json");
+
+function loadGuardClawConfigFile(): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(GUARDCLAW_CONFIG_PATH, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function loadLegacyDashboardOverrides(): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(LEGACY_DASHBOARD_PATH, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export function writeGuardClawConfigFile(config: Record<string, unknown>): void {
+  try {
+    mkdirSync(OPENCLAW_DIR, { recursive: true });
+    writeFileSync(GUARDCLAW_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  } catch { /* best-effort */ }
+}
 
 function getPrivacyConfig(pluginConfig: Record<string, unknown> | undefined): PrivacyConfig {
   const userConfig = (pluginConfig?.privacy ?? {}) as PrivacyConfig;
@@ -76,7 +107,30 @@ const plugin = {
   configSchema: guardClawConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    const privacyConfig = getPrivacyConfig(api.pluginConfig);
+    // ── Resolve config: guardclaw.json > (openclaw.json + legacy overrides) ──
+    let resolvedPluginConfig: Record<string, unknown>;
+    const fileConfig = loadGuardClawConfigFile();
+    if (fileConfig) {
+      resolvedPluginConfig = fileConfig;
+      api.logger.info("[GuardClaw] Config loaded from guardclaw.json");
+    } else {
+      // First run: generate guardclaw.json from openclaw.json plugin config + defaults
+      const userPrivacy = ((api.pluginConfig ?? {}) as Record<string, unknown>).privacy as Record<string, unknown> | undefined;
+      const legacyOverrides = loadLegacyDashboardOverrides();
+      const mergedPrivacy = {
+        ...defaultPrivacyConfig,
+        ...(userPrivacy ?? {}),
+        ...(legacyOverrides ?? {}),
+      };
+      if (legacyOverrides) {
+        api.logger.info("[GuardClaw] Migrated legacy guardclaw-dashboard.json overrides");
+      }
+      resolvedPluginConfig = { privacy: mergedPrivacy };
+      writeGuardClawConfigFile(resolvedPluginConfig);
+      api.logger.info("[GuardClaw] Generated guardclaw.json with full defaults");
+    }
+
+    const privacyConfig = getPrivacyConfig(resolvedPluginConfig);
 
     if (privacyConfig.enabled === false) {
       api.logger.info("[GuardClaw] Plugin disabled via config");
@@ -229,7 +283,7 @@ const plugin = {
     api.logger.info(`[GuardClaw] Router pipeline initialized (built-in: privacy)`);
 
     // ── Step 5: Initialize live config & token stats ──
-    initLiveConfig(api.pluginConfig);
+    initLiveConfig(resolvedPluginConfig);
 
     const statsPath = join(process.env.HOME ?? "/tmp", ".openclaw", "guardclaw-stats.json");
     const collector = new TokenStatsCollector(statsPath);
@@ -243,10 +297,8 @@ const plugin = {
 
     // ── Step 6: Register Dashboard HTTP route ──
     initDashboard({
-      loadConfig: api.runtime.config.loadConfig,
-      writeConfigFile: api.runtime.config.writeConfigFile,
       pluginId: "guardclaw",
-      pluginConfig: api.pluginConfig ?? {},
+      pluginConfig: resolvedPluginConfig,
       pipeline,
     });
 
@@ -269,6 +321,16 @@ const plugin = {
     registerHooks(api);
 
     api.logger.info("[GuardClaw] Plugin initialized (pipeline + privacy proxy + guard agent + dashboard)");
+    api.logger.info("");
+    api.logger.info("  ╔══════════════════════════════════════════════════════════════════════╗");
+    api.logger.info("  ║  🛡️  GuardClaw is running!                                          ║");
+    api.logger.info("  ║                                                                     ║");
+    api.logger.info("  ║  Dashboard : http://127.0.0.1:18789/plugins/guardclaw/stats          ║");
+    api.logger.info("  ║  Config    : ~/.openclaw/guardclaw.json                              ║");
+    api.logger.info("  ║                                                                     ║");
+    api.logger.info("  ║  Recommended: Use the Dashboard to configure routers.               ║");
+    api.logger.info("  ╚══════════════════════════════════════════════════════════════════════╝");
+    api.logger.info("");
   },
 };
 
