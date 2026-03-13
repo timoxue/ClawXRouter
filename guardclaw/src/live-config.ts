@@ -2,21 +2,49 @@
  * GuardClaw Live Config
  *
  * Mutable in-memory config cache that hooks read from at runtime.
- * When the Dashboard saves new settings, both the disk file and this
- * cache are updated — so changes take effect immediately without restart.
+ * Updated via:
+ *   - Dashboard save  → updateLiveConfig()
+ *   - File watcher    → guardclaw.json change auto-reloads
  *
  * The only setting that cannot be hot-reloaded is proxyPort (already bound).
  */
 
+import { readFileSync, watch, type FSWatcher } from "node:fs";
 import type { PrivacyConfig } from "./types.js";
 import { defaultPrivacyConfig } from "./config-schema.js";
 
 let liveConfig: PrivacyConfig = { ...defaultPrivacyConfig } as PrivacyConfig;
+let configWatcher: FSWatcher | null = null;
 
 /** Initialize live config from the plugin's startup config snapshot. */
 export function initLiveConfig(pluginConfig: Record<string, unknown> | undefined): void {
   const userConfig = (pluginConfig?.privacy ?? {}) as PrivacyConfig;
   liveConfig = mergeConfig(userConfig);
+}
+
+/**
+ * Watch guardclaw.json for external edits and hot-reload into liveConfig.
+ * Uses a debounce to avoid reloading multiple times on rapid writes.
+ */
+export function watchConfigFile(
+  configPath: string,
+  logger: { info: (msg: string) => void },
+): void {
+  if (configWatcher) return;
+  let debounce: ReturnType<typeof setTimeout> | null = null;
+  try {
+    configWatcher = watch(configPath, () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        try {
+          const raw = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+          const privacy = (raw.privacy ?? {}) as PrivacyConfig;
+          liveConfig = mergeConfig(privacy);
+          logger.info("[GuardClaw] guardclaw.json changed — config hot-reloaded");
+        } catch { /* ignore parse errors from partial writes */ }
+      }, 300);
+    });
+  } catch { /* file may not exist yet — non-fatal */ }
 }
 
 /** Get the current live config (mutable, always up-to-date). */

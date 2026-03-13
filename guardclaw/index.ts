@@ -20,7 +20,7 @@ import { RouterPipeline, setGlobalPipeline } from "./src/router-pipeline.js";
 import { privacyRouter } from "./src/routers/privacy.js";
 import { tokenSaverRouter } from "./src/routers/token-saver.js";
 import { TokenStatsCollector, setGlobalCollector } from "./src/token-stats.js";
-import { initLiveConfig } from "./src/live-config.js";
+import { initLiveConfig, watchConfigFile } from "./src/live-config.js";
 import { initDashboard, statsHttpHandler } from "./src/stats-dashboard.js";
 import type { PrivacyConfig, PipelineConfig, RouterRegistration } from "./src/types.js";
 import type { ProxyHandle } from "./src/privacy-proxy.js";
@@ -284,6 +284,7 @@ const plugin = {
 
     // ── Step 5: Initialize live config & token stats ──
     initLiveConfig(resolvedPluginConfig);
+    watchConfigFile(GUARDCLAW_CONFIG_PATH, api.logger);
 
     const statsPath = join(process.env.HOME ?? "/tmp", ".openclaw", "guardclaw-stats.json");
     const collector = new TokenStatsCollector(statsPath);
@@ -321,15 +322,24 @@ const plugin = {
     registerHooks(api);
 
     api.logger.info("[GuardClaw] Plugin initialized (pipeline + privacy proxy + guard agent + dashboard)");
+
+    const c = "\x1b[36m", g = "\x1b[32m", y = "\x1b[33m", b = "\x1b[1m", d = "\x1b[2m", r = "\x1b[0m", bg = "\x1b[46m\x1b[30m";
+    const W = 70;
+    const bar = "═".repeat(W);
+    const pad = (colored: string, visLen: number) => {
+      const sp = " ".repeat(Math.max(0, W - visLen));
+      return `${c}  ║${r}${colored}${sp}${c}║${r}`;
+    };
+
     api.logger.info("");
-    api.logger.info("  ╔══════════════════════════════════════════════════════════════════════╗");
-    api.logger.info("  ║  🛡️  GuardClaw is running!                                          ║");
-    api.logger.info("  ║                                                                     ║");
-    api.logger.info("  ║  Dashboard : http://127.0.0.1:18789/plugins/guardclaw/stats          ║");
-    api.logger.info("  ║  Config    : ~/.openclaw/guardclaw.json                              ║");
-    api.logger.info("  ║                                                                     ║");
-    api.logger.info("  ║  Recommended: Use the Dashboard to configure routers.               ║");
-    api.logger.info("  ╚══════════════════════════════════════════════════════════════════════╝");
+    api.logger.info(`${c}  ╔${bar}╗${r}`);
+    api.logger.info(pad(`  ${bg}${b} 🛡️  GuardClaw ${r}${g}${b}  Ready!${r}`, 25));
+    api.logger.info(pad("", 0));
+    api.logger.info(pad(`  ${y}Dashboard${r} ${d}→${r}  ${b}http://127.0.0.1:18789/plugins/guardclaw/stats${r}`, 62));
+    api.logger.info(pad(`  ${y}Config${r}    ${d}→${r}  ${b}~/.openclaw/guardclaw.json${r}`, 40));
+    api.logger.info(pad("", 0));
+    api.logger.info(pad(`  ${d}Use the Dashboard to configure routers, rules & prompts.${r}`, 58));
+    api.logger.info(`${c}  ╚${bar}╝${r}`);
     api.logger.info("");
   },
 };
