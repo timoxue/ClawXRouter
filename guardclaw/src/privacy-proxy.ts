@@ -29,6 +29,7 @@ export type OriginalProviderTarget = {
   apiKey: string;
   provider: string;
   api?: string;
+  streaming?: boolean;
 };
 
 const originalProviderTargets = new Map<string, OriginalProviderTarget>();
@@ -243,6 +244,7 @@ export function isGoogleTarget(target: OriginalProviderTarget): boolean {
   const provider = target.provider.toLowerCase();
   const url = target.baseUrl.toLowerCase();
 
+  if (api === "openai-completions" || api === "openai-chat") return false;
   if (GOOGLE_NATIVE_APIS.some((p) => api.includes(p))) return true;
   if (provider === "google" || provider.includes("gemini") || provider.includes("vertex")) return true;
   if (GOOGLE_URL_MARKERS.some((p) => url.includes(p))) return true;
@@ -356,7 +358,7 @@ export function buildUpstreamUrl(targetBaseUrl: string, reqUrl: string | undefin
 
 // ── Streaming with timeout fallback ──
 
-const STREAM_FIRST_CHUNK_TIMEOUT_MS = 8000;
+const STREAM_FIRST_CHUNK_TIMEOUT_MS = 30_000;
 
 /**
  * Attempt to forward a streaming request to the upstream.
@@ -509,13 +511,9 @@ export async function startPrivacyProxy(
       const clientWantsStream = !!parsed.stream;
       log.info(`[GuardClaw Proxy] → ${upstreamUrl} (stream=${clientWantsStream})`);
 
-      // Try streaming first; if the upstream doesn't support it, fall
-      // back to a non-streaming request with SSE conversion.
       if (clientWantsStream) {
         const streamOk = await tryStreamUpstream(parsed, upstreamUrl, upstreamHeaders, res, log);
         if (streamOk) return;
-        // Streaming failed or upstream doesn't support it — fall through
-        // to non-streaming path below.
         log.info("[GuardClaw Proxy] Streaming unavailable, falling back to non-streaming + SSE conversion");
       }
 
@@ -545,13 +543,15 @@ export async function startPrivacyProxy(
 
       if (clientWantsStream) {
         const responseJson = await upstream.json() as Record<string, unknown>;
+        log.info(`[GuardClaw Proxy] Upstream responded: status=${upstream.status} ok=${upstream.ok}`);
         if (upstream.ok) {
+          const ssePayload = completionToSSE(responseJson);
           res.writeHead(200, {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
           });
-          res.end(completionToSSE(responseJson));
+          res.end(ssePayload);
         } else {
           res.writeHead(upstream.status, { "Content-Type": "application/json" });
           res.end(JSON.stringify(responseJson));

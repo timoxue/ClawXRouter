@@ -187,14 +187,49 @@ const plugin = {
       // Non-fatal: runtime config patching is best-effort
     }
 
+    // Propagate streaming=false to guardclaw-privacy models so the agent
+    // SDK uses non-streaming HTTP calls through the proxy.
+    const existingModelsOverrides = (agentDefaults?.models as Record<string, Record<string, unknown>> | undefined) ?? {};
+    for (const [key, override] of Object.entries(existingModelsOverrides)) {
+      if (override?.streaming === false) {
+        const modelId = key.includes("/") ? key.split("/").slice(1).join("/") : key;
+        const proxyKey = `guardclaw-privacy/${modelId}`;
+        if (!existingModelsOverrides[proxyKey]) {
+          existingModelsOverrides[proxyKey] = { streaming: false };
+        }
+      }
+    }
+    // Also patch runtimeConfig's agent defaults
+    try {
+      const runtimeCfg = api.runtime.config.loadConfig();
+      if (runtimeCfg) {
+        const rtAgents = (runtimeCfg as Record<string, unknown>).agents as Record<string, unknown> | undefined;
+        const rtDefaults = rtAgents?.defaults as Record<string, unknown> | undefined;
+        if (rtDefaults) {
+          const rtModelsOverrides = (rtDefaults.models ?? {}) as Record<string, Record<string, unknown>>;
+          for (const [key, override] of Object.entries(existingModelsOverrides)) {
+            if (key.startsWith("guardclaw-privacy/")) {
+              rtModelsOverrides[key] = override;
+            }
+          }
+          rtDefaults.models = rtModelsOverrides;
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+
     // Set default provider target for the proxy
     if (providerConfig) {
       const defaultBaseUrl = resolveDefaultProviderBaseUrl(defaultProvider, originalApi);
+      const modelsOverrides = (agentDefaults?.models as Record<string, Record<string, unknown>> | undefined) ?? {};
+      const modelStreamingPref = modelsOverrides[primaryModelStr]?.streaming;
       setDefaultProviderTarget({
         baseUrl: (providerConfig.baseUrl as string) ?? defaultBaseUrl,
         apiKey: (providerConfig.apiKey as string) ?? "",
         provider: defaultProvider,
         api: originalApi,
+        ...(modelStreamingPref === false ? { streaming: false } : {}),
       });
     }
 
