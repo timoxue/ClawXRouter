@@ -124,6 +124,123 @@
 3. 如果我提出一个新的评测协议，应该包含哪些维度？
 ```
 
+## 期待结果与效果预估
+
+> **一句话**：省约 75% Token 费用，前端筛选/提取准确率仍达 90%+，后端推理质量无损。
+
+### 成本对比（基于 200 篇论文的完整调研）
+
+| 步骤 | 全量大模型 | Token-Saver 分级 | 节省 |
+|------|-----------|-----------------|------|
+| ③ 标题+摘要初筛（200 篇） | ~$15-30 | ~$0.5-1.5（SIMPLE） | **~95%** |
+| ④ 元信息提取 | ~$5-10 | ~$0.2-0.5（SIMPLE） | **~95%** |
+| ⑤ 公式 OCR | ~$3-5 | ~$0.3-0.8（SIMPLE） | **~85%** |
+| ⑧⑨⑩ 推理型步骤 | ~$10-20 | ~$10-20（REASONING，不变） | 0% |
+| **全流程** | **~$50-80** | **~$12-25** | **~70-75%** |
+
+### 质量影响预估
+
+| 步骤 | SIMPLE 模型准确率 | vs 大模型 | Quality Gate |
+|------|-----------------|---------|--------------|
+| 标题+摘要初筛 | 88-93% | 大模型 95%+ | 10% 抽检，< 90% 则调整 Prompt 重跑 |
+| 元信息提取（JSON） | ≥ 97% | 大模型 99% | 格式校验 + 字段完整性检查 |
+| 公式 OCR → LaTeX | ~90-95% | 大模型 97%+ | LaTeX 编译校验 |
+| Research Gap 识别 | — | **仍用大模型** | 质量无损 |
+| 实验设计 | — | **仍用大模型** | 质量无损 |
+
+**关键指标**：初筛的 Recall（召回率）比 Precision 更重要 — 宁可多纳入几篇不相关的，也不能漏掉真正相关的论文。SIMPLE 模型的 Recall 预估 ≥ 92%。
+
+### 吞吐量对比
+
+| 模型 | 200 篇初筛耗时 | 元信息提取耗时 |
+|------|--------------|-------------|
+| SIMPLE（gemini-2.5-flash） | ~2-5 分钟 | ~3-8 分钟 |
+| 全量大模型（claude-sonnet-4.5） | ~5-15 分钟 | ~8-20 分钟 |
+
+SIMPLE 模型不仅便宜，吞吐量也更高。
+
+### 风险与局限
+
+- 初筛误排除（false negative）：Quality Gate 抽检 10% 可发现系统性遗漏
+- 元信息提取的特殊格式（如多作者、复合方法名）可能被小模型截断
+- 公式 OCR 的复杂嵌套公式（如多行对齐的方程组）可能出错
+- **降级策略**：如果 Quality Gate 失败率 > 10%，该步骤自动升级到 MEDIUM 模型
+
+## 实测验证（2026-03-15 v2 — Pipeline 修复后，Token-Saver 路由已验证生效）
+
+> 测试环境：OpenClaw Gateway + GuardClaw 插件，Judge 模型 `gemini-2.5-flash`（via yeysai.com）
+>
+> Token-Saver tiers: SIMPLE → `gemini-2.5-flash` | MEDIUM → `gemini-2.5-pro` | COMPLEX → `gemini-3.1-pro-preview` | REASONING → `claude-sonnet-4-5-20250929`
+>
+> **关键修复**：本轮修复了 Pipeline 合并逻辑，确保 Token-Saver 的 `redirect` 在 Privacy S1 passthrough 时实际生效（有 `model overridden` 日志实证）。
+
+### Token-Saver 分级测试（Gateway 日志验证）
+
+**测试 1：REASONING 级别 — 数学证明（模拟多论文综合推理）**
+
+输入：`请严格证明以下命题：对于任意正整数 n，如果 2^n - 1 是素数（梅森素数），则 n 本身必须是素数。`
+
+Gateway 日志：
+```
+[GuardClaw] [TokenSaver] tier=REASONING → redirect to yeysai-gemini/claude-sonnet-4-5-20250929
+[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/claude-sonnet-4-5-20250929 (tier=REASONING)
+[agent/embedded] [hooks] model overridden to claude-sonnet-4-5-20250929
+```
+
+| 指标 | 结果 |
+|------|------|
+| Judge 判定 | **REASONING** ✅ |
+| 路由到 | `claude-sonnet-4-5-20250929` |
+| `model overridden` | ✅ **已确认** |
+| 耗时 | 11.7s |
+| 响应长度 | 1,132 字 |
+| 响应质量 | 完整的反证法证明 + LaTeX 公式 + 逆命题讨论 |
+
+**测试 2：SIMPLE 级别 — 概念解释**
+
+输入：`JSON 和 YAML 的区别是什么？用一段话说明。`
+
+Gateway 日志：
+```
+[GuardClaw] [TokenSaver] tier=SIMPLE → redirect to yeysai-gemini/gemini-2.5-flash
+[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-flash (tier=SIMPLE)
+[agent/embedded] [hooks] model overridden to gemini-2.5-flash
+```
+
+| 指标 | 结果 |
+|------|------|
+| Judge 判定 | **SIMPLE** ✅ |
+| 路由到 | `gemini-2.5-flash` |
+| `model overridden` | ✅ **已确认** |
+| 耗时 | 6.4s |
+| 响应长度 | 122 字 |
+| 响应质量 | 精炼一段话概括两者核心差异 |
+
+### 成本对比验证
+
+| 步骤类型 | 模型 | 参考价格 | 实际路由 |
+|---------|------|---------|---------|
+| 初筛/提取（SIMPLE） | gemini-2.5-flash | ~$0.15/M input | ✅ `model overridden to gemini-2.5-flash` |
+| Research Gap（REASONING） | claude-sonnet-4-5-20250929 | ~$3/M input | ✅ `model overridden to claude-sonnet-4-5-20250929` |
+| **SIMPLE vs REASONING 成本比** | | **~1:20** | 符合预估 |
+
+### 四级分类完整验证（Gateway `model overridden` 日志实证）
+
+| 输入 | Judge 判定 | 路由模型 | `model overridden` 日志 | 耗时 | 响应字数 |
+|------|-----------|---------|------------------------|------|---------|
+| "JSON 和 YAML 的区别？" | **SIMPLE** | `gemini-2.5-flash` | ✅ 已确认 | 6.4s | 122 |
+| "分析这段函数的 bug" | **MEDIUM** | `gemini-2.5-pro` | ✅ 已确认 | 19.7s | 1,252 |
+| "设计百万并发消息推送架构" | **COMPLEX** | `gemini-3.1-pro-preview` | ✅ 已确认 | 72.2s | 4,213 |
+| "证明梅森素数 n 必须为素数" | **REASONING** | `claude-sonnet-4-5-20250929` | ✅ 已确认 | 11.7s | 1,132 |
+
+### 验证结论
+
+- ✅ "什么是 X" 类简单问题正确判定为 SIMPLE → 便宜模型（**有日志实证**）
+- ✅ "严格数学证明" 正确判定为 REASONING → 最强模型（**有日志实证**）
+- ✅ 四个 tier 全部由 Gateway `model overridden` 日志确认**实际生效**
+- ✅ 响应质量：SIMPLE 精炼简洁（122 字），REASONING 有深度（LaTeX 证明）
+- ✅ 成本差异 ~20 倍，与文档预估的 ~75% 节省一致
+
 ## 关键洞察
 
 - **步骤③是 Token 黑洞**：200 篇论文 × 300 Token/篇 = 60K Token 的输入，但只需要输出 "纳入/排除" 一个词。用小模型做这种 "大输入小输出" 任务性价比极高

@@ -205,7 +205,7 @@ export const tokenSaverRouter: GuardClawRouter = {
         ],
         {
           temperature: 0,
-          maxTokens: 20,
+          maxTokens: 1024,
           providerType: config.judgeProviderType,
           customModule: config.judgeCustomModule,
           apiKey: config.judgeApiKey,

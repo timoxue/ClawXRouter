@@ -312,7 +312,20 @@ function mergeDecisionsWeighted(items: WeightedDecision[]): RouterDecision {
     );
   });
 
-  const winner = atWinningLevel[0].decision;
+  let winner = atWinningLevel[0].decision;
+
+  // When the winning level is S1 and the highest-weight router says "passthrough"
+  // (i.e., it has no concern), but another router wants to "redirect" (e.g.,
+  // token-saver wants a specific model), honor the redirect — passthrough at S1
+  // means "no opinion", not "I insist on default".
+  if (winningLevel === "S1" && (winner.action ?? "passthrough") === "passthrough") {
+    const redirectCandidate = atWinningLevel.find(
+      (i) => (i.decision.action ?? "passthrough") === "redirect" && i.decision.target,
+    );
+    if (redirectCandidate) {
+      winner = redirectCandidate.decision;
+    }
+  }
 
   const allReasons = items
     .filter((i) => i.decision.level !== "S1" && i.decision.reason)
