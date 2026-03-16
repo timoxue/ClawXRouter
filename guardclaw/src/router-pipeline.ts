@@ -127,11 +127,15 @@ export class RouterPipeline {
    *
    * Two-phase execution with short-circuit:
    *   Phase 1 — run all "fast" routers (weight >= 50) in parallel.
-   *             If any returns S2/S3 with a non-passthrough action, skip slow routers.
-   *   Phase 2 — run remaining "slow" routers (weight < 50) only if Phase 1 was all S1.
+   *             If any returns S3 (or S2-local) with a non-passthrough action,
+   *             skip slow routers.
+   *   Phase 2 — run remaining "slow" routers (weight < 50) when Phase 1 was
+   *             all S1, or when S2-proxy is the highest level (so token-saver
+   *             can still select the best model for the proxied request).
    *
    * This avoids expensive LLM judge calls (token-saver) when rule-based
-   * detection already determined the message is sensitive.
+   * detection already determined the message must stay local (S3 / S2-local),
+   * while still allowing cost optimization for S2-proxy requests.
    */
   async run(
     checkpoint: Checkpoint,
@@ -172,12 +176,15 @@ export class RouterPipeline {
       );
     }
 
-    const hasNonPassthrough = fastResults.some(
-      (r) => r.decision.level !== "S1" && r.decision.action !== "passthrough",
-    );
+    const mustShortCircuit = fastResults.some((r) => {
+      if (r.decision.level === "S1" || r.decision.action === "passthrough") return false;
+      // S2 via privacy proxy can benefit from Phase 2 (e.g. TokenSaver model selection)
+      if (r.decision.level === "S2" && r.decision.target?.provider === "guardclaw-privacy") return false;
+      return true;
+    });
 
-    if (hasNonPassthrough || slow.length === 0) {
-      if (hasNonPassthrough && slow.length > 0) {
+    if (mustShortCircuit || slow.length === 0) {
+      if (mustShortCircuit && slow.length > 0) {
         this.logger.info(
           `[GuardClaw] [${checkpoint}] Short-circuit: skipping ${slow.map((s) => s.id).join(",")}`,
         );
@@ -187,7 +194,7 @@ export class RouterPipeline {
       return merged;
     }
 
-    // Phase 2: slow (low-weight) routers — only when fast routers all said S1
+    // Phase 2: slow (low-weight) routers — runs when Phase 1 is all-S1 or S2-proxy
     const slowResults = await this.runGroup(slow, context, pluginConfig);
     for (const r of slowResults) {
       this.logger.info(
@@ -324,6 +331,29 @@ function mergeDecisionsWeighted(items: WeightedDecision[]): RouterDecision {
     );
     if (redirectCandidate) {
       winner = redirectCandidate.decision;
+    }
+  }
+
+  // S2-proxy + token-saver: keep the proxy path but adopt the model selected
+  // by a lower-level router (e.g. token-saver's tier-based model).
+  // The proxy strips PII before forwarding, so model selection still matters.
+  if (
+    winningLevel === "S2" &&
+    winner.target?.provider === "guardclaw-privacy" &&
+    !winner.target.model
+  ) {
+    const modelHint = items.find(
+      (i) =>
+        i.decision.level === "S1" &&
+        (i.decision.action ?? "passthrough") === "redirect" &&
+        i.decision.target?.model,
+    );
+    if (modelHint) {
+      winner = {
+        ...winner,
+        target: { ...winner.target, model: modelHint.decision.target!.model },
+        reason: [winner.reason, modelHint.decision.reason].filter(Boolean).join("; "),
+      };
     }
   }
 

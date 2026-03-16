@@ -157,6 +157,31 @@ export function consumeDetection(sessionKey: string): PendingDetection | undefin
 }
 
 /**
+ * Track the highest detected level for a session WITHOUT marking it as private.
+ *
+ * Used when S3 is detected at before_model_resolve: the message is routed to
+ * Guard Agent (physically isolated session/workspace), so S3 data never enters
+ * the main session's context window. Marking the main session as permanently
+ * private would be incorrect — subsequent S1 messages can safely use cloud models
+ * because the context window is clean.
+ *
+ * highestLevel is still updated for statistics/audit; only isPrivate is left unchanged.
+ */
+export function trackSessionLevel(sessionKey: string, level: SensitivityLevel): void {
+  const existing = sessionStates.get(sessionKey);
+  if (existing) {
+    existing.highestLevel = getHigherLevel(existing.highestLevel, level);
+  } else {
+    sessionStates.set(sessionKey, {
+      sessionKey,
+      isPrivate: false,
+      highestLevel: level,
+      detectionHistory: [],
+    });
+  }
+}
+
+/**
  * Helper to compare and return higher level
  */
 function getHigherLevel(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel {

@@ -568,6 +568,11 @@ function dashboardHtml(): string {
     <thead><tr><th data-i18n="table.category">Category</th><th data-i18n="table.input">Input</th><th data-i18n="table.output">Output</th><th data-i18n="table.cache">Cache Read</th><th data-i18n="table.total">Total</th><th data-i18n="table.requests">Requests</th></tr></thead>
     <tbody id="detail-body"></tbody>
   </table>
+  <h4 style="margin-top:18px;margin-bottom:6px;color:var(--text-secondary);" data-i18n="table.by_source">By Source (Router vs Task)</h4>
+  <table class="data-table">
+    <thead><tr><th data-i18n="table.source">Source</th><th data-i18n="table.input">Input</th><th data-i18n="table.output">Output</th><th data-i18n="table.cache">Cache Read</th><th data-i18n="table.total">Total</th><th data-i18n="table.requests">Requests</th></tr></thead>
+    <tbody id="source-body"></tbody>
+  </table>
   <div class="info-bar" id="info-bar"></div>
   <div style="text-align:right;margin-top:8px;">
     <button class="btn btn-sm btn-outline" onclick="resetStats()" data-i18n="overview.reset_btn">Reset Stats</button>
@@ -577,8 +582,8 @@ function dashboardHtml(): string {
 <!-- Sessions -->
 <div id="sessions-panel" class="panel">
   <table class="data-table">
-    <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
-    <tbody id="sessions-body"><tr><td colspan="8" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
+    <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
+    <tbody id="sessions-body"><tr><td colspan="10" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
   </table>
 </div>
 
@@ -1049,6 +1054,8 @@ var T = {
   'table.cache':{en:'Cache Read',zh:'缓存读取'},
   'table.total':{en:'Total',zh:'总计'},
   'table.requests':{en:'Requests',zh:'请求数'},
+  'table.by_source':{en:'By Source (Router vs Task)',zh:'按来源（路由开销 vs 任务执行）'},
+  'table.source':{en:'Source',zh:'来源'},
   'sessions.session':{en:'Session',zh:'会话'},
   'sessions.level':{en:'Level',zh:'等级'},
   'sessions.cloud':{en:'Cloud',zh:'云端'},
@@ -1412,6 +1419,12 @@ async function refreshStats() {
     document.getElementById('detail-body').innerHTML =
       fillRow(t('chart.cloud'), lt.cloud) + fillRow(t('chart.local'), lt.local) + fillRow(t('chart.redacted'), lt.proxy);
 
+    var bs = summary.bySource || {};
+    var routerB = bs.router || {inputTokens:0,outputTokens:0,cacheReadTokens:0,totalTokens:0,requestCount:0};
+    var taskB = bs.task || {inputTokens:0,outputTokens:0,cacheReadTokens:0,totalTokens:0,requestCount:0};
+    document.getElementById('source-body').innerHTML =
+      fillRow('🔀 Router (overhead)', routerB) + fillRow('⚡ Task (execution)', taskB);
+
     var infoHtml = '';
     if (summary.startedAt) infoHtml += t('status.uptime') + timeAgo(summary.startedAt);
     if (summary.lastUpdatedAt) infoHtml += ' &middot; ' + t('status.activity') + timeAgo(summary.lastUpdatedAt);
@@ -1491,17 +1504,22 @@ async function refreshSessions() {
     var sessions = await fetch(BASE + '/sessions').then(function(r) { return r.json(); });
     var tbody = document.getElementById('sessions-body');
     if (!sessions || !sessions.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">' + t('sessions.empty') + '</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="empty-state">' + t('sessions.empty') + '</td></tr>';
       return;
     }
     tbody.innerHTML = sessions.map(function(s) {
       var shortKey = s.sessionKey.length > 20 ? s.sessionKey.slice(0, 20) + '...' : s.sessionKey;
+      var bs = s.bySource || {};
+      var routerTokens = (bs.router || {}).totalTokens || 0;
+      var taskTokens = (bs.task || {}).totalTokens || 0;
       return '<tr>' +
         '<td><span class="session-key" title="' + escHtml(s.sessionKey) + '">' + escHtml(shortKey) + '</span></td>' +
         '<td><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></td>' +
         '<td>' + fmt(s.cloud.totalTokens) + '</td>' +
         '<td>' + fmt(s.local.totalTokens) + '</td>' +
         '<td>' + fmt(s.proxy.totalTokens) + '</td>' +
+        '<td>' + fmt(routerTokens) + '</td>' +
+        '<td>' + fmt(taskTokens) + '</td>' +
         '<td>' + fmt(totalForSession(s)) + '</td>' +
         '<td>' + totalReqsForSession(s) + '</td>' +
         '<td>' + timeAgo(s.lastActiveAt) + '</td>' +

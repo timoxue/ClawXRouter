@@ -20,6 +20,11 @@ vi.mock("../src/local-model.js", () => ({
   callChatCompletion: vi.fn(),
 }));
 
+// Mock token-stats to avoid side effects in tests
+vi.mock("../src/token-stats.js", () => ({
+  getGlobalCollector: vi.fn(() => null),
+}));
+
 import { callChatCompletion } from "../src/local-model.js";
 const mockCallChat = vi.mocked(callChatCompletion);
 
@@ -138,7 +143,7 @@ describe("Token-Saver Router", () => {
     });
 
     it("routes SIMPLE task to cheap model", async () => {
-      mockCallChat.mockResolvedValueOnce('{"tier":"SIMPLE"}');
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"SIMPLE"}' });
 
       const result = await tokenSaverRouter.detect(baseContext, baseConfig);
 
@@ -148,7 +153,7 @@ describe("Token-Saver Router", () => {
     });
 
     it("routes COMPLEX task to strong model", async () => {
-      mockCallChat.mockResolvedValueOnce('{"tier":"COMPLEX"}');
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"COMPLEX"}' });
 
       const result = await tokenSaverRouter.detect(
         { ...baseContext, message: "Design a microservices architecture for an e-commerce platform" },
@@ -161,7 +166,7 @@ describe("Token-Saver Router", () => {
     });
 
     it("routes REASONING task to reasoning model", async () => {
-      mockCallChat.mockResolvedValueOnce('{"tier":"REASONING"}');
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"REASONING"}' });
 
       const result = await tokenSaverRouter.detect(
         { ...baseContext, message: "Prove that the square root of 2 is irrational" },
@@ -185,7 +190,7 @@ describe("Token-Saver Router", () => {
     });
 
     it("calls LLM judge for main agent sessions", async () => {
-      mockCallChat.mockResolvedValueOnce('{"tier":"MEDIUM"}');
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"MEDIUM"}' });
 
       await tokenSaverRouter.detect(
         { ...baseContext, sessionKey: "main:user:123" },
@@ -198,7 +203,7 @@ describe("Token-Saver Router", () => {
 
   describe("cache", () => {
     it("uses cached result on second call with same prompt", async () => {
-      mockCallChat.mockResolvedValueOnce('{"tier":"SIMPLE"}');
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"SIMPLE"}' });
 
       const result1 = await tokenSaverRouter.detect(baseContext, baseConfig);
       const result2 = await tokenSaverRouter.detect(baseContext, baseConfig);
@@ -208,8 +213,8 @@ describe("Token-Saver Router", () => {
     });
 
     it("calls LLM again for different prompts", async () => {
-      mockCallChat.mockResolvedValueOnce('{"tier":"SIMPLE"}');
-      mockCallChat.mockResolvedValueOnce('{"tier":"COMPLEX"}');
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"SIMPLE"}' });
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"COMPLEX"}' });
 
       await tokenSaverRouter.detect(baseContext, baseConfig);
       await tokenSaverRouter.detect(
@@ -232,7 +237,7 @@ describe("Token-Saver Router", () => {
     });
 
     it("falls back to MEDIUM when LLM returns invalid JSON", async () => {
-      mockCallChat.mockResolvedValueOnce("I cannot classify this task");
+      mockCallChat.mockResolvedValueOnce({ text: "I cannot classify this task" });
 
       const result = await tokenSaverRouter.detect(baseContext, baseConfig);
 
@@ -243,7 +248,7 @@ describe("Token-Saver Router", () => {
 
   describe("prompt forwarding", () => {
     it("sends full prompt to judge without truncation", async () => {
-      mockCallChat.mockResolvedValueOnce('{"tier":"SIMPLE"}');
+      mockCallChat.mockResolvedValueOnce({ text: '{"tier":"SIMPLE"}' });
       const longPrompt = "x".repeat(1000);
 
       await tokenSaverRouter.detect(

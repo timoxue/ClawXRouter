@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import type { GuardClawRouter, DetectionContext, EdgeProviderType, RouterDecision } from "../types.js";
 import { callChatCompletion } from "../local-model.js";
 import { loadPrompt } from "../prompt-loader.js";
+import { getGlobalCollector } from "../token-stats.js";
 
 // ── Types ──
 
@@ -196,7 +197,7 @@ export const tokenSaverRouter: GuardClawRouter = {
     // Call LLM judge
     try {
       const judgeSystemPrompt = loadPrompt("token-saver-judge", DEFAULT_JUDGE_PROMPT);
-      const response = await callChatCompletion(
+      const result = await callChatCompletion(
         config.judgeEndpoint,
         config.judgeModel,
         [
@@ -212,7 +213,19 @@ export const tokenSaverRouter: GuardClawRouter = {
         },
       );
 
-      const tier = parseTier(response);
+      // Record router overhead tokens
+      if (result.usage) {
+        const collector = getGlobalCollector();
+        collector?.record({
+          sessionKey: context.sessionKey ?? "",
+          provider: "edge",
+          model: config.judgeModel,
+          source: "router",
+          usage: result.usage,
+        });
+      }
+
+      const tier = parseTier(result.text);
       classificationCache.set(cacheKey, { tier, ts: Date.now() });
       const decision = buildDecision(tier, config);
       console.log(`[GuardClaw] [TokenSaver] tier=${tier} → redirect to ${decision.target?.provider}/${decision.target?.model}`);

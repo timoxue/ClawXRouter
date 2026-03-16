@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 import { loadPrompt, loadPromptWithVars } from "./prompt-loader.js";
 import { levelToNumeric } from "./types.js";
+import { getGlobalCollector } from "./token-stats.js";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -25,6 +26,17 @@ export type ChatCompletionOptions = {
   stop?: string[];
   frequencyPenalty?: number;
   apiKey?: string;
+};
+
+export type LlmUsageInfo = {
+  input: number;
+  output: number;
+  total: number;
+};
+
+export type ChatCompletionResult = {
+  text: string;
+  usage?: LlmUsageInfo;
 };
 
 /**
@@ -56,17 +68,20 @@ async function loadCustomProvider(modulePath: string): Promise<CustomEdgeProvide
 /**
  * Dispatch a chat completion call based on the configured edge provider type.
  * This is the single entry point for all edge model calls.
+ *
+ * Returns a ChatCompletionResult with the response text and optional usage info
+ * parsed from the API response (for token accounting).
  */
 export async function callChatCompletion(
   endpoint: string,
   model: string,
   messages: ChatMessage[],
   options?: ChatCompletionOptions & { providerType?: EdgeProviderType; customModule?: string },
-): Promise<string> {
+): Promise<ChatCompletionResult> {
   const providerType = options?.providerType ?? "openai-compatible";
   console.log(`[GuardClaw] [DEBUG] calling LLM: ${endpoint} ${model} (${providerType})`);
 
-  let result: string;
+  let result: ChatCompletionResult;
   switch (providerType) {
     case "ollama-native":
       result = await callOllamaNative(endpoint, model, messages, options);
@@ -76,7 +91,8 @@ export async function callChatCompletion(
         throw new Error("Custom edge provider requires a 'module' path in localModel config");
       }
       const provider = await loadCustomProvider(options.customModule);
-      result = await provider.callChat(endpoint, model, messages, options);
+      const text = await provider.callChat(endpoint, model, messages, options);
+      result = { text };
       break;
     }
     case "openai-compatible":
@@ -84,7 +100,7 @@ export async function callChatCompletion(
       result = await callOpenAICompatible(endpoint, model, messages, options);
       break;
   }
-  console.log(`[GuardClaw] [DEBUG] LLM response (${model}): ${result.slice(0, 200)}`);
+  console.log(`[GuardClaw] [DEBUG] LLM response (${model}): ${result.text.slice(0, 200)}`);
   return result;
 }
 
@@ -97,7 +113,7 @@ async function callOpenAICompatible(
   model: string,
   messages: ChatMessage[],
   options?: ChatCompletionOptions,
-): Promise<string> {
+): Promise<ChatCompletionResult> {
   const url = `${endpoint}/v1/chat/completions`;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -125,11 +141,20 @@ async function callOpenAICompatible(
 
   const data = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   };
-  let result = data.choices?.[0]?.message?.content ?? "";
+  let text = data.choices?.[0]?.message?.content ?? "";
+  text = stripThinkingTags(text);
 
-  result = stripThinkingTags(result);
-  return result;
+  const usage: LlmUsageInfo | undefined = data.usage
+    ? {
+        input: data.usage.prompt_tokens ?? 0,
+        output: data.usage.completion_tokens ?? 0,
+        total: data.usage.total_tokens ?? (data.usage.prompt_tokens ?? 0) + (data.usage.completion_tokens ?? 0),
+      }
+    : undefined;
+
+  return { text, usage };
 }
 
 /**
@@ -141,7 +166,7 @@ async function callOllamaNative(
   model: string,
   messages: ChatMessage[],
   options?: ChatCompletionOptions,
-): Promise<string> {
+): Promise<ChatCompletionResult> {
   const url = `${endpoint}/api/chat`;
 
   const response = await fetch(url, {
@@ -166,11 +191,19 @@ async function callOllamaNative(
 
   const data = (await response.json()) as {
     message?: { content?: string };
+    prompt_eval_count?: number;
+    eval_count?: number;
   };
-  let result = data.message?.content ?? "";
+  let text = data.message?.content ?? "";
+  text = stripThinkingTags(text);
 
-  result = stripThinkingTags(result);
-  return result;
+  const promptTokens = data.prompt_eval_count ?? 0;
+  const outputTokens = data.eval_count ?? 0;
+  const usage: LlmUsageInfo | undefined = (promptTokens || outputTokens)
+    ? { input: promptTokens, output: outputTokens, total: promptTokens + outputTokens }
+    : undefined;
+
+  return { text, usage };
 }
 
 /** Strip <think>...</think> blocks emitted by reasoning models (MiniCPM, Qwen3, etc.) */
@@ -203,8 +236,19 @@ export async function detectByLocalModel(
 
   try {
     const { system, user } = buildDetectionMessages(context);
-    const response = await callLocalModel(system, user, config);
-    const parsed = parseModelResponse(response);
+    const result = await callLocalModel(system, user, config);
+    const parsed = parseModelResponse(result.text);
+
+    if (result.usage) {
+      const collector = getGlobalCollector();
+      collector?.record({
+        sessionKey: context.sessionKey ?? "",
+        provider: "edge",
+        model: config.localModel?.model ?? "unknown",
+        source: "router",
+        usage: result.usage,
+      });
+    }
 
     return {
       level: parsed.level,
@@ -309,17 +353,17 @@ function buildDetectionMessages(context: DetectionContext): { system: string; us
 /**
  * Call local/edge model via the configured provider protocol.
  * Dispatches to the correct API based on localModel.type.
+ * Returns both the text response and optional usage info for router overhead tracking.
  */
 async function callLocalModel(
   systemPrompt: string,
   userContent: string,
   config: PrivacyConfig,
-): Promise<string> {
+): Promise<ChatCompletionResult> {
   const model = config.localModel?.model ?? "openbmb/minicpm4.1";
   const endpoint = config.localModel?.endpoint ?? "http://localhost:11434";
   const providerType = config.localModel?.type ?? "openai-compatible";
 
-  // Qwen3: prefix user content with /no_think to suppress chain-of-thought output
   const modelLower = model.toLowerCase();
   const finalUser = modelLower.includes("qwen") ? `/no_think\n${userContent}` : userContent;
 
@@ -350,6 +394,7 @@ async function callLocalModel(
 export async function desensitizeWithLocalModel(
   content: string,
   config: PrivacyConfig,
+  sessionKey?: string,
 ): Promise<{ desensitized: string; wasModelUsed: boolean }> {
   if (!config.localModel?.enabled) {
     return { desensitized: content, wasModelUsed: false };
@@ -361,11 +406,11 @@ export async function desensitizeWithLocalModel(
     const providerType = config.localModel?.type ?? "openai-compatible";
     const customModule = config.localModel?.module;
 
-    // Step 1: Ask the model to identify PII as JSON
     const piiItems = await extractPiiWithModel(endpoint, model, content, {
       apiKey: config.localModel?.apiKey,
       providerType,
       customModule,
+      sessionKey,
     });
 
     if (piiItems.length === 0) {
@@ -461,23 +506,20 @@ async function extractPiiWithModel(
   endpoint: string,
   model: string,
   content: string,
-  opts?: { apiKey?: string; providerType?: EdgeProviderType; customModule?: string },
+  opts?: { apiKey?: string; providerType?: EdgeProviderType; customModule?: string; sessionKey?: string },
 ): Promise<Array<{ type: string; value: string }>> {
   const textSnippet = content.slice(0, 3000);
 
-  // Allow user customization via prompts/pii-extraction.md
   const systemPrompt = loadPromptWithVars("pii-extraction", DEFAULT_PII_EXTRACTION_PROMPT, {
     CONTENT: textSnippet,
   });
 
-  // If the loaded prompt has {{CONTENT}} substituted in, use a short user trigger;
-  // otherwise send the content as the user message.
   const promptHasContent = systemPrompt.includes(textSnippet) && textSnippet.length > 10;
   const userMessage = promptHasContent
     ? "Extract all PII from the text above. Output ONLY the JSON array."
     : textSnippet;
 
-  const raw = await callChatCompletion(
+  const result = await callChatCompletion(
     endpoint,
     model,
     [
@@ -494,7 +536,18 @@ async function extractPiiWithModel(
     },
   );
 
-  return parsePiiJson(raw);
+  if (result.usage) {
+    const collector = getGlobalCollector();
+    collector?.record({
+      sessionKey: opts?.sessionKey ?? "",
+      provider: "edge",
+      model,
+      source: "router",
+      usage: result.usage,
+    });
+  }
+
+  return parsePiiJson(result.text);
 }
 
 /** Parse the model's PII extraction output into structured items */
@@ -637,7 +690,7 @@ export async function _callEdgeModelRaw(
   const endpoint = config.endpoint ?? "http://localhost:11434";
   const model = config.model ?? "openbmb/minicpm4.1";
 
-  let result = await callChatCompletion(
+  const completion = await callChatCompletion(
     endpoint,
     model,
     [
@@ -655,7 +708,7 @@ export async function _callEdgeModelRaw(
     },
   );
 
-  // Truncate at any remaining [message_id: artifacts
+  let result = completion.text;
   for (const marker of ["[message_id:", "[Message_id:"]) {
     const idx = result.indexOf(marker);
     if (idx > 0) {

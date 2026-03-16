@@ -262,6 +262,31 @@ task_21 日志:
 | 本地处理 Token 占比 | 73.6% (589K tokens) |
 | PII 代理 Token 占比 | 11.4% (91K tokens) |
 
+### 📊 Token 来源分离统计 (v2 新增)
+
+Token 消耗现在按 **来源 (source)** 分为两个维度：
+
+| 来源 | 说明 | 包含的 LLM 调用 |
+|------|------|----------------|
+| **Router** (路由开销) | 路由管线自身的 LLM 调用 | Privacy 检测 LLM、Token-Saver Judge LLM、PII 提取 LLM |
+| **Task** (任务执行) | 用户请求的实际模型调用 | SIMPLE→flash / MEDIUM→pro / COMPLEX→3.1-pro / REASONING→claude / S3→Guard Agent |
+
+统计 API 端点返回新增字段：
+
+```json
+{
+  "lifetime": { "cloud": {...}, "local": {...}, "proxy": {...} },
+  "bySource": {
+    "router": { "inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "requestCount": 0 },
+    "task":   { "inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "requestCount": 0 }
+  }
+}
+```
+
+每个 session 也有独立的 `bySource` 分解，可在 Dashboard 的 Sessions 面板看到 Router / Task 两列。
+
+> **实现**: `callChatCompletion()` 现在解析 API 响应中的 `usage` 字段 (OpenAI-compatible: `prompt_tokens`/`completion_tokens`; Ollama: `prompt_eval_count`/`eval_count`)，router 内部 LLM 调用自动记录 `source: "router"`，`llm_output` hook 的任务调用标记 `source: "task"`。
+
 ### ⚠️ 仍需改进
 
 1. **日志解析精度**: Agent 多轮工具调用导致日志交叉，需要按 sessionId 隔离

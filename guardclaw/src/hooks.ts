@@ -31,6 +31,7 @@ import { loadPrompt } from "./prompt-loader.js";
 import { getDefaultSessionManager, type SessionMessage } from "./session-manager.js";
 import {
   markSessionAsPrivate,
+  trackSessionLevel,
   recordDetection,
   isSessionMarkedPrivate,
   stashDetection,
@@ -132,7 +133,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // Desensitize for S2 (needed for both proxy markers and local prompt)
       let desensitized: string | undefined;
       if (decision.level === "S2") {
-        const { desensitized: d } = await desensitizeWithLocalModel(msgStr, privacyConfig);
+        const { desensitized: d } = await desensitizeWithLocalModel(msgStr, privacyConfig, sessionKey);
         desensitized = d;
       }
 
@@ -147,7 +148,14 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       // Apply routing based on decision
       if (decision.level === "S3" || (decision.level === "S2" && decision.action === "redirect" && decision.target?.provider !== "guardclaw-privacy")) {
-        markSessionAsPrivate(sessionKey, decision.level);
+        if (decision.level === "S3") {
+          // S3 → Guard Agent: physically isolated session/workspace.
+          // Only track the level for stats; don't permanently taint the main
+          // session — its context window never contains S3 data.
+          trackSessionLevel(sessionKey, "S3");
+        } else {
+          markSessionAsPrivate(sessionKey, decision.level);
+        }
         if (decision.target) {
           api.logger.info(`[GuardClaw] ${decision.level} — routing to ${decision.target.provider}/${decision.target.model} [${decision.routerId}]`);
           return {
@@ -175,8 +183,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
           };
           stashOriginalProvider(sessionKey, stashTarget);
         }
-        api.logger.info(`[GuardClaw] S2 — routing through privacy proxy [${decision.routerId}]`);
-        return { providerOverride: "guardclaw-privacy" };
+        const modelInfo = decision.target.model ? ` (model=${decision.target.model})` : "";
+        api.logger.info(`[GuardClaw] S2 — routing through privacy proxy${modelInfo} [${decision.routerId}]`);
+        return {
+          providerOverride: "guardclaw-privacy",
+          ...(decision.target.model ? { modelOverride: decision.target.model } : {}),
+        };
       }
 
       // Non-privacy routers may return redirect with a custom target
@@ -190,7 +202,11 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       // Block action at model resolve level → route to edge model as safeguard
       if (decision.action === "block") {
-        markSessionAsPrivate(sessionKey, decision.level);
+        if (decision.level === "S3") {
+          trackSessionLevel(sessionKey, "S3");
+        } else {
+          markSessionAsPrivate(sessionKey, decision.level);
+        }
         const guardCfg = getGuardAgentConfig(privacyConfig);
         const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
         api.logger.warn(`[GuardClaw] ${decision.level} BLOCK — redirecting to edge model [${decision.routerId}]`);
@@ -297,12 +313,16 @@ export function registerHooks(api: OpenClawPluginApi): void {
             recordDetection(sessionKey, decision.level, "onToolCallProposed", decision.reason);
 
             if (decision.level === "S3" || decision.action === "block") {
-              markSessionAsPrivate(sessionKey, decision.level);
+              if (decision.level === "S3") {
+                trackSessionLevel(sessionKey, "S3");
+              } else {
+                markSessionAsPrivate(sessionKey, decision.level);
+              }
               return { block: true, blockReason: `GuardClaw: ${isSpawn ? "subagent task" : "A2A message"} blocked — ${decision.level} (${decision.reason ?? "sensitive"})` };
             }
             if (decision.level === "S2") {
               markSessionAsPrivate(sessionKey, "S2");
-              const { desensitized } = await desensitizeWithLocalModel(contentField, privacyConfig);
+              const { desensitized } = await desensitizeWithLocalModel(contentField, privacyConfig, sessionKey);
               return { params: { ...typedParams, [isSpawn ? "task" : "message"]: desensitized } };
             }
           }
@@ -320,7 +340,11 @@ export function registerHooks(api: OpenClawPluginApi): void {
         recordDetection(sessionKey, decision.level, "onToolCallProposed", decision.reason);
 
         if (decision.level === "S3" || decision.action === "block") {
-          markSessionAsPrivate(sessionKey, decision.level);
+          if (decision.level === "S3") {
+            trackSessionLevel(sessionKey, "S3");
+          } else {
+            markSessionAsPrivate(sessionKey, decision.level);
+          }
           return { block: true, blockReason: `GuardClaw: tool "${toolName}" blocked — ${decision.level} (${decision.reason ?? "sensitive"})` };
         }
         if (decision.level === "S2") {
@@ -351,8 +375,10 @@ export function registerHooks(api: OpenClawPluginApi): void {
         );
         recordDetection(sessionKey, decision.level, "onToolCallExecuted", decision.reason);
 
-        if (decision.level === "S3" || decision.level === "S2") {
-          markSessionAsPrivate(sessionKey, decision.level);
+        if (decision.level === "S3") {
+          trackSessionLevel(sessionKey, "S3");
+        } else if (decision.level === "S2") {
+          markSessionAsPrivate(sessionKey, "S2");
         }
       }
 
@@ -439,7 +465,13 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // Persist every message (user, assistant, system) to full/clean tracks
       // when the session is private.  Tool messages are handled separately
       // in tool_result_persist (Hook 5) to avoid double-writes.
-      if (isSessionMarkedPrivate(sessionKey) && role !== "tool") {
+      //
+      // Also persist when pending detection is S3: Guard Agent is physically
+      // isolated so the main session isn't marked private, but we still want
+      // the S3 user message recorded (original → full, placeholder → clean)
+      // for audit purposes.
+      const needsDualHistory = isSessionMarkedPrivate(sessionKey) || (pending?.level === "S3");
+      if (needsDualHistory && role !== "tool") {
         const sessionManager = getDefaultSessionManager();
         const msgText = extractMessageText(msg);
         const ts = Date.now();
@@ -537,6 +569,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         sessionKey: ctx.sessionKey ?? event.sessionId ?? "",
         provider: event.provider ?? "unknown",
         model: event.model ?? "unknown",
+        source: "task",
         usage: event.usage,
       });
     } catch (err) {
@@ -562,7 +595,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   // Hook 11: message_sending — Outbound message guard (via pipeline)
   // =========================================================================
-  api.on("message_sending", async (event, _ctx) => {
+  api.on("message_sending", async (event, ctx) => {
     try {
       const { content } = event;
       if (!content?.trim()) return;
@@ -584,7 +617,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return { cancel: true };
       }
       if (decision.level === "S2") {
-        const { desensitized } = await desensitizeWithLocalModel(content, privacyConfig);
+        const { desensitized } = await desensitizeWithLocalModel(content, privacyConfig, ctx.sessionKey);
         return { content: desensitized };
       }
     } catch (err) {

@@ -16,6 +16,9 @@ import { getLiveConfig } from "./live-config.js";
 
 export type RouteCategory = "cloud" | "local" | "proxy";
 
+/** Distinguishes router overhead (detection/classification) from actual task execution. */
+export type TokenSource = "router" | "task";
+
 export type TokenBucket = {
   inputTokens: number;
   outputTokens: number;
@@ -24,11 +27,14 @@ export type TokenBucket = {
   requestCount: number;
 };
 
+export type SourceBuckets = Record<TokenSource, TokenBucket>;
+
 export type HourlyBucket = {
   hour: string;
   cloud: TokenBucket;
   local: TokenBucket;
   proxy: TokenBucket;
+  bySource: SourceBuckets;
 };
 
 export type SessionTokenStats = {
@@ -37,12 +43,14 @@ export type SessionTokenStats = {
   cloud: TokenBucket;
   local: TokenBucket;
   proxy: TokenBucket;
+  bySource: SourceBuckets;
   firstSeenAt: number;
   lastActiveAt: number;
 };
 
 export type TokenStatsData = {
   lifetime: Record<RouteCategory, TokenBucket>;
+  bySource: SourceBuckets;
   hourly: HourlyBucket[];
   sessions: Record<string, SessionTokenStats>;
   startedAt: number;
@@ -53,6 +61,8 @@ export type UsageEvent = {
   sessionKey: string;
   provider: string;
   model: string;
+  /** "router" for pipeline overhead (judge, detection, PII extraction), "task" for actual request. */
+  source?: TokenSource;
   usage?: {
     input?: number;
     output?: number;
@@ -71,6 +81,10 @@ function emptyBucket(): TokenBucket {
   return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0, requestCount: 0 };
 }
 
+function emptySourceBuckets(): SourceBuckets {
+  return { router: emptyBucket(), task: emptyBucket() };
+}
+
 function currentHourKey(): string {
   return new Date().toISOString().slice(0, 13);
 }
@@ -78,6 +92,7 @@ function currentHourKey(): string {
 function emptyStats(): TokenStatsData {
   return {
     lifetime: { cloud: emptyBucket(), local: emptyBucket(), proxy: emptyBucket() },
+    bySource: emptySourceBuckets(),
     hourly: [],
     sessions: {},
     startedAt: Date.now(),
@@ -133,11 +148,16 @@ export class TokenStatsCollector {
       const rawSessions = (parsed.sessions && typeof parsed.sessions === "object")
         ? parsed.sessions as Record<string, SessionTokenStats>
         : {};
+      const parsedBySource = parsed.bySource as Partial<SourceBuckets> | undefined;
       this.data = {
         lifetime: {
           cloud: { ...emptyBucket(), ...parsed.lifetime?.cloud },
           local: { ...emptyBucket(), ...parsed.lifetime?.local },
           proxy: { ...emptyBucket(), ...parsed.lifetime?.proxy },
+        },
+        bySource: {
+          router: { ...emptyBucket(), ...parsedBySource?.router },
+          task: { ...emptyBucket(), ...parsedBySource?.task },
         },
         hourly: Array.isArray(parsed.hourly) ? parsed.hourly : [],
         sessions: rawSessions,
@@ -168,23 +188,27 @@ export class TokenStatsCollector {
     }
   }
 
-  /** Record a usage event from llm_output hook. */
+  /** Record a usage event from llm_output hook or router overhead. */
   record(event: UsageEvent): void {
     const category = classifyBySession(event.sessionKey);
+    const source: TokenSource = event.source ?? "task";
     const now = Date.now();
 
     addToBucket(this.data.lifetime[category], event.usage);
+    addToBucket(this.data.bySource[source], event.usage);
 
     const hourKey = currentHourKey();
     let hourly = this.data.hourly.find((h) => h.hour === hourKey);
     if (!hourly) {
-      hourly = { hour: hourKey, cloud: emptyBucket(), local: emptyBucket(), proxy: emptyBucket() };
+      hourly = { hour: hourKey, cloud: emptyBucket(), local: emptyBucket(), proxy: emptyBucket(), bySource: emptySourceBuckets() };
       this.data.hourly.push(hourly);
       if (this.data.hourly.length > MAX_HOURLY_BUCKETS) {
         this.data.hourly = this.data.hourly.slice(-MAX_HOURLY_BUCKETS);
       }
     }
+    if (!hourly.bySource) hourly.bySource = emptySourceBuckets();
     addToBucket(hourly[category], event.usage);
+    addToBucket(hourly.bySource[source], event.usage);
 
     // Per-session tracking
     const sk = event.sessionKey;
@@ -197,14 +221,17 @@ export class TokenStatsCollector {
           cloud: emptyBucket(),
           local: emptyBucket(),
           proxy: emptyBucket(),
+          bySource: emptySourceBuckets(),
           firstSeenAt: now,
           lastActiveAt: now,
         };
         this.data.sessions[sk] = sess;
       }
+      if (!sess.bySource) sess.bySource = emptySourceBuckets();
       sess.highestLevel = getSessionHighestLevel(sk);
       sess.lastActiveAt = now;
       addToBucket(sess[category], event.usage);
+      addToBucket(sess.bySource[source], event.usage);
       this.evictOldSessions();
     }
 
@@ -228,9 +255,10 @@ export class TokenStatsCollector {
   }
 
   /** Get summary for API response. */
-  getSummary(): { lifetime: TokenStatsData["lifetime"]; lastUpdatedAt: number; startedAt: number } {
+  getSummary(): { lifetime: TokenStatsData["lifetime"]; bySource: SourceBuckets; lastUpdatedAt: number; startedAt: number } {
     return {
       lifetime: this.data.lifetime,
+      bySource: this.data.bySource,
       lastUpdatedAt: this.data.lastUpdatedAt,
       startedAt: this.data.startedAt,
     };
