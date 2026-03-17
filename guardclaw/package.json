@@ -5,7 +5,8 @@
   "description": "Privacy-aware plugin with sensitivity detection, guard agent support, and built-in privacy proxy",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.48"
+    "@sinclair/typebox": "0.34.48",
+    "synckit": "^0.11.0"
   },
   "openclaw": {
     "extensions": [
