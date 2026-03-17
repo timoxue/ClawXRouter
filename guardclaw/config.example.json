@@ -125,7 +125,9 @@
     "localProviders": [],
     "session": {
       "isolateGuardHistory": true,
-      "baseDir": "~/.openclaw"
+      "baseDir": "~/.openclaw",
+      "injectDualHistory": true,
+      "historyLimit": 20
     }
   }
 }

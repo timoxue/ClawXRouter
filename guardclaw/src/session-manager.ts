@@ -235,6 +235,63 @@ export class DualSessionManager {
   }
 
   /**
+   * Load messages that exist in the full track but not in the clean track.
+   * These are Guard Agent interactions and original S3 content that were
+   * stripped from the sanitized transcript — exactly the context a local
+   * model needs to reconstruct the full conversation.
+   */
+  async loadHistoryDelta(
+    sessionKey: string,
+    agentId: string = "main",
+    limit?: number
+  ): Promise<SessionMessage[]> {
+    const full = await this.readHistory(sessionKey, agentId, "full");
+    const clean = await this.readHistory(sessionKey, agentId, "clean");
+
+    if (full.length === 0) return [];
+    if (clean.length === 0) return limit ? full.slice(-limit) : full;
+
+    const cleanSet = new Set(
+      clean.map((m) => `${m.role}:${m.timestamp ?? ""}:${m.content.slice(0, 80)}`)
+    );
+
+    const delta = full.filter(
+      (m) => !cleanSet.has(`${m.role}:${m.timestamp ?? ""}:${m.content.slice(0, 80)}`)
+    );
+
+    return limit && delta.length > limit ? delta.slice(-limit) : delta;
+  }
+
+  /**
+   * Format session messages as a readable conversation context block
+   * suitable for injection via prependContext.
+   */
+  static formatAsContext(messages: SessionMessage[], label?: string): string {
+    if (messages.length === 0) return "";
+
+    const header = label ?? "Previous private conversation context (processed locally)";
+    const lines = [`[${header}]`];
+
+    for (const msg of messages) {
+      const roleLabel =
+        msg.role === "user" ? "User" :
+        msg.role === "assistant" ? "Assistant" :
+        msg.role === "tool" ? `Tool${msg.toolName ? `(${msg.toolName})` : ""}` :
+        "System";
+
+      const truncated =
+        msg.content.length > 2000
+          ? msg.content.slice(0, 2000) + "…(truncated)"
+          : msg.content;
+
+      lines.push(`${roleLabel}: ${truncated}`);
+    }
+
+    lines.push("[End of private context]");
+    return lines.join("\n");
+  }
+
+  /**
    * Get history statistics
    */
   async getHistoryStats(
@@ -259,9 +316,9 @@ export class DualSessionManager {
 // Export a singleton instance
 let defaultManager: DualSessionManager | null = null;
 
-export function getDefaultSessionManager(): DualSessionManager {
-  if (!defaultManager) {
-    defaultManager = new DualSessionManager();
+export function getDefaultSessionManager(baseDir?: string): DualSessionManager {
+  if (!defaultManager || baseDir) {
+    defaultManager = new DualSessionManager(baseDir);
   }
   return defaultManager;
 }

@@ -103,6 +103,8 @@ export const guardClawConfigSchema = Type.Object({
         Type.Object({
           isolateGuardHistory: Type.Optional(Type.Boolean()),
           baseDir: Type.Optional(Type.String()),
+          injectDualHistory: Type.Optional(Type.Boolean()),
+          historyLimit: Type.Optional(Type.Number()),
         }),
       ),
       routers: Type.Optional(
@@ -181,6 +183,8 @@ export const defaultPrivacyConfig = {
   session: {
     isolateGuardHistory: true,
     baseDir: "~/.openclaw",
+    injectDualHistory: true,
+    historyLimit: 20,
   },
   routers: {
     privacy: { enabled: true, type: "builtin" as const },

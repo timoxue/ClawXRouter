@@ -28,7 +28,7 @@ import {
 import { desensitizeWithLocalModel } from "./local-model.js";
 import { getDefaultMemoryManager } from "./memory-isolation.js";
 import { loadPrompt } from "./prompt-loader.js";
-import { getDefaultSessionManager, type SessionMessage } from "./session-manager.js";
+import { DualSessionManager, getDefaultSessionManager, type SessionMessage } from "./session-manager.js";
 import {
   markSessionAsPrivate,
   trackSessionLevel,
@@ -39,6 +39,7 @@ import {
   consumeDetection,
   setActiveLocalRouting,
   clearActiveLocalRouting,
+  clearSessionState,
   isActiveLocalRouting,
 } from "./session-state.js";
 import { detectByRules } from "./rules.js";
@@ -108,10 +109,15 @@ const TOOL_PRIVACY_ALLOWLIST = new Set([
 let _cachedWorkspaceDir: string | undefined;
 
 export function registerHooks(api: OpenClawPluginApi): void {
+  const privacyCfgInit = getPrivacyConfigFromApi(api);
+  const sessionBaseDir = privacyCfgInit.session?.baseDir;
+
   const memoryManager = getDefaultMemoryManager();
   memoryManager.initializeDirectories().catch((err) => {
     api.logger.error(`[GuardClaw] Failed to initialize memory directories: ${String(err)}`);
   });
+
+  getDefaultSessionManager(sessionBaseDir);
 
   // =========================================================================
   // Hook 1: before_model_resolve — Run pipeline + model routing
@@ -308,7 +314,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
   });
 
   // =========================================================================
-  // Hook 2: before_prompt_build — Inject guard prompt / S2 markers
+  // Hook 2: before_prompt_build — Inject guard prompt / S2 markers /
+  //         dual-track history for local models
   // =========================================================================
   api.on("before_prompt_build", async (_event, ctx) => {
     try {
@@ -319,15 +326,36 @@ export function registerHooks(api: OpenClawPluginApi): void {
       if (!pending || pending.level === "S1") return;
 
       const privacyConfig = getPrivacyConfigFromApi(api);
+      const sessionCfg = privacyConfig.session ?? {};
+      const shouldInject = sessionCfg.injectDualHistory !== false
+        && sessionCfg.isolateGuardHistory !== false;
+      const historyLimit = sessionCfg.historyLimit ?? 20;
 
-      // S3: keep original agent system prompt and skills — tool results
-      // will be intercepted by tool_result_persist before reaching the LLM
+      // S3: data processed entirely locally. Inject full-track history
+      // so the local model sees previous S3 interactions that were replaced
+      // by "🔒 [Private content]" placeholders in the main transcript.
       if (pending.level === "S3") {
+        if (shouldInject) {
+          const context = await loadDualTrackContext(sessionKey, ctx.agentId, historyLimit);
+          if (context) {
+            api.logger.info(`[GuardClaw] Injected dual-track history context for S3 turn`);
+            return { prependContext: context };
+          }
+        }
         return;
       }
 
-      // S2-local: data stays on-device — keep original system prompt intact.
-      if (pending.level === "S2" && (privacyConfig.s2Policy ?? "proxy") === "local") {
+      const s2Policy = privacyConfig.s2Policy ?? "proxy";
+
+      // S2-local: data stays on-device — inject full-track history for richer context.
+      if (pending.level === "S2" && s2Policy === "local") {
+        if (shouldInject) {
+          const context = await loadDualTrackContext(sessionKey, ctx.agentId, historyLimit);
+          if (context) {
+            api.logger.info(`[GuardClaw] Injected dual-track history context for S2-local turn`);
+            return { prependContext: context };
+          }
+        }
         return;
       }
 
@@ -571,7 +599,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // isolated so the main session isn't marked private, but we still want
       // the S3 user message recorded (original → full, placeholder → clean)
       // for audit purposes.
-      const needsDualHistory = isSessionMarkedPrivate(sessionKey) || (pending?.level === "S3");
+      const needsDualHistory = isSessionMarkedPrivate(sessionKey) || (pending?.level === "S3") || isActiveLocalRouting(sessionKey);
       if (needsDualHistory && role !== "tool") {
         const sessionManager = getDefaultSessionManager();
         const msgText = extractMessageText(msg);
@@ -594,14 +622,45 @@ export function registerHooks(api: OpenClawPluginApi): void {
             console.error("[GuardClaw] Failed to persist user message to clean history:", err);
           });
         } else if (msgText) {
-          // Assistant / system / S1-user messages: persistMessage handles
-          // the guard-agent filtering (guard → full only, others → both).
-          sessionManager.persistMessage(sessionKey, {
-            role: (role as SessionMessage["role"]) || "assistant",
-            content: msgText, timestamp: ts, sessionKey,
-          }).catch((err) => {
-            console.error("[GuardClaw] Failed to persist message to dual history:", err);
-          });
+          if (role === "assistant" && isActiveLocalRouting(sessionKey)) {
+            // Local model response may contain echoed PII — write original
+            // to full track, PII-redacted version to clean track.
+            const redacted = redactSensitiveInfo(msgText);
+            sessionManager.writeToFull(sessionKey, {
+              role: "assistant", content: msgText, timestamp: ts, sessionKey,
+            }).catch((err) => {
+              console.error("[GuardClaw] Failed to persist assistant message to full history:", err);
+            });
+            sessionManager.writeToClean(sessionKey, {
+              role: "assistant", content: redacted, timestamp: ts, sessionKey,
+            }).catch((err) => {
+              console.error("[GuardClaw] Failed to persist assistant message to clean history:", err);
+            });
+          } else {
+            // System / S1-user / non-local-routing assistant messages:
+            // persistMessage handles guard-agent filtering (guard → full only, others → both).
+            sessionManager.persistMessage(sessionKey, {
+              role: (role as SessionMessage["role"]) || "assistant",
+              content: msgText, timestamp: ts, sessionKey,
+            }).catch((err) => {
+              console.error("[GuardClaw] Failed to persist message to dual history:", err);
+            });
+          }
+        }
+      }
+
+      // ── PII-redact assistant responses from local model ──
+      // When S3 data is processed locally the model may echo back PII
+      // (e.g. "Your ID 310101... is valid"). Redact before entering the
+      // main transcript so subsequent cloud turns don't see raw PII.
+      if (role === "assistant" && isActiveLocalRouting(sessionKey)) {
+        const assistantText = extractMessageText(msg);
+        if (assistantText && assistantText.length >= 10) {
+          const redacted = redactSensitiveInfo(assistantText);
+          if (redacted !== assistantText) {
+            api.logger.info("[GuardClaw] PII-redacted local model response before transcript write");
+            return { message: { ...(msg as Record<string, unknown>), content: [{ type: "text", text: redacted }] } };
+          }
         }
       }
 
@@ -636,6 +695,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const memMgr = getDefaultMemoryManager();
       const privacyConfig = getPrivacyConfigFromApi(api);
       await memMgr.syncAllMemoryToClean(privacyConfig);
+
+      clearSessionState(sessionKey);
 
       const collector = getGlobalCollector();
       if (collector) await collector.flush();
@@ -864,6 +925,28 @@ function replaceMessageText(msg: unknown, newText: string): unknown | null {
   }
 
   return null;
+}
+
+// ── Dual-track history injection helper ───────────────────────────────────
+
+/**
+ * Load the "delta" between full and clean session histories and format it
+ * as conversation context.  Returns null if there is nothing meaningful
+ * to inject (e.g. no prior sensitive turns, or dual history is empty).
+ */
+async function loadDualTrackContext(
+  sessionKey: string,
+  agentId?: string,
+  limit?: number,
+): Promise<string | null> {
+  try {
+    const mgr = getDefaultSessionManager();
+    const delta = await mgr.loadHistoryDelta(sessionKey, agentId ?? "main", limit);
+    if (delta.length === 0) return null;
+    return DualSessionManager.formatAsContext(delta);
+  } catch {
+    return null;
+  }
 }
 
 // ── Memory dual-write helpers ─────────────────────────────────────────────

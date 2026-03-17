@@ -74,6 +74,16 @@ export type PrivacyConfig = {
     isolateGuardHistory?: boolean;
     /** Base directory for session histories (default: ~/.openclaw) */
     baseDir?: string;
+    /**
+     * Inject full-track conversation history as context when routing to
+     * local models (S3 / S2-local). This replaces the sanitized placeholders
+     * ("🔒 [Private content]") with actual previous sensitive interactions
+     * so the local model has full conversational context.
+     * Default: true (when isolateGuardHistory is true)
+     */
+    injectDualHistory?: boolean;
+    /** Max number of messages to inject from dual-track history (default: 20) */
+    historyLimit?: number;
   };
   /**
    * Additional provider names to treat as "local" (safe for S3 routing).
