@@ -18,10 +18,6 @@ export function setActiveProxy(proxy: ProxyHandle): void {
   activeProxy = proxy;
 }
 
-export function getActiveProxy(): ProxyHandle | null {
-  return activeProxy;
-}
-
 /**
  * Provider plugin definition for the privacy proxy.
  *

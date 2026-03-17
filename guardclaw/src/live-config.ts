@@ -57,11 +57,6 @@ export function updateLiveConfig(patch: Partial<PrivacyConfig>): void {
   liveConfig = mergeConfig({ ...liveConfig, ...patch });
 }
 
-/** Replace the entire privacy config in the live cache. */
-export function setLiveConfig(config: PrivacyConfig): void {
-  liveConfig = mergeConfig(config);
-}
-
 function mergeConfig(userConfig: PrivacyConfig): PrivacyConfig {
   return {
     ...defaultPrivacyConfig,

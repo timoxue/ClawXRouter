@@ -227,9 +227,7 @@ export const tokenSaverRouter: GuardClawRouter = {
 
       const tier = parseTier(result.text);
       classificationCache.set(cacheKey, { tier, ts: Date.now() });
-      const decision = buildDecision(tier, config);
-      console.log(`[GuardClaw] [TokenSaver] tier=${tier} → redirect to ${decision.target?.provider}/${decision.target?.model}`);
-      return decision;
+      return buildDecision(tier, config);
     } catch (err) {
       console.error(`[GuardClaw] [TokenSaver] judge call failed:`, err);
       return { level: "S1", action: "passthrough", reason: "judge call failed — passthrough" };

@@ -52,7 +52,7 @@ export interface CustomEdgeProvider {
   ): Promise<string>;
 }
 
-let _customProviderCache: Map<string, CustomEdgeProvider> = new Map();
+const _customProviderCache: Map<string, CustomEdgeProvider> = new Map();
 
 async function loadCustomProvider(modulePath: string): Promise<CustomEdgeProvider> {
   const cached = _customProviderCache.get(modulePath);
@@ -79,7 +79,6 @@ export async function callChatCompletion(
   options?: ChatCompletionOptions & { providerType?: EdgeProviderType; customModule?: string },
 ): Promise<ChatCompletionResult> {
   const providerType = options?.providerType ?? "openai-compatible";
-  console.log(`[GuardClaw] [DEBUG] calling LLM: ${endpoint} ${model} (${providerType})`);
 
   let result: ChatCompletionResult;
   switch (providerType) {
@@ -100,7 +99,6 @@ export async function callChatCompletion(
       result = await callOpenAICompatible(endpoint, model, messages, options);
       break;
   }
-  console.log(`[GuardClaw] [DEBUG] LLM response (${model}): ${result.text.slice(0, 200)}`);
   return result;
 }
 
@@ -457,9 +455,9 @@ export async function desensitizeWithLocalModel(
   content: string,
   config: PrivacyConfig,
   sessionKey?: string,
-): Promise<{ desensitized: string; wasModelUsed: boolean }> {
+): Promise<{ desensitized: string; wasModelUsed: boolean; failed?: boolean }> {
   if (!config.localModel?.enabled) {
-    return { desensitized: content, wasModelUsed: false };
+    return { desensitized: content, wasModelUsed: false, failed: true };
   }
 
   try {
@@ -493,7 +491,7 @@ export async function desensitizeWithLocalModel(
     return { desensitized: redacted, wasModelUsed: true };
   } catch (err) {
     console.error("[GuardClaw] Local model desensitization failed:", err);
-    return { desensitized: content, wasModelUsed: false };
+    return { desensitized: content, wasModelUsed: false, failed: true };
   }
 }
 
@@ -650,10 +648,6 @@ function parsePiiJson(raw: string): Array<{ type: string; value: string }> {
     .replace(/(?<=[\[,{]\s*)'([^']+?)'(?=\s*:)/g, '"$1"')
     .replace(/(?<=:\s*)'([^']*?)'(?=\s*[,}\]])/g, '"$1"');
 
-  console.log(
-    `[GuardClaw] PII extraction raw JSON (${jsonStr.length} chars): ${jsonStr.slice(0, 300)}...`,
-  );
-
   try {
     const arr = JSON.parse(jsonStr);
     if (!Array.isArray(arr)) return [];
@@ -664,9 +658,6 @@ function parsePiiJson(raw: string): Array<{ type: string; value: string }> {
         typeof (item as Record<string, unknown>).type === "string" &&
         typeof (item as Record<string, unknown>).value === "string",
     ) as Array<{ type: string; value: string }>;
-    console.log(
-      `[GuardClaw] PII extraction found ${items.length} items: ${items.map((i) => `${i.type}=${i.value}`).join(", ")}`,
-    );
     return items;
   } catch {
     console.error("[GuardClaw] Failed to parse PII extraction JSON:", jsonStr.slice(0, 300));
@@ -736,47 +727,3 @@ function parseModelResponse(response: string): {
   }
 }
 
-/**
- * Raw edge model call for internal GuardClaw use only (detection, PII extraction,
- * desensitization, token-saver). S3 content routing uses providerOverride instead.
- *
- * Not part of the public plugin API — OpenClaw Plugin SDK has no native model
- * completion API yet. If upstream adds PluginRuntime.models.chatComplete(),
- * this helper should migrate to that.
- */
-export async function _callEdgeModelRaw(
-  systemPrompt: string,
-  userMessage: string,
-  config: { endpoint?: string; model?: string; apiKey?: string; providerType?: EdgeProviderType; customModule?: string },
-): Promise<string> {
-  const endpoint = config.endpoint ?? "http://localhost:11434";
-  const model = config.model ?? "openbmb/minicpm4.1";
-
-  const completion = await callChatCompletion(
-    endpoint,
-    model,
-    [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage },
-    ],
-    {
-      temperature: 0.3,
-      maxTokens: 1500,
-      frequencyPenalty: 0.5,
-      stop: ["[message_id:", "[Message_id:", "[system:", "Instructions:", "Data:"],
-      apiKey: config.apiKey,
-      providerType: config.providerType,
-      customModule: config.customModule,
-    },
-  );
-
-  let result = completion.text;
-  for (const marker of ["[message_id:", "[Message_id:"]) {
-    const idx = result.indexOf(marker);
-    if (idx > 0) {
-      result = result.slice(0, idx).trim();
-    }
-  }
-
-  return result;
-}

@@ -21,7 +21,7 @@ import type {
   SensitivityLevel,
   RouterRegistration,
 } from "../types.js";
-import { maxLevel, levelToNumeric } from "../types.js";
+import { maxLevel } from "../types.js";
 import { callChatCompletion } from "../local-model.js";
 import type { PrivacyConfig } from "../types.js";
 
@@ -111,7 +111,7 @@ async function classifyWithPrompt(
         customModule: lm.module,
       },
     );
-    const text = raw.trim();
+    const text = raw.text.trim();
     const jsonMatch = text.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) return null;
     const parsed = JSON.parse(jsonMatch[0]);

@@ -4,22 +4,6 @@
  * Helper functions for the GuardClaw plugin.
  */
 
-import type { PrivacyConfig } from "./types.js";
-
-/**
- * Get privacy config from plugin config
- */
-export function getPrivacyConfig(pluginConfig: Record<string, unknown>): PrivacyConfig {
-  return (pluginConfig?.privacy as PrivacyConfig) ?? {};
-}
-
-/**
- * Check if privacy features are enabled
- */
-export function isPrivacyEnabled(config: PrivacyConfig): boolean {
-  return config.enabled !== false; // Default to true
-}
-
 /**
  * Normalize path for comparison (expand ~, resolve relative paths)
  */
@@ -67,7 +51,7 @@ export function extractPathsFromParams(params: Record<string, unknown>): string[
   const paths: string[] = [];
   
   // Common path parameter names
-  const pathKeys = ["path", "file", "filepath", "filename", "dir", "directory", "target"];
+  const pathKeys = ["path", "file", "filepath", "filename", "dir", "directory", "target", "source"];
   
   for (const key of pathKeys) {
     const value = params[key];
@@ -261,4 +245,20 @@ export function isProtectedMemoryPath(filePath: string, baseDir: string = "~/.op
   }
 
   return false;
+}
+
+/**
+ * Resolve the default base URL for a provider based on its name and API type.
+ */
+export function resolveDefaultBaseUrl(provider: string, api?: string): string {
+  const p = provider.toLowerCase();
+  const a = (api ?? "").toLowerCase();
+  if (p === "google" || p.includes("gemini") || p.includes("vertex") ||
+      a.includes("google") || a.includes("gemini")) {
+    return "https://generativelanguage.googleapis.com/v1beta";
+  }
+  if (p === "anthropic" || a === "anthropic-messages") {
+    return "https://api.anthropic.com";
+  }
+  return "https://api.openai.com/v1";
 }

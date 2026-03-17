@@ -50,13 +50,54 @@ export class DualSessionManager {
   }
 
   /**
+   * Seed the full track with existing clean track content (if any) so that
+   * the full track is a complete history from the start of the session.
+   * No-op if the full track already exists.  Mirrors the memory-isolation
+   * pattern of mergeCleanIntoFull.
+   */
+  private seededSessions = new Set<string>();
+
+  private async ensureFullTrackSeeded(
+    sessionKey: string,
+    agentId: string,
+  ): Promise<void> {
+    const key = `${sessionKey}:${agentId}`;
+    if (this.seededSessions.has(key)) return;
+
+    const fullPath = this.getHistoryPath(sessionKey, agentId, "full");
+    if (fs.existsSync(fullPath)) {
+      this.seededSessions.add(key);
+      return;
+    }
+
+    const cleanPath = this.getHistoryPath(sessionKey, agentId, "clean");
+    if (!fs.existsSync(cleanPath)) {
+      this.seededSessions.add(key);
+      return;
+    }
+
+    try {
+      const dir = path.dirname(fullPath);
+      await fs.promises.mkdir(dir, { recursive: true });
+      await fs.promises.copyFile(cleanPath, fullPath);
+      console.log(`[GuardClaw] Seeded full track from clean track for ${sessionKey}`);
+    } catch (err) {
+      console.error(`[GuardClaw] Failed to seed full track for ${sessionKey}:`, err);
+    }
+    this.seededSessions.add(key);
+  }
+
+  /**
    * Write a message to the full history only.
+   * On first write, seeds the full track with existing clean track content
+   * so it contains the complete conversation history.
    */
   async writeToFull(
     sessionKey: string,
     message: SessionMessage,
     agentId: string = "main"
   ): Promise<void> {
+    await this.ensureFullTrackSeeded(sessionKey, agentId);
     await this.writeToHistory(sessionKey, message, agentId, "full");
   }
 
@@ -90,17 +131,14 @@ export class DualSessionManager {
    * Check if a message is from guard agent interactions
    */
   private isGuardAgentMessage(message: SessionMessage): boolean {
-    // Check if the message is part of a guard agent session
     if (message.sessionKey && isGuardSessionKey(message.sessionKey)) {
       return true;
     }
 
-    // Check if the message content mentions guard agent
-    const content = message.content.toLowerCase();
+    const content = message.content;
     if (
-      content.includes("[guard agent]") ||
-      content.includes("guard:") ||
-      content.includes(":guard:")
+      content.includes("[guardclaw:guard]") ||
+      content.includes("[guard agent]")
     ) {
       return true;
     }
@@ -269,8 +307,11 @@ export class DualSessionManager {
   static formatAsContext(messages: SessionMessage[], label?: string): string {
     if (messages.length === 0) return "";
 
-    const header = label ?? "Previous private conversation context (processed locally)";
-    const lines = [`[${header}]`];
+    const header = label ?? "Full conversation history (original, authoritative)";
+    const lines = [
+      `[${header}]`,
+      `[NOTE: The conversation above may contain "🔒 [Private message]" placeholders or redacted text. This is the complete original history — use it as the authoritative source.]`,
+    ];
 
     for (const msg of messages) {
       const roleLabel =
@@ -279,12 +320,16 @@ export class DualSessionManager {
         msg.role === "tool" ? `Tool${msg.toolName ? `(${msg.toolName})` : ""}` :
         "System";
 
+      const ts = msg.timestamp
+        ? ` [ts=${new Date(msg.timestamp).toISOString()}]`
+        : "";
+
       const truncated =
         msg.content.length > 2000
           ? msg.content.slice(0, 2000) + "…(truncated)"
           : msg.content;
 
-      lines.push(`${roleLabel}: ${truncated}`);
+      lines.push(`${roleLabel}${ts}: ${truncated}`);
     }
 
     lines.push("[End of private context]");

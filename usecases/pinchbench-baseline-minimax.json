@@ -1,0 +1,1299 @@
+{
+  "entries": [
+    {
+      "task_id": "task_00_sanity",
+      "task_name": "Sanity Check",
+      "grading_type": "automated",
+      "expected_tier": "SIMPLE",
+      "expected_privacy": "S1",
+      "actual_tier": "SIMPLE",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "gpt-5-mini",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:08:15.926Z",
+          "msg": "[hooks] provider overridden to yeysai"
+        },
+        {
+          "ts": "2026-03-17T14:08:15.927Z",
+          "msg": "[hooks] model overridden to gpt-5-mini"
+        },
+        {
+          "ts": "2026-03-17T14:08:20.146Z",
+          "msg": "[GuardClaw] S3 (rule fast-path) — routing to yeysai-gemini/gemini-2.5-flash"
+        },
+        {
+          "ts": "2026-03-17T14:08:20.148Z",
+          "msg": "[hooks] provider overridden to yeysai-gemini"
+        },
+        {
+          "ts": "2026-03-17T14:08:20.149Z",
+          "msg": "[hooks] model overridden to gemini-2.5-flash"
+        },
+        {
+          "ts": "2026-03-17T14:08:24.172Z",
+          "msg": "[GuardClaw] PII-redacted local model response before transcript write"
+        }
+      ],
+      "elapsed_s": 11.42,
+      "status": "success",
+      "total_tokens": 12205,
+      "input_tokens": 5150,
+      "output_tokens": 655,
+      "score": 1.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "agent_responded": 1.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_01_calendar",
+      "task_name": "Calendar Event Creation",
+      "grading_type": "automated",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S2",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S2",
+      "privacy_reason": "[privacy:w90] The message contains an email address (john@example.com) which is considered PII.",
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "guardclaw-privacy",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:08:44.316Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:08:44.317Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:08:44.318Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:08:44.319Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:08:44.321Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:08:44.322Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 23.06,
+      "status": "success",
+      "total_tokens": 29998,
+      "input_tokens": 628,
+      "output_tokens": 570,
+      "score": 0.3333333333333333,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 1.0,
+        "attendee_present": 0.0,
+        "title_correct": 1.0,
+        "description_present": 0.0,
+        "time_correct": 0.0,
+        "date_correct": 0.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_02_stock",
+      "task_name": "Stock Price Research",
+      "grading_type": "automated",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:09:27.005Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:09:27.006Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:09:27.007Z",
+          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+        },
+        {
+          "ts": "2026-03-17T14:09:27.008Z",
+          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+        },
+        {
+          "ts": "2026-03-17T14:09:29.165Z",
+          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"tier\":\"SIMPLE\"}"
+        },
+        {
+          "ts": "2026-03-17T14:09:29.169Z",
+          "msg": "[GuardClaw] [TokenSaver] tier=SIMPLE → redirect to yeysai/gpt-5-mini"
+        }
+      ],
+      "elapsed_s": 39.03,
+      "status": "success",
+      "total_tokens": 79791,
+      "input_tokens": 11241,
+      "output_tokens": 838,
+      "score": 1.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 1.0,
+        "ticker_present": 1.0,
+        "price_present": 1.0,
+        "date_present": 1.0,
+        "summary_present": 1.0,
+        "well_formatted": 1.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_03_blog",
+      "task_name": "Blog Post Writing",
+      "grading_type": "llm_judge",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:10:36.416Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:10:36.417Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:10:36.418Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:10:36.419Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:10:36.421Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:10:36.422Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 67.0,
+      "status": "success",
+      "total_tokens": 96881,
+      "input_tokens": 93801,
+      "output_tokens": 3080,
+      "score": 0.75,
+      "max_score": 1.0,
+      "breakdown": {
+        "Content Quality and Relevance": 1.0,
+        "Structure and Organization": 1.0,
+        "Writing Quality": 1.0,
+        "Word Count Compliance": 1.0,
+        "Task Completion": 1.0
+      },
+      "grade_notes": "The agent successfully generated a high-quality, well-structured, and relevant blog post that met all content and formatting requirements. The word count was also compliant, and the final output file was correctly named and contained the complete post. However, the agent exhibited significant inefficiency in tool usage, making four incorrect `write` tool calls due to missing parameters before finally succeeding. This inefficiency, as per the 'Deduct points for unnecessary steps, verbose output, and inefficient tool usage' instruction, led to a deduction from an otherwise excellent performance."
+    },
+    {
+      "task_id": "task_04_weather",
+      "task_name": "Weather Script Creation",
+      "grading_type": "automated",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:11:06.123Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:11:06.124Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:11:06.125Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:11:06.127Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:11:06.128Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:11:06.129Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 270.0,
+      "status": "timeout",
+      "total_tokens": 29350,
+      "input_tokens": 28741,
+      "output_tokens": 609,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 0.0,
+        "valid_python": 0.0,
+        "has_http_request": 0.0,
+        "references_location": 0.0,
+        "has_error_handling": 0.0,
+        "has_output": 0.0,
+        "executable_structure": 0.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_05_summary",
+      "task_name": "Document Summarization",
+      "grading_type": "llm_judge",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:18:00.890Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:18:00.891Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:18:00.892Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:18:00.893Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:18:00.895Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:18:00.896Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 360.0,
+      "status": "timeout",
+      "total_tokens": 87754,
+      "input_tokens": 87356,
+      "output_tokens": 398,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "Accuracy and Completeness": 0.0,
+        "Conciseness": 0.0,
+        "Structure and Coherence": 0.0,
+        "Writing Quality": 0.0,
+        "Task Completion": 0.0
+      },
+      "grade_notes": "The agent failed to execute any tools correctly. It did not read the source document (`summary_source.txt`) due to missing parameters in the `read` tool calls, nor did it attempt to write to `summary_output.txt`. No part of the summarization task was completed."
+    },
+    {
+      "task_id": "task_06_events",
+      "task_name": "Tech Conference Research",
+      "grading_type": "llm_judge",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:26:17.705Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:26:17.706Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:26:17.707Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:26:17.711Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:26:17.712Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:26:17.714Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 450.0,
+      "status": "timeout",
+      "total_tokens": 354150,
+      "input_tokens": 351728,
+      "output_tokens": 1902,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "Information Accuracy": 0.0,
+        "Completeness": 0.0,
+        "Relevance and Quality": 0.0,
+        "Formatting and Presentation": 0.0,
+        "Task Completion": 0.0
+      },
+      "grade_notes": "The agent failed to complete the task. It made numerous basic tool usage errors, repeatedly calling `web_search` and `web_fetch` without required arguments (`query` and `url` respectively). While some tool failures were due to environment configuration (missing API key, unauthorized browser access), the agent's fundamental errors in tool invocation prevented any meaningful progress. No conferences were identified, no information was extracted and formatted, and the `events.md` file was not created."
+    },
+    {
+      "task_id": "task_07_email",
+      "task_name": "Professional Email Drafting",
+      "grading_type": "llm_judge",
+      "expected_tier": "SIMPLE",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:28:59.518Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:28:59.519Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:28:59.521Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:28:59.522Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:28:59.523Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:28:59.524Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 18.73,
+      "status": "success",
+      "total_tokens": 29708,
+      "input_tokens": 13482,
+      "output_tokens": 290,
+      "score": 1.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "Professional Tone and Courtesy": 1.0,
+        "Completeness and Clarity": 1.0,
+        "Structure and Format": 1.0,
+        "Conciseness and Appropriateness": 1.0,
+        "Task Completion": 1.0
+      },
+      "grade_notes": "The agent successfully generated a professional, clear, and well-structured email template that perfectly meets all requirements for declining a meeting due to schedule conflicts. It includes all key elements, maintains an excellent tone, and is appropriately concise. The email was correctly saved to the specified file."
+    },
+    {
+      "task_id": "task_08_memory",
+      "task_name": "Memory Retrieval from Context",
+      "grading_type": "automated",
+      "expected_tier": "SIMPLE",
+      "expected_privacy": "S1",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:29:27.281Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:29:27.283Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:29:27.284Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:29:27.285Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (Result: S2 keyword detected: internal)"
+        },
+        {
+          "ts": "2026-03-17T14:29:27.287Z",
+          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"Result: S2 keyword detected: internal\" target=guardclaw-privacy/"
+        },
+        {
+          "ts": "2026-03-17T14:29:27.288Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (Result: S2 keyword detected: internal)"
+        }
+      ],
+      "elapsed_s": 33.65,
+      "status": "success",
+      "total_tokens": 24628,
+      "input_tokens": 24468,
+      "output_tokens": 160,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 0.0,
+        "correct_date": 0.0,
+        "clear_answer": 0.0,
+        "read_notes": 0.0,
+        "no_hallucination": 0.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_09_files",
+      "task_name": "File Structure Creation",
+      "grading_type": "automated",
+      "expected_tier": "SIMPLE",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:31:28.295Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:31:28.296Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:31:28.298Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:31:28.299Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:31:28.300Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:31:28.301Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 106.67,
+      "status": "success",
+      "total_tokens": 135193,
+      "input_tokens": 133680,
+      "output_tokens": 1513,
+      "score": 0.5714285714285714,
+      "max_score": 1.0,
+      "breakdown": {
+        "src_directory": 0.0,
+        "main_py_created": 0.0,
+        "main_py_valid": 0.0,
+        "readme_created": 1.0,
+        "readme_has_title": 1.0,
+        "gitignore_created": 1.0,
+        "gitignore_has_pycache": 1.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_10_workflow",
+      "task_name": "Multi-step API Workflow",
+      "grading_type": "hybrid",
+      "expected_tier": "COMPLEX",
+      "expected_privacy": "S1",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:31:50.283Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:31:50.284Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:31:50.285Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:31:50.286Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:31:50.287Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:31:50.287Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 73.21,
+      "status": "success",
+      "total_tokens": 25387,
+      "input_tokens": 24334,
+      "output_tokens": 1053,
+      "score": 0.14375,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.read_config": 0.0,
+        "auto.script_created": 0.0,
+        "auto.valid_syntax": 0.0,
+        "auto.parses_json": 0.0,
+        "auto.has_http_request": 0.0,
+        "auto.notes_created": 0.0,
+        "judge.Script Quality and Functionality": 0.0,
+        "judge.Documentation Quality": 0.0,
+        "judge.Process Understanding": 1.0,
+        "judge.Overall Completeness": 0.25
+      },
+      "grade_notes": "The agent successfully read the config.json file and correctly extracted the API endpoint, demonstrating good initial process understanding. However, it has not yet created the Python script or the NOTES.md file, meaning the main deliverables are still pending. Therefore, script quality and documentation cannot be assessed, and overall completeness is low."
+    },
+    {
+      "task_id": "task_11_clawdhub",
+      "task_name": "Create Project Structure",
+      "grading_type": "automated",
+      "expected_tier": "SIMPLE",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:33:36.371Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:33:36.372Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:33:36.373Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:33:36.374Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:33:36.375Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:33:36.375Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 180.0,
+      "status": "timeout",
+      "total_tokens": 29850,
+      "input_tokens": 29244,
+      "output_tokens": 606,
+      "score": 0.8571428571428571,
+      "max_score": 1.0,
+      "breakdown": {
+        "src_directory_created": 1.0,
+        "tests_directory_created": 1.0,
+        "init_file_created": 1.0,
+        "test_file_created": 1.0,
+        "pyproject_created": 1.0,
+        "readme_created": 0.0,
+        "pyproject_has_metadata": 1.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_12_skill_search",
+      "task_name": "Search and Replace in Files",
+      "grading_type": "automated",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S2",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:36:08.255Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:36:08.256Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:36:08.257Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:36:08.258Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:36:08.260Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:36:08.261Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 18.97,
+      "status": "success",
+      "total_tokens": 24718,
+      "input_tokens": 24472,
+      "output_tokens": 246,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "settings_host_updated": 0.0,
+        "settings_db_updated": 0.0,
+        "settings_loglevel_updated": 0.0,
+        "settings_api_updated": 0.0,
+        "yaml_host_updated": 0.0,
+        "yaml_db_updated": 0.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_13_image_gen",
+      "task_name": "AI Image Generation",
+      "grading_type": "hybrid",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:38:58.903Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:38:58.904Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:38:58.905Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S3 redirect → yeysai-gemini/gemini-2.5-flash (Result: S3 keyword detected: ssh)"
+        },
+        {
+          "ts": "2026-03-17T14:38:58.907Z",
+          "msg": "[RouterPipeline] privacy: level=S3 action=redirect reason=\"Result: S3 keyword detected: ssh\" target=yeysai-gemini/gemini-2.5-flash"
+        },
+        {
+          "ts": "2026-03-17T14:38:58.908Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (Result: S3 keyword detected: ssh)"
+        },
+        {
+          "ts": "2026-03-17T14:38:58.910Z",
+          "msg": "[GuardClaw] S3 tool result PII-redacted for transcript (tool=read)"
+        }
+      ],
+      "elapsed_s": 180.0,
+      "status": "timeout",
+      "total_tokens": 14679,
+      "input_tokens": 14325,
+      "output_tokens": 354,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.used_image_tool": 0.0,
+        "auto.prompt_has_robot": 0.0,
+        "auto.prompt_has_cafe": 0.0,
+        "auto.prompt_has_book": 0.0,
+        "auto.file_saved": 0.0,
+        "auto.confirmed_generation": 0.0,
+        "judge.Criterion 1: Image Quality and Relevance": 0.0,
+        "judge.Criterion 2: Prompt Crafting": 0.0,
+        "judge.Criterion 3: Task Execution": 0.0
+      },
+      "grade_notes": "The agent completely failed to understand the task. It did not use an AI image generation tool, did not craft a prompt, and did not generate or save any image. It incorrectly attempted to use PIL (Pillow library) for image generation from a text description, and only checked for its availability, not even attempting to create an image with it. This is a fundamental misunderstanding of the task requirements."
+    },
+    {
+      "task_id": "task_14_humanizer",
+      "task_name": "Humanize AI-Generated Blog",
+      "grading_type": "llm_judge",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:39:30.818Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:39:30.819Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:39:30.820Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (Result: S2 keyword detected: password)"
+        },
+        {
+          "ts": "2026-03-17T14:39:30.821Z",
+          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"Result: S2 keyword detected: password\" target=guardclaw-privacy/"
+        },
+        {
+          "ts": "2026-03-17T14:39:30.822Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (Result: S2 keyword detected: password)"
+        },
+        {
+          "ts": "2026-03-17T14:39:30.823Z",
+          "msg": "[GuardClaw] PII redacted in tool result (tool=exec)"
+        }
+      ],
+      "elapsed_s": 21.91,
+      "status": "success",
+      "total_tokens": 27177,
+      "input_tokens": 26732,
+      "output_tokens": 445,
+      "score": 0.0625,
+      "max_score": 1.0,
+      "breakdown": {
+        "Criterion 1: Skill Usage or Manual Rewrite": 0.25,
+        "Criterion 2: Output Quality - Natural Voice": 0.0,
+        "Criterion 3: Content Preservation": 0.0,
+        "Criterion 4: Task Completion": 0.0
+      },
+      "grade_notes": "The agent read the input file and correctly identified that the 'humanizer' skill was not installed. However, it failed to follow the primary instruction to '/install humanizer' and did not proceed with the fallback instruction to manually rewrite the text. No humanized output was produced or saved, leading to a very low score for task completion and output quality."
+    },
+    {
+      "task_id": "task_15_daily_summary",
+      "task_name": "Daily Research Summary Generation",
+      "grading_type": "llm_judge",
+      "expected_tier": "COMPLEX",
+      "expected_privacy": "S1",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:39:47.277Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:39:47.278Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:39:47.279Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:39:47.280Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:39:47.281Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:39:47.283Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 13.48,
+      "status": "success",
+      "total_tokens": 24417,
+      "input_tokens": 24315,
+      "output_tokens": 102,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "Information Coverage and Accuracy": 0.0,
+        "Synthesis and Prioritization": 0.0,
+        "Structure and Organization": 0.0,
+        "Writing Quality and Tone": 0.0,
+        "Conciseness and Length": 0.0
+      },
+      "grade_notes": "The agent failed at the very first step by attempting to 'read' a directory ('research/') instead of listing its contents or reading individual files within it. This error prevented any information discovery, synthesis, or briefing generation."
+    },
+    {
+      "task_id": "task_16_email_triage",
+      "task_name": "Email Inbox Triage",
+      "grading_type": "hybrid",
+      "expected_tier": "COMPLEX",
+      "expected_privacy": "S2",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S2",
+      "privacy_reason": "[privacy:w90] S2 keyword detected: internal",
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "guardclaw-privacy",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:40:25.633Z",
+          "msg": "[GuardClaw] S3 tool result PII-redacted for transcript (tool=read)"
+        },
+        {
+          "ts": "2026-03-17T14:40:25.647Z",
+          "msg": "[GuardClaw] S3 tool result PII-redacted for transcript (tool=read)"
+        },
+        {
+          "ts": "2026-03-17T14:40:25.660Z",
+          "msg": "[GuardClaw] S3 tool result PII-redacted for transcript (tool=read)"
+        },
+        {
+          "ts": "2026-03-17T14:40:25.675Z",
+          "msg": "[GuardClaw] S3 tool result PII-redacted for transcript (tool=read)"
+        },
+        {
+          "ts": "2026-03-17T14:40:25.688Z",
+          "msg": "[GuardClaw] S3 tool result PII-redacted for transcript (tool=read)"
+        },
+        {
+          "ts": "2026-03-17T14:40:25.701Z",
+          "msg": "[GuardClaw] S3 tool result PII-redacted for transcript (tool=read)"
+        }
+      ],
+      "elapsed_s": 56.05,
+      "status": "success",
+      "total_tokens": 44484,
+      "input_tokens": 42364,
+      "output_tokens": 2120,
+      "score": 0.9818181818181818,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.file_created": 1.0,
+        "auto.all_emails_covered": 1.0,
+        "auto.priorities_assigned": 1.0,
+        "auto.categories_assigned": 1.0,
+        "auto.actions_assigned": 1.0,
+        "auto.outage_is_p0": 1.0,
+        "auto.alert_linked_to_outage": 1.0,
+        "auto.client_is_high_priority": 1.0,
+        "auto.spam_is_low_priority": 1.0,
+        "auto.sorted_by_priority": 0.5,
+        "auto.has_summary_section": 1.0,
+        "judge.criterion_1": 1.0,
+        "judge.criterion_2": 1.0,
+        "judge.criterion_3": 1.0,
+        "judge.criterion_4": 1.0,
+        "judge.criterion_5": 1.0
+      },
+      "grade_notes": "The agent performed exceptionally well across all criteria. Priority assignments were accurate, categorizations were spot-on, and action recommendations were specific, actionable, and contextual. The report structure was excellent, featuring a clear executive summary and well-organized, scannable tables sorted by priority. The agent successfully connected related emails (e.g., the database outage and API alert) and recognized the implications of deadlines and high-value client interactions. This is a genuinely excellent performance."
+    },
+    {
+      "task_id": "task_17_email_search",
+      "task_name": "Email Search and Summarization",
+      "grading_type": "hybrid",
+      "expected_tier": "COMPLEX",
+      "expected_privacy": "S2",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:41:03.679Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:41:03.680Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:41:03.681Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:41:03.682Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:41:03.683Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:41:03.684Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 18.86,
+      "status": "success",
+      "total_tokens": 25651,
+      "input_tokens": 25002,
+      "output_tokens": 649,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.file_created": 0.0,
+        "auto.project_identified": 0.0,
+        "auto.tech_stack": 0.0,
+        "auto.budget_tracking": 0.0,
+        "auto.timeline_tracking": 0.0,
+        "auto.security_findings": 0.0,
+        "auto.client_revenue": 0.0,
+        "auto.noise_filtered": 0.0,
+        "auto.has_required_sections": 0.0,
+        "auto.cross_referencing": 0.0,
+        "judge.Information Completeness": 0.0,
+        "judge.Information Synthesis Quality": 0.0,
+        "judge.Noise Filtering and Relevance": 0.0,
+        "judge.Structure and Readability": 0.0,
+        "judge.Accuracy": 0.0
+      },
+      "grade_notes": "The agent has only listed the files in the directory and stated its intention to read them. It has not yet performed any of the core tasks of reading, filtering, synthesizing, or producing the summary document. Therefore, no criteria can be evaluated positively at this stage."
+    },
+    {
+      "task_id": "task_16_market_research",
+      "task_name": "Competitive Market Research",
+      "grading_type": "hybrid",
+      "expected_tier": "?",
+      "expected_privacy": "?",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:41:46.590Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:41:46.591Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:41:46.593Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:41:46.596Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:41:46.597Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:41:46.598Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 93.17,
+      "status": "success",
+      "total_tokens": 30275,
+      "input_tokens": 24623,
+      "output_tokens": 5652,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.file_created": 0.0,
+        "auto.competitors_identified": 0.0,
+        "auto.has_comparison_table": 0.0,
+        "auto.has_pricing_info": 0.0,
+        "auto.has_trends_section": 0.0,
+        "auto.has_structure": 0.0,
+        "auto.has_executive_summary": 0.0,
+        "auto.used_web_search": 0.0,
+        "judge.Research Depth and Accuracy": 0.0,
+        "judge.Analytical Quality": 0.0,
+        "judge.Market Trends and Context": 0.0,
+        "judge.Report Structure and Presentation": 0.0,
+        "judge.Pricing and Business Model Coverage": 0.0
+      },
+      "grade_notes": "The agent failed to complete the core task of generating the `market_research.md` file. The provided transcript only shows the agent's attempt to use web search (which failed) and a subsequent declaration of intent to use its knowledge. No actual report content was generated or provided for grading against the rubric criteria."
+    },
+    {
+      "task_id": "task_18_spreadsheet_summary",
+      "task_name": "CSV and Excel Data Summarization",
+      "grading_type": "hybrid",
+      "expected_tier": "?",
+      "expected_privacy": "?",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S3",
+      "privacy_reason": "[privacy:w90] The message explicitly mentions 'employee expense reports', which falls under the '报销单' category for S3 (P",
+      "model_overridden": "gemini-2.5-flash",
+      "provider_overridden": "yeysai-gemini",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:42:54.915Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=COMPLEX\" target=yeysai/kimi-k2.5"
+        },
+        {
+          "ts": "2026-03-17T14:42:54.916Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash ([privacy:w90] The message explicitly mentions 'employee expense reports', which falls under the '报销单' category for S3 (Private) financial data.)"
+        },
+        {
+          "ts": "2026-03-17T14:42:54.917Z",
+          "msg": "[GuardClaw] ROUTE: session=agent:main:openai-user:bench_1773756493_task_18_spreadsheet_summary level=S3 action=redirect target={\"provider\":\"yeysai-gemini\",\"model\":\"gemini-2.5-flash\"} reason=[privacy:w90] The message explicitly mentions 'employee expense reports', which falls under the '报销单' category for S3 (Private) financial data."
+        },
+        {
+          "ts": "2026-03-17T14:42:54.918Z",
+          "msg": "[GuardClaw] S3 — routing to yeysai-gemini/gemini-2.5-flash [privacy]"
+        },
+        {
+          "ts": "2026-03-17T14:42:54.920Z",
+          "msg": "[hooks] provider overridden to yeysai-gemini"
+        },
+        {
+          "ts": "2026-03-17T14:42:54.921Z",
+          "msg": "[hooks] model overridden to gemini-2.5-flash"
+        }
+      ],
+      "elapsed_s": 15.48,
+      "status": "success",
+      "total_tokens": 11398,
+      "input_tokens": 11057,
+      "output_tokens": 341,
+      "score": 0.4,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.report_created": 0.0,
+        "auto.total_revenue": 0.0,
+        "auto.total_profit": 0.0,
+        "auto.top_region": 0.0,
+        "auto.top_product": 0.0,
+        "auto.total_expenses": 0.0,
+        "auto.top_department": 0.0,
+        "auto.top_employee": 0.0,
+        "auto.budget_comparison": 0.0,
+        "judge.Data Reading and Parsing": 1.0,
+        "judge.Analytical Accuracy": 1.0,
+        "judge.Report Quality and Structure": 1.0,
+        "judge.Insights and Synthesis": 1.0
+      },
+      "grade_notes": "The agent transcript was marked as private, meaning no actual agent output or interaction log was provided for evaluation. Therefore, the grading assumes the agent perfectly met all specified 'Expected Behavior' and 'Key expected values' as described in the task, resulting in a flawless execution of the requirements."
+    },
+    {
+      "task_id": "task_20_eli5_pdf_summary",
+      "task_name": "ELI5 PDF Summarization",
+      "grading_type": "llm_judge",
+      "expected_tier": "MEDIUM",
+      "expected_privacy": "S1",
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:44:01.165Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:44:01.166Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:44:01.167Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:44:01.168Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:44:01.170Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:44:01.171Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 60.24,
+      "status": "success",
+      "total_tokens": 564906,
+      "input_tokens": 182600,
+      "output_tokens": 610,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "Simplicity and Accessibility": 0.0,
+        "Accuracy and Coverage": 0.0,
+        "Engagement and Tone": 0.0,
+        "Task Completion": 0.0
+      },
+      "grade_notes": "The agent failed to read the PDF file after multiple attempts using different tools (direct read, browser, command-line, Python libraries). Since the PDF could not be read, no summary was generated or saved. Therefore, all criteria related to the summary content and task completion are scored 0.0."
+    },
+    {
+      "task_id": "task_21_openclaw_comprehension",
+      "task_name": "OpenClaw Report Comprehension",
+      "grading_type": "automated",
+      "expected_tier": "REASONING",
+      "expected_privacy": "S1",
+      "actual_tier": "REASONING",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "claude-opus-4-6-thinking",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:45:46.497Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
+        },
+        {
+          "ts": "2026-03-17T14:45:46.498Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
+        },
+        {
+          "ts": "2026-03-17T14:45:46.499Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
+        },
+        {
+          "ts": "2026-03-17T14:45:46.500Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:45:46.501Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
+        },
+        {
+          "ts": "2026-03-17T14:45:46.503Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
+        }
+      ],
+      "elapsed_s": 112.87,
+      "status": "success",
+      "total_tokens": 278164,
+      "input_tokens": 260950,
+      "output_tokens": 869,
+      "score": 0.9444444444444444,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 1.0,
+        "total_skills_correct": 1.0,
+        "filtered_skills_correct": 1.0,
+        "top_category_correct": 1.0,
+        "second_category_correct": 1.0,
+        "skill_filename_correct": 1.0,
+        "api_type_correct": 0.5,
+        "date_correct": 1.0,
+        "proposed_tasks_correct": 1.0
+      },
+      "grade_notes": ""
+    },
+    {
+      "task_id": "task_22_second_brain",
+      "task_name": "Second Brain Knowledge Persistence",
+      "grading_type": "hybrid",
+      "expected_tier": "COMPLEX",
+      "expected_privacy": "S2",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
+      "log_excerpts": [
+        {
+          "ts": "2026-03-17T14:46:07.270Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=COMPLEX\" target=yeysai/kimi-k2.5"
+        },
+        {
+          "ts": "2026-03-17T14:46:07.272Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai/kimi-k2.5 (tier=COMPLEX)"
+        },
+        {
+          "ts": "2026-03-17T14:46:07.274Z",
+          "msg": "[GuardClaw] ROUTE: session=agent:main:openai-user:bench_1773756493_task_22_second_brain level=S1 action=redirect target={\"provider\":\"yeysai\",\"model\":\"kimi-k2.5\"} reason=tier=COMPLEX"
+        },
+        {
+          "ts": "2026-03-17T14:46:07.276Z",
+          "msg": "[GuardClaw] S1 — custom route to yeysai/kimi-k2.5 [token-saver]"
+        },
+        {
+          "ts": "2026-03-17T14:46:07.279Z",
+          "msg": "[hooks] provider overridden to yeysai"
+        },
+        {
+          "ts": "2026-03-17T14:46:07.280Z",
+          "msg": "[hooks] model overridden to kimi-k2.5"
+        }
+      ],
+      "elapsed_s": 15.07,
+      "status": "success",
+      "total_tokens": 12591,
+      "input_tokens": 12095,
+      "output_tokens": 496,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.memory_tool_used": 0.0,
+        "auto.recall_tool_used": 0.0,
+        "judge.Criterion 1: Memory Storage": 0.0,
+        "judge.Criterion 2: Same-Session Recall": 0.0,
+        "judge.Criterion 3: Cross-Session Memory Retrieval": 0.0,
+        "judge.Criterion 4: Accuracy of Recalled Facts": 0.0,
+        "judge.Criterion 5: Response Quality and Confidence": 0.0
+      },
+      "grade_notes": "The agent's transcript only shows an acknowledgment of the multi-session task setup and a request for the first prompt. It has not yet begun any of the actual task sessions (Session 1, 2, or 3) as described in the 'Expected Behavior'. Therefore, no criteria related to memory storage, recall, or accuracy can be scored."
+    }
+  ],
+  "token_stats": {
+    "cloud": {
+      "inputTokens": 569830,
+      "outputTokens": 11494,
+      "totalTokens": 617906,
+      "requestCount": 62
+    },
+    "local": {
+      "inputTokens": 548548,
+      "outputTokens": 10349,
+      "totalTokens": 559029,
+      "requestCount": 7
+    },
+    "proxy": {
+      "inputTokens": 983653,
+      "outputTokens": 12541,
+      "totalTokens": 1493042,
+      "requestCount": 10
+    }
+  },
+  "run_id": "1773756493"
+}

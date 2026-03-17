@@ -397,56 +397,6 @@ export class MemoryIsolationManager {
     }
   }
 
-  /**
-   * Get memory statistics
-   */
-  async getMemoryStats(): Promise<{
-    fullSize: number;
-    cleanSize: number;
-    fullDaily: number;
-    cleanDaily: number;
-  }> {
-    const stats = {
-      fullSize: 0,
-      cleanSize: 0,
-      fullDaily: 0,
-      cleanDaily: 0,
-    };
-
-    try {
-      // Check MEMORY.md files
-      const fullMemPath = this.getMemoryFilePath(false);
-      const cleanMemPath = this.getMemoryFilePath(true);
-
-      if (fs.existsSync(fullMemPath)) {
-        stats.fullSize = (await fs.promises.stat(fullMemPath)).size;
-      }
-
-      if (fs.existsSync(cleanMemPath)) {
-        stats.cleanSize = (await fs.promises.stat(cleanMemPath)).size;
-      }
-
-      // Count daily memory files
-      const fullDir = this.getMemoryDir(false);
-      const cleanDir = this.getMemoryDir(true);
-
-      if (fs.existsSync(fullDir)) {
-        stats.fullDaily = (await fs.promises.readdir(fullDir)).filter((f) =>
-          f.endsWith(".md"),
-        ).length;
-      }
-
-      if (fs.existsSync(cleanDir)) {
-        stats.cleanDaily = (await fs.promises.readdir(cleanDir)).filter((f) =>
-          f.endsWith(".md"),
-        ).length;
-      }
-    } catch (err) {
-      console.error("[GuardClaw] Failed to get memory stats:", err);
-    }
-
-    return stats;
-  }
 }
 
 // Export a singleton instance

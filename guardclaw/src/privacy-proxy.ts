@@ -16,6 +16,7 @@
  */
 
 import * as http from "node:http";
+import { redactSensitiveInfo } from "./utils.js";
 
 // ── Marker protocol ──
 
@@ -32,16 +33,34 @@ export type OriginalProviderTarget = {
   streaming?: boolean;
 };
 
-const originalProviderTargets = new Map<string, OriginalProviderTarget>();
+type StashedTarget = { target: OriginalProviderTarget; ts: number };
+const PROVIDER_STASH_TTL_MS = 120_000; // 2 minutes
+const originalProviderTargets = new Map<string, StashedTarget>();
 
 export function stashOriginalProvider(key: string, target: OriginalProviderTarget): void {
-  originalProviderTargets.set(key, target);
+  originalProviderTargets.set(key, { target, ts: Date.now() });
 }
 
 export function consumeOriginalProvider(key: string): OriginalProviderTarget | undefined {
-  const t = originalProviderTargets.get(key);
-  originalProviderTargets.delete(key);
-  return t;
+  const entry = originalProviderTargets.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.ts > PROVIDER_STASH_TTL_MS) {
+    originalProviderTargets.delete(key);
+    return undefined;
+  }
+  return entry.target;
+}
+
+function cleanupStaleProviderTargets(): void {
+  const now = Date.now();
+  for (const [k, v] of originalProviderTargets) {
+    if (now - v.ts > PROVIDER_STASH_TTL_MS) originalProviderTargets.delete(k);
+  }
+}
+
+const _providerCleanupInterval = setInterval(cleanupStaleProviderTargets, 60_000);
+if (typeof _providerCleanupInterval === "object" && "unref" in _providerCleanupInterval) {
+  (_providerCleanupInterval as NodeJS.Timeout).unref();
 }
 
 /**
@@ -483,21 +502,46 @@ export async function startPrivacyProxy(
         log.info("[GuardClaw Proxy] Cleaned unsupported keywords from tool schemas");
       }
 
-      // VERIFICATION LOG: dump actual messages sent to cloud after PII stripping
-      const sessionKey = req.headers["x-guardclaw-session"] as string | undefined;
-      const msgs = (parsed.messages ?? parsed.contents ?? []) as Record<string, unknown>[];
-      log.info(`[GuardClaw Proxy] === MESSAGES TO CLOUD (${sessionKey ?? "no-session"}) ===`);
-      for (let i = 0; i < msgs.length; i++) {
-        const m = msgs[i];
-        const role = String(m?.role ?? "?");
-        const content = typeof m?.content === "string"
-          ? m.content.slice(0, 500)
-          : JSON.stringify(m?.content)?.slice(0, 500) ?? "";
-        log.info(`[GuardClaw Proxy]   [${i}] ${role}: ${content}`);
+      // Step 2b: Defense-in-depth — run rule-based PII redaction on all user/system
+      // messages that will be forwarded to cloud. This catches residual PII when:
+      //   - prependContext semantics change (markers not wrapping the user message)
+      //   - desensitization by local model missed some PII patterns
+      //   - content was injected without going through the marker protocol
+      const allMessages = (parsed.messages ?? parsed.contents ?? []) as Array<Record<string, unknown>>;
+      for (const msg of allMessages) {
+        if (typeof msg.content === "string") {
+          const redacted = redactSensitiveInfo(msg.content);
+          if (redacted !== msg.content) {
+            msg.content = redacted;
+            log.info("[GuardClaw Proxy] Defense-in-depth: rule-based PII redaction applied to message");
+          }
+        } else if (Array.isArray(msg.content)) {
+          for (const part of msg.content as Array<Record<string, unknown>>) {
+            if (part && typeof part.text === "string") {
+              const redacted = redactSensitiveInfo(part.text);
+              if (redacted !== part.text) {
+                part.text = redacted;
+                log.info("[GuardClaw Proxy] Defense-in-depth: rule-based PII redaction applied to message part");
+              }
+            }
+          }
+        }
+        // Google format: contents[].parts[].text
+        if (Array.isArray(msg.parts)) {
+          for (const part of msg.parts as Array<Record<string, unknown>>) {
+            if (part && typeof part.text === "string") {
+              const redacted = redactSensitiveInfo(part.text);
+              if (redacted !== part.text) {
+                part.text = redacted;
+                log.info("[GuardClaw Proxy] Defense-in-depth: rule-based PII redaction applied to Google part");
+              }
+            }
+          }
+        }
       }
-      log.info(`[GuardClaw Proxy] === END MESSAGES ===`);
 
       // Step 3: Resolve the original provider to forward to
+      const sessionKey = req.headers["x-guardclaw-session"] as string | undefined;
       const target = resolveTarget(sessionKey);
 
       if (!target) {

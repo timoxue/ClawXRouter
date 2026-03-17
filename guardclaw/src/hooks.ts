@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { PrivacyConfig } from "./types.js";
 import {
+  buildMainSessionPlaceholder,
   getGuardAgentConfig,
   isGuardSessionKey,
 } from "./guard-agent.js";
@@ -43,7 +44,7 @@ import {
   isActiveLocalRouting,
 } from "./session-state.js";
 import { detectByRules } from "./rules.js";
-import { isProtectedMemoryPath, redactSensitiveInfo } from "./utils.js";
+import { isProtectedMemoryPath, redactSensitiveInfo, extractPathsFromParams, resolveDefaultBaseUrl } from "./utils.js";
 import {
   GUARDCLAW_S2_OPEN,
   GUARDCLAW_S2_CLOSE,
@@ -109,7 +110,7 @@ function isToolAllowlisted(toolName: string): boolean {
 let _cachedWorkspaceDir: string | undefined;
 
 export function registerHooks(api: OpenClawPluginApi): void {
-  const privacyCfgInit = getPrivacyConfigFromApi(api);
+  const privacyCfgInit = getLiveConfig();
   const sessionBaseDir = privacyCfgInit.session?.baseDir;
 
   const memoryManager = getDefaultMemoryManager();
@@ -130,7 +131,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       clearActiveLocalRouting(sessionKey);
 
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       if (!privacyConfig.enabled) return;
 
       if (isGuardSessionKey(sessionKey)) {
@@ -225,11 +226,30 @@ export function registerHooks(api: OpenClawPluginApi): void {
         };
       }
 
-      // Desensitize for S2 (needed for both proxy markers and local prompt)
+      // Desensitize for S2 (needed for both proxy markers and local prompt).
+      // If desensitization fails (local model down), escalate to S3 so the
+      // message stays entirely local — never send raw PII to cloud.
       let desensitized: string | undefined;
       if (decision.level === "S2") {
-        const { desensitized: d } = await desensitizeWithLocalModel(msgStr, privacyConfig, sessionKey);
-        desensitized = d;
+        const result = await desensitizeWithLocalModel(msgStr, privacyConfig, sessionKey);
+        if (result.failed) {
+          api.logger.warn("[GuardClaw] S2 desensitization failed — escalating to S3 (local-only) to prevent PII leak");
+          trackSessionLevel(sessionKey, "S3");
+          setActiveLocalRouting(sessionKey);
+          stashDetection(sessionKey, {
+            level: "S3",
+            reason: `${decision.reason}; desensitization failed — escalated to S3`,
+            originalPrompt: msgStr,
+            timestamp: Date.now(),
+          });
+          const guardCfg = getGuardAgentConfig(privacyConfig);
+          const fallbackProvider = privacyConfig.localModel?.provider ?? "ollama";
+          return {
+            providerOverride: guardCfg?.provider ?? fallbackProvider,
+            modelOverride: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
+          };
+        }
+        desensitized = result.desensitized;
       }
 
       // Stash decision for before_prompt_build / before_message_write
@@ -326,7 +346,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const pending = getPendingDetection(sessionKey);
       if (!pending || pending.level === "S1") return;
 
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       const sessionCfg = privacyConfig.session ?? {};
       const shouldInject = sessionCfg.injectDualHistory !== false
         && sessionCfg.isolateGuardHistory !== false;
@@ -339,7 +359,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         if (shouldInject) {
           const context = await loadDualTrackContext(sessionKey, ctx.agentId, historyLimit);
           if (context) {
-            api.logger.info(`[GuardClaw] Injected dual-track history context for S3 turn`);
+            api.logger.info(`[GuardClaw] Injected full-track history for S3 turn`);
             return { prependContext: context };
           }
         }
@@ -353,16 +373,23 @@ export function registerHooks(api: OpenClawPluginApi): void {
         if (shouldInject) {
           const context = await loadDualTrackContext(sessionKey, ctx.agentId, historyLimit);
           if (context) {
-            api.logger.info(`[GuardClaw] Injected dual-track history context for S2-local turn`);
+            api.logger.info(`[GuardClaw] Injected full-track history for S2-local turn`);
             return { prependContext: context };
           }
         }
         return;
       }
 
-      // S2-proxy: inject desensitized content markers for privacy-proxy to strip.
-      // System prompt is left unchanged — the proxy handles PII removal at the
-      // transport layer so the cloud model never sees raw PII regardless.
+      // S2-proxy: inject desensitized content wrapped in markers for privacy-proxy to strip.
+      //
+      // SAFETY CONTRACT: OpenClaw's before_prompt_build `prependContext` prepends
+      // text directly to the user prompt string (see plugin.md §Prompt build order).
+      // The resulting message content becomes:
+      //   "<guardclaw-s2>\n{desensitized}\n</guardclaw-s2>\n\n{original PII}"
+      // The proxy's stripPiiMarkers() replaces the ENTIRE content with only the text
+      // between markers, effectively discarding the original PII that follows.
+      // If OpenClaw ever changes prependContext semantics (e.g. to a separate message),
+      // the proxy's fallback regex redaction provides defense-in-depth.
       if (pending.level === "S2" && pending.desensitized) {
         return {
           prependContext: `${GUARDCLAW_S2_OPEN}\n${pending.desensitized}\n${GUARDCLAW_S2_CLOSE}`,
@@ -383,13 +410,13 @@ export function registerHooks(api: OpenClawPluginApi): void {
       if (!toolName) return;
 
       const typedParams = params as Record<string, unknown>;
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       const baseDir = privacyConfig.session?.baseDir ?? "~/.openclaw";
 
       // File-access guard for cloud models only — local models (Guard Agent
       // sessions and S3 active routing) are trusted to read full history.
       if (!isGuardSessionKey(sessionKey) && !isActiveLocalRouting(sessionKey)) {
-        const pathValues = extractPathValuesFromParams(typedParams);
+        const pathValues = extractPathsFromParams(typedParams);
         for (const p of pathValues) {
           if (isProtectedMemoryPath(p, baseDir)) {
             api.logger.warn(`[GuardClaw] BLOCKED: cloud model tried to access protected path: ${p}`);
@@ -501,6 +528,33 @@ export function registerHooks(api: OpenClawPluginApi): void {
           } else if (decision.level === "S2") {
             markSessionAsPrivate(sessionKey, "S2");
           }
+
+          // S3/S2 mid-turn: model can't be switched (this hook is void/fire-and-forget),
+          // so both levels receive S2-equivalent treatment — LLM-based PII extraction
+          // for better desensitization than the sync rule-based pass in tool_result_persist.
+          // tool_result_persist already did rule-based redaction on the session transcript
+          // (first defense for the cloud model's next API call). This async pass writes
+          // properly desensitized content to the dual-track histories.
+          if (decision.level === "S3" || decision.level === "S2") {
+            const resultStr = typeof result === "string" ? result : JSON.stringify(result ?? "");
+            if (resultStr.length >= 10) {
+              const privacyConfig = getLiveConfig();
+              const desenResult = await desensitizeWithLocalModel(resultStr, privacyConfig, sessionKey);
+              const desensitized = desenResult.failed
+                ? redactSensitiveInfo(resultStr)
+                : desenResult.desensitized;
+
+              const sessionManager = getDefaultSessionManager();
+              sessionManager.writeToFull(sessionKey, {
+                role: "tool", content: resultStr, timestamp: Date.now(), sessionKey,
+              }).catch(() => {});
+              sessionManager.writeToClean(sessionKey, {
+                role: "tool", content: desensitized, timestamp: Date.now(), sessionKey,
+              }).catch(() => {});
+
+              api.logger.info(`[GuardClaw] ${decision.level} tool result LLM-desensitized for dual-track (tool=${toolName}, model=${desenResult.failed ? "fallback-rules" : "llm"})`);
+            }
+          }
         }
       }
 
@@ -509,7 +563,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         const writePath = String(event.params?.path ?? "");
         if (writePath && isMemoryWritePath(writePath)) {
           const workspaceDir = _cachedWorkspaceDir ?? process.cwd();
-          const privacyConfig = getPrivacyConfigFromApi(api);
+          const privacyConfig = getLiveConfig();
           syncMemoryWrite(writePath, workspaceDir, privacyConfig, api.logger, isGuardSessionKey(sessionKey)).catch((err) => {
             api.logger.warn(`[GuardClaw] Memory dual-write sync failed: ${String(err)}`);
           });
@@ -548,20 +602,21 @@ export function registerHooks(api: OpenClawPluginApi): void {
         const textContent = extractMessageText(msg);
         if (textContent && textContent.length >= 10) {
           const sessionManager = getDefaultSessionManager();
+          const ts = Date.now();
           sessionManager.writeToFull(sessionKey, {
-            role: "tool", content: textContent, timestamp: Date.now(), sessionKey,
+            role: "tool", content: textContent, timestamp: ts, sessionKey,
           }).catch(() => {});
           const redacted = redactSensitiveInfo(textContent);
           if (redacted !== textContent) {
             api.logger.info(`[GuardClaw] S3 tool result PII-redacted for transcript (tool=${ctx.toolName ?? "unknown"})`);
             sessionManager.writeToClean(sessionKey, {
-              role: "tool", content: redacted, timestamp: Date.now(), sessionKey,
+              role: "tool", content: redacted, timestamp: ts, sessionKey,
             }).catch(() => {});
             const modified = replaceMessageText(msg, redacted);
             if (modified) return { message: modified };
           } else {
             sessionManager.writeToClean(sessionKey, {
-              role: "tool", content: textContent, timestamp: Date.now(), sessionKey,
+              role: "tool", content: textContent, timestamp: ts, sessionKey,
             }).catch(() => {});
           }
         }
@@ -575,25 +630,67 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const textContent = extractMessageText(msg);
       if (!textContent || textContent.length < 10) return;
 
-      // Rule-based PII redaction (sync — tool_result_persist cannot be async)
+      // ── Synchronous sensitivity detection + PII redaction ──
+      //
+      // This hook is sync so we cannot call the local model. Both S3 and S2
+      // content discovered mid-turn receive the same treatment: rule-based
+      // PII redaction. The cloud model cannot be switched mid-loop (after_tool_call
+      // is void/fire-and-forget), so S3 is effectively handled as S2 here.
+      //
+      // We still differentiate state tracking:
+      //   S3 → trackSessionLevel + setActiveLocalRouting (same-turn subsequent
+      //         tool results enter the activeLocalRouting branch above;
+      //         cleared at start of next turn's before_model_resolve)
+      //   S2 → markSessionAsPrivate (persists across turns)
+      //
+      // after_tool_call may race with this hook (async vs sync). Running
+      // detectByRules here ensures we catch S3/S2 content regardless.
+
+      const privacyConfig = getLiveConfig();
+      const ruleCheck = detectByRules(
+        {
+          checkpoint: "onToolCallExecuted",
+          toolName: ctx.toolName,
+          toolResult: textContent,
+          sessionKey,
+        },
+        privacyConfig,
+      );
+
+      const detectedSensitive = ruleCheck.level === "S3" || ruleCheck.level === "S2";
+
+      if (detectedSensitive) {
+        if (ruleCheck.level === "S3") {
+          trackSessionLevel(sessionKey, "S3");
+          setActiveLocalRouting(sessionKey);
+        }
+        markSessionAsPrivate(sessionKey, ruleCheck.level);
+        recordDetection(sessionKey, ruleCheck.level, "onToolCallExecuted", ruleCheck.reason);
+      }
+
       const redacted = redactSensitiveInfo(textContent);
       const wasRedacted = redacted !== textContent;
 
-      if (wasRedacted) {
-        markSessionAsPrivate(sessionKey, "S2");
-        api.logger.info(`[GuardClaw] PII redacted in tool result (tool=${ctx.toolName ?? "unknown"})`);
-        const modified = replaceMessageText(msg, redacted);
-        if (modified) return { message: modified };
+      // Dual-track persistence: original → full, redacted → clean
+      if (detectedSensitive || wasRedacted || isSessionMarkedPrivate(sessionKey)) {
+        const sessionManager = getDefaultSessionManager();
+        const ts = Date.now();
+        sessionManager.writeToFull(sessionKey, {
+          role: "tool", content: textContent, timestamp: ts, sessionKey,
+        }).catch(() => {});
+        sessionManager.writeToClean(sessionKey, {
+          role: "tool", content: wasRedacted ? redacted : textContent, timestamp: ts, sessionKey,
+        }).catch(() => {});
       }
 
-      // Persist to dual history if session is private
-      if (isSessionMarkedPrivate(sessionKey)) {
-        const sessionManager = getDefaultSessionManager();
-        const msgText = typeof msg === "string" ? msg : JSON.stringify(msg);
-        const sessionMessage: SessionMessage = { role: "tool", content: msgText, timestamp: Date.now(), sessionKey };
-        sessionManager.persistMessage(sessionKey, sessionMessage).catch((err) => {
-          console.error("[GuardClaw] Failed to persist tool result to dual history:", err);
-        });
+      if (wasRedacted) {
+        const level = ruleCheck.level !== "S1" ? ruleCheck.level : "S2";
+        api.logger.info(`[GuardClaw] ${level} tool result desensitized for transcript (tool=${ctx.toolName ?? "unknown"}${ruleCheck.reason ? `, reason=${ruleCheck.reason}` : ""})`);
+        if (!detectedSensitive) markSessionAsPrivate(sessionKey, "S2");
+        const modified = replaceMessageText(msg, redacted);
+        if (modified) return { message: modified };
+      } else if (detectedSensitive) {
+        api.logger.info(`[GuardClaw] ${ruleCheck.level} detected in tool result but no PII patterns to redact (tool=${ctx.toolName ?? "unknown"}, reason=${ruleCheck.reason ?? "rule match"})`);
       }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in tool_result_persist hook: ${String(err)}`);
@@ -638,7 +735,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
             console.error("[GuardClaw] Failed to persist user message to full history:", err);
           });
           const cleanContent = pending.level === "S3"
-            ? "🔒 [Private content — processed locally]"
+            ? buildMainSessionPlaceholder("S3", undefined, ts)
             : (pending.desensitized ?? msgText);
           sessionManager.writeToClean(sessionKey, {
             role: "user", content: cleanContent, timestamp: ts, sessionKey,
@@ -694,7 +791,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       if (pending.level === "S3") {
         consumeDetection(sessionKey);
-        return { message: { ...msg, content: [{ type: "text", text: "🔒 [Private content — processed locally]" }] } };
+        return { message: { ...msg, content: [{ type: "text", text: buildMainSessionPlaceholder("S3", undefined, pending.timestamp) }] } };
       }
       if (pending.level === "S2" && pending.desensitized) {
         consumeDetection(sessionKey);
@@ -717,7 +814,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       api.logger.info(`[GuardClaw] ${wasPrivate ? "private" : "cloud"} session ${sessionKey} ended. Syncing memory…`);
 
       const memMgr = getDefaultMemoryManager();
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       await memMgr.syncAllMemoryToClean(privacyConfig);
 
       clearSessionState(sessionKey);
@@ -736,7 +833,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
     try {
       if (ctx.workspaceDir) _cachedWorkspaceDir = ctx.workspaceDir;
       const memMgr = getDefaultMemoryManager();
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       await memMgr.syncAllMemoryToClean(privacyConfig);
       api.logger.info("[GuardClaw] Memory synced after compaction");
     } catch (err) {
@@ -770,7 +867,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
     try {
       if (ctx.workspaceDir) _cachedWorkspaceDir = ctx.workspaceDir;
       const memMgr = getDefaultMemoryManager();
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       await memMgr.syncAllMemoryToClean(privacyConfig);
       api.logger.info("[GuardClaw] Memory synced before reset");
     } catch (err) {
@@ -786,7 +883,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const { content } = event;
       if (!content?.trim()) return;
 
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       if (!privacyConfig.enabled) return;
 
       const pipeline = getGlobalPipeline();
@@ -820,7 +917,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const sessionKey = ctx.sessionKey ?? "";
       if (!sessionKey.includes(":subagent:") || !prompt?.trim()) return;
 
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       if (!privacyConfig.enabled) return;
 
       const pipeline = getGlobalPipeline();
@@ -848,7 +945,18 @@ export function registerHooks(api: OpenClawPluginApi): void {
         };
       }
       if (decision.level === "S2") {
-        return { prependContext: `[PRIVACY NOTICE] The task below may contain PII. Do NOT echo exact PII values. Use generic references instead.` };
+        const privacyCfg = getLiveConfig();
+        const desenResult = await desensitizeWithLocalModel(prompt, privacyCfg, sessionKey);
+        if (desenResult.failed) {
+          const guardCfg = getGuardAgentConfig(privacyCfg);
+          const fallbackProvider = privacyCfg.localModel?.provider ?? "ollama";
+          const provider = guardCfg?.provider ?? fallbackProvider;
+          const model = guardCfg?.modelName ?? privacyCfg.localModel?.model ?? "openbmb/minicpm4.1";
+          api.logger.warn(`[GuardClaw] Subagent S2 desensitization failed — routing to local ${provider}/${model}`);
+          return { providerOverride: provider, modelOverride: model };
+        }
+        api.logger.info("[GuardClaw] Subagent S2 — prompt desensitized before forwarding");
+        return { prompt: desenResult.desensitized };
       }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in before_agent_start hook: ${String(err)}`);
@@ -860,7 +968,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("message_received", async (event, _ctx) => {
     try {
-      const privacyConfig = getPrivacyConfigFromApi(api);
+      const privacyConfig = getLiveConfig();
       if (!privacyConfig.enabled) return;
       api.logger.info?.(`[GuardClaw] Message received from ${event.from ?? "unknown"}`);
     } catch { /* observational only */ }
@@ -873,42 +981,10 @@ export function registerHooks(api: OpenClawPluginApi): void {
 // Helpers
 // ==========================================================================
 
-function getPrivacyConfigFromApi(_api: OpenClawPluginApi): PrivacyConfig {
-  return getLiveConfig();
-}
-
-function resolveDefaultBaseUrl(provider: string, api?: string): string {
-  const p = provider.toLowerCase();
-  const a = (api ?? "").toLowerCase();
-  if (p === "google" || p.includes("gemini") || p.includes("vertex") ||
-      a.includes("google") || a.includes("gemini")) {
-    return "https://generativelanguage.googleapis.com/v1beta";
-  }
-  if (p === "anthropic" || a === "anthropic-messages") {
-    return "https://api.anthropic.com";
-  }
-  return "https://api.openai.com/v1";
-}
-
 function shouldSkipMessage(msg: string): boolean {
   if (msg.includes("[REDACTED:") || msg.startsWith("[SYSTEM]")) return true;
   if (/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(msg)) return true;
   return false;
-}
-
-function extractPathValuesFromParams(params: Record<string, unknown>): string[] {
-  const paths: string[] = [];
-  const pathKeys = ["path", "file", "filepath", "filename", "dir", "directory", "target", "source"];
-  for (const key of pathKeys) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) paths.push(value.trim());
-  }
-  for (const value of Object.values(params)) {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      paths.push(...extractPathValuesFromParams(value as Record<string, unknown>));
-    }
-  }
-  return paths;
 }
 
 /**
@@ -959,9 +1035,12 @@ function replaceMessageText(msg: unknown, newText: string): unknown | null {
 // ── Dual-track history injection helper ───────────────────────────────────
 
 /**
- * Load the "delta" between full and clean session histories and format it
- * as conversation context.  Returns null if there is nothing meaningful
- * to inject (e.g. no prior sensitive turns, or dual history is empty).
+ * Load the full (unsanitized) session history for local model injection.
+ *
+ * The full track is seeded from the clean track on first write, so it
+ * contains the complete conversation from the start — S1 messages (copied
+ * from clean) plus S2/S3 originals.  The local model gets a single,
+ * coherent, authoritative history without needing to reconcile two sources.
  */
 async function loadDualTrackContext(
   sessionKey: string,
@@ -970,9 +1049,9 @@ async function loadDualTrackContext(
 ): Promise<string | null> {
   try {
     const mgr = getDefaultSessionManager();
-    const delta = await mgr.loadHistoryDelta(sessionKey, agentId ?? "main", limit);
-    if (delta.length === 0) return null;
-    return DualSessionManager.formatAsContext(delta);
+    const full = await mgr.loadHistory(sessionKey, false, agentId ?? "main", limit);
+    if (full.length === 0) return null;
+    return DualSessionManager.formatAsContext(full);
   } catch {
     return null;
   }

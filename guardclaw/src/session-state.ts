@@ -48,15 +48,6 @@ export function getSessionHighestLevel(sessionKey: string): SensitivityLevel {
 }
 
 /**
- * Get session sensitivity info including highest level
- */
-export function getSessionSensitivity(sessionKey: string): { highestLevel: SensitivityLevel } | null {
-  const state = sessionStates.get(sessionKey);
-  if (!state) return null;
-  return { highestLevel: state.highestLevel };
-}
-
-/**
  * Record a detection event in session history
  */
 export function recordDetection(
@@ -90,34 +81,10 @@ export function recordDetection(
 }
 
 /**
- * Get full session privacy state
- */
-export function getSessionState(sessionKey: string): SessionPrivacyState | undefined {
-  return sessionStates.get(sessionKey);
-}
-
-/**
  * Clear session state (e.g., when session ends)
  */
 export function clearSessionState(sessionKey: string): void {
   sessionStates.delete(sessionKey);
-}
-
-/**
- * Reset session privacy state (allow user to switch back to cloud models)
- * WARNING: This will allow the conversation history to be sent to cloud models
- */
-export function resetSessionPrivacy(sessionKey: string): boolean {
-  const state = sessionStates.get(sessionKey);
-  if (state) {
-    state.isPrivate = false;
-    state.highestLevel = "S1";
-    state.detectionHistory = [];
-    // Also clear the guard subsession
-    sessionStates.delete(`${sessionKey}:guard`);
-    return true;
-  }
-  return false;
 }
 
 /**

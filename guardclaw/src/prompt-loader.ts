@@ -32,8 +32,6 @@ function resolvePromptsDir(): string {
 
 const PROMPTS_DIR = resolvePromptsDir();
 
-export { PROMPTS_DIR };
-
 /** Cache loaded prompts in memory — invalidated on dashboard save */
 const cache = new Map<string, string>();
 
@@ -84,11 +82,6 @@ export function loadPromptWithVars(
 /** Invalidate a cached prompt so the next loadPrompt() re-reads from disk. */
 export function invalidatePrompt(name: string): void {
   cache.delete(name);
-}
-
-/** Invalidate all cached prompts. */
-export function invalidateAllPrompts(): void {
-  cache.clear();
 }
 
 /**

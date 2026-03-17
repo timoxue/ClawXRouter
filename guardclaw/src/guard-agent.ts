@@ -59,33 +59,10 @@ export function getGuardAgentConfig(config: PrivacyConfig): {
 }
 
 /**
- * Generate a guard subsession key from the parent session key.
- * Format: {parentSessionKey}:guard
- * 
- * This is a stable key so that the guard subsession accumulates
- * its own history across multiple redirections within the same parent session.
- */
-export function generateGuardSessionKey(parentSessionKey: string): string {
-  return `${parentSessionKey}:guard`;
-}
-
-/**
  * Check if a session key belongs to a guard subsession
  */
 export function isGuardSessionKey(sessionKey: string): boolean {
   return sessionKey.endsWith(":guard") || sessionKey.includes(":guard:");
-}
-
-/**
- * Extract the parent session key from a guard session key
- */
-export function getParentSessionKey(guardSessionKey: string): string | null {
-  if (!isGuardSessionKey(guardSessionKey)) {
-    return null;
-  }
-  // Remove the :guard suffix
-  const idx = guardSessionKey.indexOf(":guard");
-  return idx > 0 ? guardSessionKey.slice(0, idx) : null;
 }
 
 /**
@@ -95,11 +72,12 @@ export function getParentSessionKey(guardSessionKey: string): string | null {
  * This ensures the cloud model never sees the actual sensitive content,
  * but knows that something was handled privately.
  */
-export function buildMainSessionPlaceholder(level: SensitivityLevel, reason?: string): string {
+export function buildMainSessionPlaceholder(level: SensitivityLevel, reason?: string, timestamp?: number): string {
   const emoji = level === "S3" ? "🔒" : "🔑";
   const levelLabel = level === "S3" ? "Private" : "Sensitive";
   const reasonSuffix = reason ? ` (${reason})` : "";
-  return `${emoji} [${levelLabel} message — processed locally${reasonSuffix}]`;
+  const tsSuffix = timestamp ? ` [ts=${new Date(timestamp).toISOString()}]` : "";
+  return `${emoji} [${levelLabel} message — processed locally${reasonSuffix}]${tsSuffix}`;
 }
 
 const BUILTIN_LOCAL_PROVIDERS = [

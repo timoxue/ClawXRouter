@@ -24,6 +24,7 @@ import { initLiveConfig, watchConfigFile } from "./src/live-config.js";
 import { initDashboard, statsHttpHandler } from "./src/stats-dashboard.js";
 import type { PrivacyConfig, PipelineConfig, RouterRegistration } from "./src/types.js";
 import type { ProxyHandle } from "./src/privacy-proxy.js";
+import { resolveDefaultBaseUrl } from "./src/utils.js";
 
 // ── Standalone config file ──
 // guardclaw.json is the single source of truth for all GuardClaw config.
@@ -84,19 +85,6 @@ function resolveProxyApi(originalApi: string): string {
     return "anthropic-messages";
   }
   return originalApi;
-}
-
-function resolveDefaultProviderBaseUrl(provider: string, api?: string): string {
-  const p = provider.toLowerCase();
-  const a = (api ?? "").toLowerCase();
-  if (p === "google" || p.includes("gemini") || p.includes("vertex") ||
-      a.includes("google") || a.includes("gemini")) {
-    return "https://generativelanguage.googleapis.com/v1beta";
-  }
-  if (p === "anthropic" || a === "anthropic-messages") {
-    return "https://api.anthropic.com";
-  }
-  return "https://api.openai.com/v1";
 }
 
 const plugin = {
@@ -267,7 +255,7 @@ const plugin = {
 
     // Set default provider target for the proxy
     if (providerConfig) {
-      const defaultBaseUrl = resolveDefaultProviderBaseUrl(defaultProvider, originalApi);
+      const defaultBaseUrl = resolveDefaultBaseUrl(defaultProvider, originalApi);
       const modelsOverrides = (agentDefaults?.models as Record<string, Record<string, unknown>> | undefined) ?? {};
       const modelStreamingPref = modelsOverrides[primaryModelStr]?.streaming;
       setDefaultProviderTarget({
