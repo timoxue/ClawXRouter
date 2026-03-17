@@ -90,6 +90,7 @@ export const guardClawConfigSchema = Type.Object({
         }),
       ),
       localProviders: Type.Optional(Type.Array(Type.String())),
+      toolAllowlist: Type.Optional(Type.Array(Type.String())),
       modelPricing: Type.Optional(
         Type.Record(
           Type.String(),
@@ -112,8 +113,9 @@ export const guardClawConfigSchema = Type.Object({
           Type.String(),
           Type.Object({
             enabled: Type.Optional(Type.Boolean()),
-            type: Type.Optional(Type.Union([Type.Literal("builtin"), Type.Literal("custom")])),
+            type: Type.Optional(Type.Union([Type.Literal("builtin"), Type.Literal("custom"), Type.Literal("configurable")])),
             module: Type.Optional(Type.String()),
+            weight: Type.Optional(Type.Number()),
             options: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
           }),
         ),
@@ -170,6 +172,7 @@ export const defaultPrivacyConfig = {
     model: "ollama/openbmb/minicpm4.1",
   },
   localProviders: [] as string[],
+  toolAllowlist: [] as string[],
   modelPricing: {
     "claude-sonnet-4.6": { inputPer1M: 3, outputPer1M: 15 },
     "claude-3.5-sonnet": { inputPer1M: 3, outputPer1M: 15 },
@@ -188,7 +191,7 @@ export const defaultPrivacyConfig = {
   },
   routers: {
     privacy: { enabled: true, type: "builtin" as const },
-  } as Record<string, { enabled?: boolean; type?: "builtin" | "custom"; module?: string; options?: Record<string, unknown> }>,
+  } as Record<string, { enabled?: boolean; type?: "builtin" | "custom" | "configurable"; module?: string; weight?: number; options?: Record<string, unknown> }>,
   pipeline: {
     onUserMessage: ["privacy"],
     onToolCallProposed: ["privacy"],

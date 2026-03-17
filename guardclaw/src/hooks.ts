@@ -26,7 +26,7 @@ import {
   isGuardSessionKey,
 } from "./guard-agent.js";
 import { desensitizeWithLocalModel } from "./local-model.js";
-import { getDefaultMemoryManager } from "./memory-isolation.js";
+import { getDefaultMemoryManager, GUARD_SECTION_BEGIN, GUARD_SECTION_END } from "./memory-isolation.js";
 import { loadPrompt } from "./prompt-loader.js";
 import { DualSessionManager, getDefaultSessionManager, type SessionMessage } from "./session-manager.js";
 import {
@@ -95,15 +95,15 @@ function getGuardAgentSystemPrompt(): string {
   return loadPrompt("guard-agent-system", DEFAULT_GUARD_AGENT_SYSTEM_PROMPT);
 }
 
-// Internal tools whose results naturally contain tokens/auth headers and
-// should NOT be subject to privacy pipeline detection or PII redaction.
-const TOOL_PRIVACY_ALLOWLIST = new Set([
-  "gateway",
-  "web_fetch",
-  "web_search",
-  "image_gen",
-  "image_generation",
-]);
+/**
+ * Check if a tool is exempt from privacy pipeline detection and PII redaction.
+ * Reads from the live config `toolAllowlist` (default: empty = no exemptions).
+ */
+function isToolAllowlisted(toolName: string): boolean {
+  const allowlist = getLiveConfig().toolAllowlist;
+  if (!allowlist || allowlist.length === 0) return false;
+  return allowlist.includes(toolName);
+}
 
 // Workspace dir cache — set from first hook that has PluginHookAgentContext
 let _cachedWorkspaceDir: string | undefined;
@@ -194,6 +194,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       );
 
       recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason);
+      api.logger.info(`[GuardClaw] ROUTE: session=${sessionKey} level=${decision.level} action=${decision.action} target=${JSON.stringify(decision.target)} reason=${decision.reason}`);
       if (decision.level === "S1" && decision.action === "passthrough") {
         return;
       }
@@ -445,7 +446,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // S3 local routing: the model is already local — re-running the
       // pipeline would block the very tool calls the local model needs.
       // Internal infrastructure tools are also exempt from pipeline checks.
-      if (!isActiveLocalRouting(sessionKey) && !TOOL_PRIVACY_ALLOWLIST.has(toolName)) {
+      if (!isActiveLocalRouting(sessionKey) && !isToolAllowlisted(toolName)) {
         const pipeline = getGlobalPipeline();
         if (pipeline) {
           const decision = await pipeline.run(
@@ -484,7 +485,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       // Pipeline detection — skip when already in S3 local routing
       // Also skip for internal infrastructure tools whose results naturally contain tokens
-      if (!isActiveLocalRouting(sessionKey) && !TOOL_PRIVACY_ALLOWLIST.has(toolName)) {
+      if (!isActiveLocalRouting(sessionKey) && !isToolAllowlisted(toolName)) {
         const pipeline = getGlobalPipeline();
         if (pipeline) {
           const decision = await pipeline.run(
@@ -496,6 +497,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
           if (decision.level === "S3") {
             trackSessionLevel(sessionKey, "S3");
+            setActiveLocalRouting(sessionKey);
           } else if (decision.level === "S2") {
             markSessionAsPrivate(sessionKey, "S2");
           }
@@ -508,7 +510,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         if (writePath && isMemoryWritePath(writePath)) {
           const workspaceDir = _cachedWorkspaceDir ?? process.cwd();
           const privacyConfig = getPrivacyConfigFromApi(api);
-          syncMemoryWrite(writePath, workspaceDir, privacyConfig, api.logger).catch((err) => {
+          syncMemoryWrite(writePath, workspaceDir, privacyConfig, api.logger, isGuardSessionKey(sessionKey)).catch((err) => {
             api.logger.warn(`[GuardClaw] Memory dual-write sync failed: ${String(err)}`);
           });
         }
@@ -538,15 +540,37 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return;
       }
 
-      // ── PII detection & redaction on all other tool results ──
-      // S3 sessions are routed to a local model — data never leaves the
-      // local environment, so PII redaction is unnecessary and would
-      // degrade the local model's analysis quality.
-      if (isActiveLocalRouting(sessionKey)) return;
+      // ── S3 local routing: dual-track split ──
+      // The local model sees full content (via dual-track history injection),
+      // but the main transcript must be redacted so future S1 turns don't
+      // leak S3 tool results to cloud models.
+      if (isActiveLocalRouting(sessionKey)) {
+        const textContent = extractMessageText(msg);
+        if (textContent && textContent.length >= 10) {
+          const sessionManager = getDefaultSessionManager();
+          sessionManager.writeToFull(sessionKey, {
+            role: "tool", content: textContent, timestamp: Date.now(), sessionKey,
+          }).catch(() => {});
+          const redacted = redactSensitiveInfo(textContent);
+          if (redacted !== textContent) {
+            api.logger.info(`[GuardClaw] S3 tool result PII-redacted for transcript (tool=${ctx.toolName ?? "unknown"})`);
+            sessionManager.writeToClean(sessionKey, {
+              role: "tool", content: redacted, timestamp: Date.now(), sessionKey,
+            }).catch(() => {});
+            const modified = replaceMessageText(msg, redacted);
+            if (modified) return { message: modified };
+          } else {
+            sessionManager.writeToClean(sessionKey, {
+              role: "tool", content: textContent, timestamp: Date.now(), sessionKey,
+            }).catch(() => {});
+          }
+        }
+        return;
+      }
 
       // Internal infrastructure tools (gateway, web_fetch, etc.) naturally contain
       // auth headers/tokens that must NOT be redacted or the tool breaks.
-      if (ctx.toolName && TOOL_PRIVACY_ALLOWLIST.has(ctx.toolName)) return;
+      if (ctx.toolName && isToolAllowlisted(ctx.toolName)) return;
 
       const textContent = extractMessageText(msg);
       if (!textContent || textContent.length < 10) return;
@@ -769,8 +793,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
       if (!pipeline) return;
 
       const decision = await pipeline.run(
-        "onToolCallExecuted",
-        { checkpoint: "onToolCallExecuted", message: content },
+        "onUserMessage",
+        { checkpoint: "onUserMessage", message: content },
         getPipelineConfig(),
       );
 
@@ -808,14 +832,19 @@ export function registerHooks(api: OpenClawPluginApi): void {
         getPipelineConfig(),
       );
 
-      // S3: subagent keeps original system prompt and skills (already routed to local model)
-      // Only block if the action explicitly requires it
-      if (decision.action === "block") {
+      // S3 / block: route the subagent to a local model instead of
+      // modifying the system prompt.  The cloud model has already seen the
+      // prompt text, so altering system instructions is not a reliable
+      // security control.  Routing to a local model keeps the data local.
+      if (decision.level === "S3" || decision.action === "block") {
+        const guardCfg = getGuardAgentConfig(privacyConfig);
+        const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
+        const provider = guardCfg?.provider ?? defaultProvider;
+        const model = guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1";
+        api.logger.info(`[GuardClaw] Subagent ${decision.level} — routing to ${provider}/${model}`);
         return {
-          systemPrompt:
-            `[PRIVACY GUARD] This task contains ${decision.level}-level content (${decision.reason ?? "sensitive data"}). ` +
-            `You MUST NOT process, analyze, or echo any of this data. ` +
-            `Reply with: "This task contains private data that cannot be processed by a cloud model." Do NOT attempt the task.`,
+          providerOverride: provider,
+          modelOverride: model,
         };
       }
       if (decision.level === "S2") {
@@ -972,6 +1001,7 @@ async function syncMemoryWrite(
   workspaceDir: string,
   privacyConfig: PrivacyConfig,
   logger: { info: (msg: string) => void; warn: (msg: string) => void },
+  isGuardSession: boolean = false,
 ): Promise<void> {
   const rel = writePath.replace(/^\.\//, "");
   const absPath = path.isAbsolute(writePath)
@@ -1002,8 +1032,12 @@ async function syncMemoryWrite(
   // Ensure directory exists for daily memory files
   await fs.promises.mkdir(path.dirname(fullAbsPath), { recursive: true });
 
-  // Write the original (unredacted) content to FULL
-  await fs.promises.writeFile(fullAbsPath, content, "utf-8");
+  // Wrap guard agent content with explicit markers so filterGuardContent
+  // can reliably strip it when syncing FULL → CLEAN.
+  const fullContent = isGuardSession
+    ? `${GUARD_SECTION_BEGIN}\n${content}\n${GUARD_SECTION_END}`
+    : content;
+  await fs.promises.writeFile(fullAbsPath, fullContent, "utf-8");
 
   // Redact PII and overwrite the clean version
   const memMgr = getDefaultMemoryManager();

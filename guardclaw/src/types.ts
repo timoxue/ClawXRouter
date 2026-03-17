@@ -92,6 +92,11 @@ export type PrivacyConfig = {
    */
   localProviders?: string[];
   /**
+   * Tool names exempt from privacy pipeline detection and PII redaction.
+   * Default: empty (no tools are exempt). Users can opt-in via config.
+   */
+  toolAllowlist?: string[];
+  /**
    * Per-model pricing for cloud API cost estimation (USD per 1M tokens).
    * Keys are model name strings; lookup tries exact match, then substring match.
    */

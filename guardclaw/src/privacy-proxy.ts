@@ -180,16 +180,26 @@ export function stripPiiMarkers(
   let stripped = false;
 
   for (const msg of messages) {
-    if (msg.role !== "user" || typeof msg.content !== "string") continue;
-
-    const openIdx = msg.content.indexOf(GUARDCLAW_S2_OPEN);
-    const closeIdx = msg.content.indexOf(GUARDCLAW_S2_CLOSE);
-    if (openIdx === -1 || closeIdx === -1 || closeIdx <= openIdx) continue;
-
-    msg.content = msg.content
-      .slice(openIdx + GUARDCLAW_S2_OPEN.length, closeIdx)
-      .trim();
-    stripped = true;
+    if (typeof msg.content === "string") {
+      const openIdx = msg.content.indexOf(GUARDCLAW_S2_OPEN);
+      const closeIdx = msg.content.indexOf(GUARDCLAW_S2_CLOSE);
+      if (openIdx === -1 || closeIdx === -1 || closeIdx <= openIdx) continue;
+      msg.content = msg.content
+        .slice(openIdx + GUARDCLAW_S2_OPEN.length, closeIdx)
+        .trim();
+      stripped = true;
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content as Array<Record<string, unknown>>) {
+        if (!part || typeof part.text !== "string") continue;
+        const openIdx = part.text.indexOf(GUARDCLAW_S2_OPEN);
+        const closeIdx = part.text.indexOf(GUARDCLAW_S2_CLOSE);
+        if (openIdx === -1 || closeIdx === -1 || closeIdx <= openIdx) continue;
+        part.text = part.text
+          .slice(openIdx + GUARDCLAW_S2_OPEN.length, closeIdx)
+          .trim();
+        stripped = true;
+      }
+    }
   }
 
   return stripped;
@@ -208,7 +218,6 @@ export function stripPiiMarkersGoogleContents(
   for (const entry of contents) {
     if (!entry || typeof entry !== "object") continue;
     const e = entry as Record<string, unknown>;
-    if (e.role !== "user") continue;
     const parts = e.parts;
     if (!Array.isArray(parts)) continue;
 
@@ -474,8 +483,21 @@ export async function startPrivacyProxy(
         log.info("[GuardClaw Proxy] Cleaned unsupported keywords from tool schemas");
       }
 
-      // Step 3: Resolve the original provider to forward to
+      // VERIFICATION LOG: dump actual messages sent to cloud after PII stripping
       const sessionKey = req.headers["x-guardclaw-session"] as string | undefined;
+      const msgs = (parsed.messages ?? parsed.contents ?? []) as Record<string, unknown>[];
+      log.info(`[GuardClaw Proxy] === MESSAGES TO CLOUD (${sessionKey ?? "no-session"}) ===`);
+      for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
+        const role = String(m?.role ?? "?");
+        const content = typeof m?.content === "string"
+          ? m.content.slice(0, 500)
+          : JSON.stringify(m?.content)?.slice(0, 500) ?? "";
+        log.info(`[GuardClaw Proxy]   [${i}] ${role}: ${content}`);
+      }
+      log.info(`[GuardClaw Proxy] === END MESSAGES ===`);
+
+      // Step 3: Resolve the original provider to forward to
       const target = resolveTarget(sessionKey);
 
       if (!target) {

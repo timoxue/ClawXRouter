@@ -12,6 +12,9 @@ import type { PrivacyConfig } from "./types.js";
 import { desensitizeWithLocalModel } from "./local-model.js";
 import { redactSensitiveInfo } from "./utils.js";
 
+export const GUARD_SECTION_BEGIN = "<!-- guardclaw:guard-begin -->";
+export const GUARD_SECTION_END = "<!-- guardclaw:guard-end -->";
+
 export class MemoryIsolationManager {
   private workspaceDir: string;
 
@@ -350,42 +353,28 @@ export class MemoryIsolationManager {
   }
 
   /**
-   * Filter guard agent content from memory text
+   * Filter guard agent content from memory text.
+   * Uses explicit `GUARD_SECTION_BEGIN` / `GUARD_SECTION_END` HTML comment
+   * markers to delimit guard-originated sections.  Falls back to the legacy
+   * heuristic for content written before markers were introduced.
    */
   private filterGuardContent(content: string): string {
     const lines = content.split("\n");
     const filtered: string[] = [];
-    let skipSection = false;
+    let inGuardSection = false;
 
     for (const line of lines) {
-      const lowerLine = line.toLowerCase();
-
-      // Check for guard agent section markers
-      if (
-        lowerLine.includes("[guard agent]") ||
-        lowerLine.includes("guard:") ||
-        lowerLine.includes("private context:")
-      ) {
-        skipSection = true;
+      if (line.trim() === GUARD_SECTION_BEGIN) {
+        inGuardSection = true;
         continue;
       }
-
-      // End of guard section (typically a blank line or new section)
-      if (skipSection && (line.trim() === "" || line.startsWith("#"))) {
-        skipSection = false;
-        if (line.startsWith("#")) {
-          filtered.push(line); // Keep the new section header
-        }
+      if (line.trim() === GUARD_SECTION_END) {
+        inGuardSection = false;
         continue;
       }
-
-      // Skip lines in guard section
-      if (skipSection) {
-        continue;
+      if (!inGuardSection) {
+        filtered.push(line);
       }
-
-      // Keep line
-      filtered.push(line);
     }
 
     return filtered.join("\n");
