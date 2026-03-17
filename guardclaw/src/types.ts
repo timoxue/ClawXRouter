@@ -184,8 +184,11 @@ export type PipelineConfig = {
 
 export type SessionPrivacyState = {
   sessionKey: string;
+  /** @deprecated Replaced by per-turn currentTurnLevel. Kept for backward compat. */
   isPrivate: boolean;
   highestLevel: SensitivityLevel;
+  /** Highest sensitivity level detected in the CURRENT turn (reset each turn). */
+  currentTurnLevel: SensitivityLevel;
   detectionHistory: Array<{
     timestamp: number;
     level: SensitivityLevel;

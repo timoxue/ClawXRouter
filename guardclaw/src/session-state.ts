@@ -2,50 +2,87 @@
  * GuardClaw Session State Management
  * 
  * Tracks privacy state for each session.
+ * Per-turn semantics: memory track selection is based on the current
+ * message's sensitivity level, not permanent session state.
  */
 
 import type { Checkpoint, SensitivityLevel, SessionPrivacyState } from "./types.js";
 
-// In-memory session state storage
+// ── In-memory state stores ──────────────────────────────────────────────
+
 const sessionStates = new Map<string, SessionPrivacyState>();
 
+const pendingDetections = new Map<string, PendingDetection>();
+
+const activeLocalRouting = new Set<string>();
+
+// ── Per-turn privacy level ──────────────────────────────────────────────
+
 /**
- * Mark a session as private (S2 or S3 detected)
- * Once marked private, the session stays private to protect sensitive history.
+ * Mark the CURRENT TURN as private (S2 or S3 detected).
+ *
+ * Per-turn semantics: the privacy level is reset at the start of each turn
+ * via `resetTurnLevel()`.  This replaces the old "once private, always
+ * private" behaviour — memory track selection is now based on the current
+ * message's sensitivity, not historical state.
+ *
+ * `highestLevel` still accumulates for audit / statistics.
  */
 export function markSessionAsPrivate(sessionKey: string, level: SensitivityLevel): void {
   const existing = sessionStates.get(sessionKey);
-  
-  // Mark as private for S2 or S3 (not S1)
-  const shouldBePrivate = level === "S2" || level === "S3";
-  
+
   if (existing) {
-    // Once private, always private (don't downgrade)
-    existing.isPrivate = existing.isPrivate || shouldBePrivate;
+    existing.currentTurnLevel = getHigherLevel(existing.currentTurnLevel, level);
     existing.highestLevel = getHigherLevel(existing.highestLevel, level);
+    existing.isPrivate = existing.currentTurnLevel !== "S1";
   } else {
+    const isPrivate = level === "S2" || level === "S3";
     sessionStates.set(sessionKey, {
       sessionKey,
-      isPrivate: shouldBePrivate,
+      isPrivate,
       highestLevel: level,
+      currentTurnLevel: level,
       detectionHistory: [],
     });
   }
 }
 
 /**
- * Check if a session is marked as private
+ * Check if the CURRENT TURN is marked as private (S2 or S3).
  */
 export function isSessionMarkedPrivate(sessionKey: string): boolean {
-  return sessionStates.get(sessionKey)?.isPrivate ?? false;
+  const state = sessionStates.get(sessionKey);
+  if (!state) return false;
+  return state.currentTurnLevel !== "S1";
 }
 
 /**
- * Get the highest detected sensitivity level for a session
+ * Reset the per-turn privacy level back to S1.
+ * Called at the start of each new user turn in before_model_resolve.
+ */
+export function resetTurnLevel(sessionKey: string): void {
+  const existing = sessionStates.get(sessionKey);
+  if (existing) {
+    existing.currentTurnLevel = "S1";
+    existing.isPrivate = false;
+  }
+}
+
+/**
+ * Get the current turn's sensitivity level.
+ */
+export function getCurrentTurnLevel(sessionKey: string): SensitivityLevel {
+  return sessionStates.get(sessionKey)?.currentTurnLevel ?? "S1";
+}
+
+/**
+ * Get the highest detected sensitivity level for a session (all-time, for audit).
  */
 export function getSessionHighestLevel(sessionKey: string): SensitivityLevel {
   return sessionStates.get(sessionKey)?.highestLevel ?? "S1";
 }
+
+// ── Detection history ───────────────────────────────────────────────────
 
 /**
  * Record a detection event in session history
@@ -63,6 +100,7 @@ export function recordDetection(
       sessionKey,
       isPrivate: false,
       highestLevel: "S1",
+      currentTurnLevel: "S1",
       detectionHistory: [],
     };
     sessionStates.set(sessionKey, state);
@@ -80,11 +118,16 @@ export function recordDetection(
   }
 }
 
+// ── Session lifecycle ───────────────────────────────────────────────────
+
 /**
- * Clear session state (e.g., when session ends)
+ * Clear all session state (e.g., when session ends).
+ * Cleans up sessionStates, activeLocalRouting, and pendingDetections.
  */
 export function clearSessionState(sessionKey: string): void {
   sessionStates.delete(sessionKey);
+  activeLocalRouting.delete(sessionKey);
+  pendingDetections.delete(sessionKey);
 }
 
 /**
@@ -107,8 +150,6 @@ export type PendingDetection = {
   timestamp: number;
 };
 
-const pendingDetections = new Map<string, PendingDetection>();
-
 export function stashDetection(sessionKey: string, detection: PendingDetection): void {
   pendingDetections.set(sessionKey, detection);
 }
@@ -123,26 +164,31 @@ export function consumeDetection(sessionKey: string): PendingDetection | undefin
   return d;
 }
 
+// ── Session-level tracking (audit only) ─────────────────────────────────
+
 /**
- * Track the highest detected level for a session WITHOUT marking it as private.
+ * Track the highest detected level for a session WITHOUT permanently marking
+ * it as private.
  *
  * Used when S3 is detected at before_model_resolve: the message is routed to
  * Guard Agent (physically isolated session/workspace), so S3 data never enters
- * the main session's context window. Marking the main session as permanently
- * private would be incorrect — subsequent S1 messages can safely use cloud models
- * because the context window is clean.
+ * the main session's context window.
  *
- * highestLevel is still updated for statistics/audit; only isPrivate is left unchanged.
+ * Updates both `highestLevel` (audit) and `currentTurnLevel` (per-turn memory
+ * track selection) but does NOT set permanent `isPrivate` — next turn's
+ * `resetTurnLevel()` will bring it back to S1.
  */
 export function trackSessionLevel(sessionKey: string, level: SensitivityLevel): void {
   const existing = sessionStates.get(sessionKey);
   if (existing) {
     existing.highestLevel = getHigherLevel(existing.highestLevel, level);
+    existing.currentTurnLevel = getHigherLevel(existing.currentTurnLevel, level);
   } else {
     sessionStates.set(sessionKey, {
       sessionKey,
       isPrivate: false,
       highestLevel: level,
+      currentTurnLevel: level,
       detectionHistory: [],
     });
   }
@@ -154,8 +200,6 @@ export function trackSessionLevel(sessionKey: string, level: SensitivityLevel): 
 // cleared at the start of the NEXT before_model_resolve call.
 // Used by tool_result_persist to skip unnecessary PII redaction when
 // data never leaves the local environment.
-
-const activeLocalRouting = new Set<string>();
 
 export function setActiveLocalRouting(sessionKey: string): void {
   activeLocalRouting.add(sessionKey);
@@ -169,9 +213,8 @@ export function isActiveLocalRouting(sessionKey: string): boolean {
   return activeLocalRouting.has(sessionKey);
 }
 
-/**
- * Helper to compare and return higher level
- */
+// ── Helpers ─────────────────────────────────────────────────────────────
+
 function getHigherLevel(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel {
   const order = { S1: 1, S2: 2, S3: 3 };
   return order[a] >= order[b] ? a : b;

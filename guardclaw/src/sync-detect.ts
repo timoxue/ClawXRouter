@@ -21,7 +21,7 @@ const FALLBACK_S1: DetectionResult = {
   confidence: 0,
 };
 
-const workerPath = fileURLToPath(new URL("./llm-detect-worker.js", import.meta.url));
+const workerPath = fileURLToPath(new URL("./llm-detect-worker.ts", import.meta.url));
 
 let _syncDetect: ((context: DetectionContext, config: PrivacyConfig) => DetectionResult) | null = null;
 
@@ -29,7 +29,7 @@ function getSyncDetect() {
   if (!_syncDetect) {
     _syncDetect = createSyncFn<(context: DetectionContext, config: PrivacyConfig) => DetectionResult>(
       workerPath,
-      { timeout: 20_000 },
+      { timeout: 20_000, tsRunner: "tsx" },
     );
   }
   return _syncDetect;

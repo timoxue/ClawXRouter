@@ -43,6 +43,7 @@ import {
   clearActiveLocalRouting,
   clearSessionState,
   isActiveLocalRouting,
+  resetTurnLevel,
 } from "./session-state.js";
 import { detectByRules } from "./rules.js";
 import { isProtectedMemoryPath, redactSensitiveInfo, extractPathsFromParams, resolveDefaultBaseUrl } from "./utils.js";
@@ -131,6 +132,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       if (!sessionKey || !prompt) return;
 
       clearActiveLocalRouting(sessionKey);
+      resetTurnLevel(sessionKey);
 
       const privacyConfig = getLiveConfig();
       if (!privacyConfig.enabled) return;
@@ -461,23 +463,48 @@ export function registerHooks(api: OpenClawPluginApi): void {
         }
       }
 
-      // General tool call detection (rule-based only — synchronous, no LLM call).
+      // General tool call detection.
       // S3 local routing: the model is already local — re-running detection
       // would block the very tool calls the local model needs.
       // Internal infrastructure tools are also exempt from detection.
+      //
+      // Detection method is config-driven: when onToolCallProposed includes
+      // "localModelDetector" the full pipeline runs (LLM + rules); otherwise
+      // only fast rule-based detection is used (default).
       if (!isActiveLocalRouting(sessionKey) && !isToolAllowlisted(toolName)) {
-        const ruleResult = detectByRules(
-          { checkpoint: "onToolCallProposed", toolName, toolParams: typedParams, sessionKey },
-          privacyConfig,
-        );
-        recordDetection(sessionKey, ruleResult.level, "onToolCallProposed", ruleResult.reason);
+        const detectors = privacyConfig.checkpoints?.onToolCallProposed ?? ["ruleDetector"];
+        const usePipeline = detectors.includes("localModelDetector");
+        let level: "S1" | "S2" | "S3" = "S1";
+        let reason: string | undefined;
 
-        if (ruleResult.level === "S3") {
+        if (usePipeline) {
+          const pipeline = getGlobalPipeline();
+          if (pipeline) {
+            const decision = await pipeline.run(
+              "onToolCallProposed",
+              { checkpoint: "onToolCallProposed", toolName, toolParams: typedParams, sessionKey },
+              getPipelineConfig(),
+            );
+            level = decision.level;
+            reason = decision.reason;
+          }
+        } else {
+          const ruleResult = detectByRules(
+            { checkpoint: "onToolCallProposed", toolName, toolParams: typedParams, sessionKey },
+            privacyConfig,
+          );
+          level = ruleResult.level;
+          reason = ruleResult.reason;
+        }
+
+        recordDetection(sessionKey, level, "onToolCallProposed", reason);
+
+        if (level === "S3") {
           trackSessionLevel(sessionKey, "S3");
           setActiveLocalRouting(sessionKey);
-          return { block: true, blockReason: `GuardClaw: tool "${toolName}" blocked — S3 (${ruleResult.reason ?? "sensitive"})` };
+          return { block: true, blockReason: `GuardClaw: tool "${toolName}" blocked — S3 (${reason ?? "sensitive"})` };
         }
-        if (ruleResult.level === "S2") {
+        if (level === "S2") {
           markSessionAsPrivate(sessionKey, "S2");
         }
       }
@@ -559,6 +586,14 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // This sync hook is the single handler for tool result privacy:
       // it is the only hook that can modify the persisted transcript.
       const privacyConfig = getLiveConfig();
+
+      // Snapshot the turn-level privacy state BEFORE detection runs.
+      // markSessionAsPrivate() updates currentTurnLevel immediately, so
+      // checking isSessionMarkedPrivate() later would always be true
+      // after any S2/S3 detection — causing the LLM dual-write fallback
+      // (below) to incorrectly skip.
+      const wasPrivateBefore = isSessionMarkedPrivate(sessionKey);
+
       const ruleCheck = detectByRules(
         {
           checkpoint: "onToolCallExecuted",
@@ -584,7 +619,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const redacted = redactSensitiveInfo(textContent);
       const wasRedacted = redacted !== textContent;
 
-      if (detectedSensitive || wasRedacted || isSessionMarkedPrivate(sessionKey)) {
+      if (detectedSensitive || wasRedacted || wasPrivateBefore) {
         const sessionManager = getDefaultSessionManager();
         sessionManager.writeToFull(sessionKey, {
           role: "tool", content: textContent, timestamp: Date.now(), sessionKey,
@@ -622,7 +657,10 @@ export function registerHooks(api: OpenClawPluginApi): void {
           recordDetection(sessionKey, llmResult.level, "onToolCallExecuted", llmResult.reason);
           api.logger.info(`[GuardClaw] LLM elevated tool result to ${llmResult.level} (tool=${ctx.toolName ?? "unknown"}, reason=${llmResult.reason ?? "semantic"})`);
 
-          if (!detectedSensitive && !wasRedacted && !isSessionMarkedPrivate(sessionKey)) {
+          // Use the snapshot taken before detection: if the turn wasn't
+          // already private AND rules/regex didn't write above, the LLM
+          // is the first to detect — dual-write here.
+          if (!detectedSensitive && !wasRedacted && !wasPrivateBefore) {
             const sessionManager = getDefaultSessionManager();
             const ts = Date.now();
             sessionManager.writeToFull(sessionKey, { role: "tool", content: textContent, timestamp: ts, sessionKey }).catch(() => {});
@@ -843,8 +881,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return { cancel: true };
       }
       if (decision.level === "S2") {
-        const { desensitized } = await desensitizeWithLocalModel(content, privacyConfig, ctx.sessionKey);
-        return { content: desensitized };
+        const desenResult = await desensitizeWithLocalModel(content, privacyConfig, ctx.sessionKey);
+        if (desenResult.failed) {
+          api.logger.warn("[GuardClaw] S2 desensitization failed — cancelling outbound message to prevent PII leak");
+          return { cancel: true };
+        }
+        return { content: desenResult.desensitized };
       }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in message_sending hook: ${String(err)}`);

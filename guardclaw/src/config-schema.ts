@@ -134,8 +134,11 @@ export const guardClawConfigSchema = Type.Object({
 /**
  * Default configuration values.
  *
- * Detection relies entirely on the local LLM judge (localModelDetector).
- * Rule-based detection is kept as an optional fallback but NOT enabled by default.
+ * onUserMessage: LLM judge (via pipeline) for semantic sensitivity detection.
+ * onToolCallProposed: rules-only by default (fast, no LLM overhead per tool call).
+ *   Users can add "localModelDetector" to enable LLM detection for tool calls.
+ * onToolCallExecuted: rules-only; sync LLM supplement is separately controlled
+ *   by localModel.enabled (not by this checkpoint config).
  */
 export const defaultPrivacyConfig = {
   enabled: true,
@@ -143,8 +146,8 @@ export const defaultPrivacyConfig = {
   proxyPort: 8403,
   checkpoints: {
     onUserMessage: ["localModelDetector" as const],
-    onToolCallProposed: ["localModelDetector" as const],
-    onToolCallExecuted: ["localModelDetector" as const],
+    onToolCallProposed: ["ruleDetector" as const],
+    onToolCallExecuted: ["ruleDetector" as const],
   },
   rules: {
     keywords: {
