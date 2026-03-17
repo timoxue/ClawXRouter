@@ -29,7 +29,7 @@ function getSyncDetect() {
   if (!_syncDetect) {
     _syncDetect = createSyncFn<(context: DetectionContext, config: PrivacyConfig) => DetectionResult>(
       workerPath,
-      { timeout: 5000 },
+      { timeout: 20_000 },
     );
   }
   return _syncDetect;

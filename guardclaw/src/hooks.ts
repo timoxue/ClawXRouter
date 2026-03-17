@@ -605,7 +605,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // Rules cover keywords/regex but miss semantic sensitivity.
       // synckit blocks the main thread (via Atomics.wait) for the LLM
       // inference on a Worker, letting us use the result before returning.
-      // Timeout (5s) gracefully falls back to rules-only result.
+      // Timeout (20s) gracefully falls back to rules-only result.
       if (privacyConfig.localModel?.enabled && ruleCheck.level !== "S3") {
         const llmResult = syncDetectByLocalModel(
           { checkpoint: "onToolCallExecuted", toolName: ctx.toolName, toolResult: textContent, sessionKey },
