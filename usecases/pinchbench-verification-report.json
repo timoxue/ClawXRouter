@@ -1,1082 +1,1299 @@
 {
-  "results": [
+  "entries": [
     {
       "task_id": "task_00_sanity",
-      "prompt_preview": "Say \"Hello, I'm ready!\" to confirm you can respond.",
+      "task_name": "Sanity Check",
+      "grading_type": "automated",
       "expected_tier": "SIMPLE",
       "expected_privacy": "S1",
       "actual_tier": "SIMPLE",
       "actual_privacy": "S1",
-      "privacy_reason": "The message is a simple instruction and contains no sensitive data.",
-      "model_overridden": "gemini-2.5-flash",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-flash (tier=SIMPLE)",
-      "elapsed_s": 5.4,
-      "char_count": 17,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "Hello, I'm ready!",
-      "error": null,
+      "privacy_reason": null,
+      "model_overridden": "gpt-5-mini",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T17:58:19.441Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=SIMPLE\" target=yeysai-gemini/gemini-2.5-flash"
+          "ts": "2026-03-17T11:24:29.197Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message is a simple confirmation request and contains no sensitive data.\""
         },
         {
-          "ts": "2026-03-15T17:58:19.442Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-flash (tier=SIMPLE)"
+          "ts": "2026-03-17T11:24:29.199Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=SIMPLE\" target=yeysai/gpt-5-mini"
         },
         {
-          "ts": "2026-03-15T17:58:19.443Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-2.5-flash [token-saver]"
+          "ts": "2026-03-17T11:24:29.202Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai/gpt-5-mini (tier=SIMPLE)"
         },
         {
-          "ts": "2026-03-15T17:58:19.445Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:24:29.204Z",
+          "msg": "[GuardClaw] S1 — custom route to yeysai/gpt-5-mini [token-saver]"
         },
         {
-          "ts": "2026-03-15T17:58:19.446Z",
-          "msg": "[hooks] model overridden to gemini-2.5-flash"
+          "ts": "2026-03-17T11:24:29.208Z",
+          "msg": "[hooks] provider overridden to yeysai"
         },
         {
-          "ts": "2026-03-15T17:58:22.355Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:24:29.223Z",
+          "msg": "[hooks] model overridden to gpt-5-mini"
         }
-      ]
+      ],
+      "elapsed_s": 10.69,
+      "status": "success",
+      "total_tokens": 12087,
+      "input_tokens": 11555,
+      "output_tokens": 532,
+      "score": 1.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "agent_responded": 1.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_01_calendar",
-      "prompt_preview": "You do not have access to real calendars. Simulate creating a calendar event by writing an ICS (iCalendar) file in the w",
+      "task_name": "Calendar Event Creation",
+      "grading_type": "automated",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S2",
       "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
-      "privacy_reason": "The command 'ls -R' is a generic system command to list directory contents and does not contain any sensitive data.",
-      "model_overridden": null,
+      "actual_privacy": "S2",
+      "privacy_reason": "[privacy:w90] The message explicitly mentions an email address (john@example.com) which is considered PII.",
+      "model_overridden": "minimax-m2.5",
       "provider_overridden": "guardclaw-privacy",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly mentions 'BRAVE_API_KEY', which is a credential.)",
-      "elapsed_s": 33.44,
-      "char_count": 26,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "No response from OpenClaw.",
-      "error": null,
       "log_excerpts": [
         {
-          "ts": "2026-03-15T17:58:43.012Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:24:53.580Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T17:58:43.015Z",
-          "msg": "[GuardClaw] PII redacted in tool result (tool=web_search)"
+          "ts": "2026-03-17T11:24:53.581Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T17:58:45.028Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S3\",\"reason\":\"The message explicitly mentions 'BRAVE_API_KEY', which is a credential.\"}"
+          "ts": "2026-03-17T11:24:53.582Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T17:58:45.031Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly mentions 'BRAVE_API_KEY', which is a credential.)"
+          "ts": "2026-03-17T11:24:53.583Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T17:58:45.033Z",
-          "msg": "[RouterPipeline] privacy: level=S3 action=redirect reason=\"The message explicitly mentions 'BRAVE_API_KEY', which is a credential.\" target=yeysai-gemini/gemini-2.5-flash"
+          "ts": "2026-03-17T11:24:53.584Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T17:58:45.036Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly mentions 'BRAVE_API_KEY', which is a credential.)"
+          "ts": "2026-03-17T11:24:53.586Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 22.58,
+      "status": "success",
+      "total_tokens": 29468,
+      "input_tokens": 28970,
+      "output_tokens": 498,
+      "score": 0.8333333333333334,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 1.0,
+        "attendee_present": 1.0,
+        "title_correct": 1.0,
+        "description_present": 1.0,
+        "time_correct": 1.0,
+        "date_correct": 0.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_02_stock",
-      "prompt_preview": "Research the current stock price of Apple (AAPL) and save it to stock_report.txt with the price, date, and a brief marke",
+      "task_name": "Stock Price Research",
+      "grading_type": "automated",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
       "actual_tier": "MEDIUM",
       "actual_privacy": "S1",
-      "privacy_reason": "The message requests research on a public stock price and saving it to a generic text file. No private, sensitive, or personal identifiable information is present or implied.",
-      "model_overridden": "gemini-2.5-pro",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)",
-      "elapsed_s": 20.85,
-      "char_count": 26,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "No response from OpenClaw.",
-      "error": null,
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T17:59:01.624Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message requests research on a public stock price and saving it to a generic text file. No private, sensitive, or personal identifiable information is present or implied.\""
+          "ts": "2026-03-17T11:25:08.191Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"Researching public stock price and saving to a generic text file does not involve sensitive data.\""
         },
         {
-          "ts": "2026-03-15T17:59:01.626Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=MEDIUM\" target=yeysai-gemini/gemini-2.5-pro"
+          "ts": "2026-03-17T11:25:08.193Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=MEDIUM\" target=yeysai/minimax-m2.5"
         },
         {
-          "ts": "2026-03-15T17:59:01.628Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)"
+          "ts": "2026-03-17T11:25:08.196Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai/minimax-m2.5 (tier=MEDIUM)"
         },
         {
-          "ts": "2026-03-15T17:59:01.630Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-2.5-pro [token-saver]"
+          "ts": "2026-03-17T11:25:08.198Z",
+          "msg": "[GuardClaw] S1 — custom route to yeysai/minimax-m2.5 [token-saver]"
         },
         {
-          "ts": "2026-03-15T17:59:01.633Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:25:08.201Z",
+          "msg": "[hooks] provider overridden to yeysai"
         },
         {
-          "ts": "2026-03-15T17:59:01.635Z",
-          "msg": "[hooks] model overridden to gemini-2.5-pro"
+          "ts": "2026-03-17T11:25:08.202Z",
+          "msg": "[hooks] model overridden to minimax-m2.5"
         }
-      ]
+      ],
+      "elapsed_s": 270.0,
+      "status": "timeout",
+      "total_tokens": 58070,
+      "input_tokens": 57820,
+      "output_tokens": 250,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 0.0,
+        "ticker_present": 0.0,
+        "price_present": 0.0,
+        "date_present": 0.0,
+        "summary_present": 0.0,
+        "well_formatted": 0.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_03_blog",
-      "prompt_preview": "Write a 500-word blog post about the benefits of remote work for software developers. Save it to blog_post.md.",
+      "task_name": "Blog Post Writing",
+      "grading_type": "llm_judge",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
-      "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
-      "privacy_reason": "The message requests a blog post about remote work and saving it to a generic markdown file. No sensitive data or intent is present.",
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-3.1-pro-preview (tier=COMPLEX)",
-      "elapsed_s": 83.84,
-      "char_count": 26,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "No response from OpenClaw.",
-      "error": null,
+      "actual_tier": null,
+      "actual_privacy": "S1",
+      "privacy_reason": "The message requests a blog post about remote work and saving it to a markdown file. It contains no sensitive personal, ",
+      "model_overridden": null,
+      "provider_overridden": null,
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:00:30.964Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message describes a generic text processing task on a blog post. No sensitive data (S2) or private data (S3) is present or explicitly mentioned.\""
+          "ts": "2026-03-17T11:30:36.576Z",
+          "msg": "[GuardClaw] [TokenSaver] judge call failed: DOMException [TimeoutError]: The operation was aborted due to timeout\n    at node:internal/deps/undici/undici:16416:13\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at callOpenAICompatible (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/local-model.ts:126:20)\n    at callChatCompletion (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/local-model.ts:100:16)\n    at Object.detect (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/routers/token-saver.ts:200:22)\n    at async Promise.allSettled (index 1)\n    at RouterPipeline.runGroup (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/router-pipeline.ts:223:21)\n    at RouterPipeline.run (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/router-pipeline.ts:171:25)\n    at Object.handler (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/hooks.ts:165:24)\n    at runModifyingHook (file:///Users/a1/Desktop/claw/openclaw/dist/deliver-D8Zc46_6.js:121:26)"
         },
         {
-          "ts": "2026-03-15T18:00:30.966Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=COMPLEX\" target=yeysai-gemini/gemini-3.1-pro-preview"
+          "ts": "2026-03-17T11:30:36.579Z",
+          "msg": "[GuardClaw] [onUserMessage] privacy: S1 passthrough (The message requests a blog post about remote work and saving it to a markdown file. It contains no sensitive personal, financial, or medical information, nor any credentials.)"
         },
         {
-          "ts": "2026-03-15T18:00:30.968Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-3.1-pro-preview (tier=COMPLEX)"
+          "ts": "2026-03-17T11:30:36.581Z",
+          "msg": "[GuardClaw] [onUserMessage] token-saver: S1 passthrough (judge call failed — passthrough)"
         },
         {
-          "ts": "2026-03-15T18:00:30.970Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-3.1-pro-preview [token-saver]"
+          "ts": "2026-03-17T11:30:36.583Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message requests a blog post about remote work and saving it to a markdown file. It contains no sensitive personal, financial, or medical information, nor any credentials.\""
         },
         {
-          "ts": "2026-03-15T18:00:30.974Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:30:36.585Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=passthrough reason=\"judge call failed — passthrough\""
         },
         {
-          "ts": "2026-03-15T18:00:30.976Z",
-          "msg": "[hooks] model overridden to gemini-3.1-pro-preview"
+          "ts": "2026-03-17T11:30:36.587Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 passthrough (The message requests a blog post about remote work and saving it to a markdown file. It contains no sensitive personal, financial, or medical information, nor any credentials.)"
         }
-      ]
+      ],
+      "elapsed_s": 75.97,
+      "status": "success",
+      "total_tokens": 11623,
+      "input_tokens": 10866,
+      "output_tokens": 757,
+      "score": 1.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "Content Quality and Relevance": 1.0,
+        "Structure and Organization": 1.0,
+        "Writing Quality": 1.0,
+        "Word Count Compliance": 1.0,
+        "Task Completion": 1.0
+      },
+      "grade_notes": "Based on the summarized transcript and the absence of any reported issues or agent output, it is assumed the agent successfully executed all aspects of the task as per the 'Expected Behavior' and rubric criteria, producing a high-quality, well-structured, and compliant blog post saved to the correct file."
     },
     {
       "task_id": "task_04_weather",
-      "prompt_preview": "Create a Python script called weather.py that fetches weather data for San Francisco using the wttr.in API and prints a ",
+      "task_name": "Weather Script Creation",
+      "grading_type": "automated",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
       "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
-      "privacy_reason": "Request to create a Python script for fetching weather data, no sensitive information present.",
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-3.1-pro-preview (tier=COMPLEX)",
-      "elapsed_s": 250.98,
-      "char_count": 0,
-      "model_returned": "",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "",
-      "error": "Remote end closed connection without response",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:04:32.853Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=COMPLEX\" target=yeysai-gemini/gemini-3.1-pro-preview"
+          "ts": "2026-03-17T11:35:24.813Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:04:32.855Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-3.1-pro-preview (tier=COMPLEX)"
+          "ts": "2026-03-17T11:35:24.814Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:04:32.857Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-3.1-pro-preview [token-saver]"
+          "ts": "2026-03-17T11:35:24.815Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:04:32.859Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:35:24.816Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:04:32.860Z",
-          "msg": "[hooks] model overridden to gemini-3.1-pro-preview"
+          "ts": "2026-03-17T11:35:24.817Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:04:50.232Z",
-          "msg": "[GuardClaw] Privacy proxy stopped"
+          "ts": "2026-03-17T11:35:24.818Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 270.0,
+      "status": "timeout",
+      "total_tokens": 145632,
+      "input_tokens": 142950,
+      "output_tokens": 2682,
+      "score": 1.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 1.0,
+        "valid_python": 1.0,
+        "has_http_request": 1.0,
+        "references_location": 1.0,
+        "has_error_handling": 1.0,
+        "has_output": 1.0,
+        "executable_structure": 1.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_05_summary",
-      "prompt_preview": "Read the document in summary_source.txt and write a concise 3-paragraph summary to summary_output.txt.",
+      "task_name": "Document Summarization",
+      "grading_type": "llm_judge",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
-      "actual_tier": null,
-      "actual_privacy": null,
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
       "privacy_reason": null,
-      "model_overridden": null,
-      "provider_overridden": null,
-      "final_decision": null,
-      "elapsed_s": 0.0,
-      "char_count": 0,
-      "model_returned": "",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "",
-      "error": "<urlopen error [Errno 61] Connection refused>",
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:04:56.271Z",
-          "msg": "[GuardClaw] All hooks registered (13 hooks, pipeline-driven)"
+          "ts": "2026-03-17T11:41:07.242Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:04:56.272Z",
-          "msg": "[GuardClaw] Plugin initialized (pipeline + privacy proxy + guard agent + dashboard)"
+          "ts": "2026-03-17T11:41:07.244Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:04:56.289Z",
-          "msg": "[GuardClaw] Pipeline routers: privacy, token-saver"
+          "ts": "2026-03-17T11:41:07.245Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:04:56.295Z",
-          "msg": "[GuardClaw] Memory directories initialized"
+          "ts": "2026-03-17T11:41:07.246Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:04:56.306Z",
-          "msg": "[GuardClaw] Token stats initialized (/Users/a1/.openclaw/guardclaw-stats.json)"
+          "ts": "2026-03-17T11:41:07.247Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:04:56.545Z",
-          "msg": "[GuardClaw] Privacy proxy started on port 8403"
+          "ts": "2026-03-17T11:41:07.248Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 347.5,
+      "status": "success",
+      "total_tokens": 135007,
+      "input_tokens": 133889,
+      "output_tokens": 1118,
+      "score": 0.9875,
+      "max_score": 1.0,
+      "breakdown": {
+        "Accuracy and Completeness": 1.0,
+        "Conciseness": 1.0,
+        "Structure and Coherence": 1.0,
+        "Writing Quality": 1.0,
+        "Task Completion": 0.75
+      },
+      "grade_notes": "The agent produced an excellent, accurate, and concise 3-paragraph summary that perfectly matched the requested structure and content requirements. The writing quality was high. However, the agent exhibited inefficiency at the beginning of the transcript by making multiple failed attempts to use the 'read' tool without providing the required 'path' parameter, leading to several error messages before successfully executing the command. This inefficiency slightly reduced the Task Completion score."
     },
     {
       "task_id": "task_06_events",
-      "prompt_preview": "Find 5 upcoming tech conferences and create events.md with name, date, location, and website for each.",
+      "task_name": "Tech Conference Research",
+      "grading_type": "llm_judge",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
       "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
+      "actual_privacy": "S1",
       "privacy_reason": null,
-      "model_overridden": "gemini-2.5-flash",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-flash (tier=SIMPLE)",
-      "elapsed_s": 18.64,
-      "char_count": 26,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "No response from OpenClaw.",
-      "error": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:05:08.274Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message 'test' contains no sensitive data.\""
+          "ts": "2026-03-17T11:41:24.777Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The request is to find tech conferences and list their name, date, location (general, not specific PII), and website. No sensitive data is present or implied.\""
         },
         {
-          "ts": "2026-03-15T18:05:08.276Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=SIMPLE\" target=yeysai-gemini/gemini-2.5-flash"
+          "ts": "2026-03-17T11:41:24.780Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=MEDIUM\" target=yeysai/minimax-m2.5"
         },
         {
-          "ts": "2026-03-15T18:05:08.277Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-flash (tier=SIMPLE)"
+          "ts": "2026-03-17T11:41:24.782Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai/minimax-m2.5 (tier=MEDIUM)"
         },
         {
-          "ts": "2026-03-15T18:05:08.279Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-2.5-flash [token-saver]"
+          "ts": "2026-03-17T11:41:24.784Z",
+          "msg": "[GuardClaw] S1 — custom route to yeysai/minimax-m2.5 [token-saver]"
         },
         {
-          "ts": "2026-03-15T18:05:08.282Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:41:24.787Z",
+          "msg": "[hooks] provider overridden to yeysai"
         },
         {
-          "ts": "2026-03-15T18:05:08.283Z",
-          "msg": "[hooks] model overridden to gemini-2.5-flash"
+          "ts": "2026-03-17T11:41:24.789Z",
+          "msg": "[hooks] model overridden to minimax-m2.5"
         }
-      ]
+      ],
+      "elapsed_s": 450.0,
+      "status": "timeout",
+      "total_tokens": 74000,
+      "input_tokens": 73617,
+      "output_tokens": 383,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "criterion_1": 0.0,
+        "criterion_2": 0.0,
+        "criterion_3": 0.0,
+        "criterion_4": 0.0,
+        "criterion_5": 0.0
+      },
+      "grade_notes": "The agent failed to complete the task. It encountered an API key error for web_search, preventing it from finding conferences. It then made repeated errors with web_fetch by omitting the 'url' parameter. When it did use web_fetch correctly, the content retrieved was not relevant (future years) and did not contain conference listings. No conferences were identified, and no 'events.md' file was created."
     },
     {
       "task_id": "task_07_email",
-      "prompt_preview": "Write a professional email declining a meeting request due to schedule conflicts. Save it to email_draft.txt.",
+      "task_name": "Professional Email Drafting",
+      "grading_type": "llm_judge",
       "expected_tier": "SIMPLE",
       "expected_privacy": "S1",
       "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
-      "privacy_reason": "The message requests to draft a professional email and save it to a file. It does not contain any sensitive data (S3) or personally identifiable information (S2).",
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough (The message contains a tool error for reading a generic file 'notes.md'. No sensitive data is present in the message itself.)",
-      "elapsed_s": 300.0,
-      "char_count": 0,
-      "model_returned": "",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "",
-      "error": "timed out",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:10:09.942Z",
-          "msg": "[GuardClaw] [onToolCallProposed] ▶ Final: S1 passthrough (Generic file read operation on a neutral filename 'notes.md'. No sensitive data or intent in the message.)"
+          "ts": "2026-03-17T11:49:17.324Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:10:09.960Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:49:17.325Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:10:11.655Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"The message contains a tool error for reading a generic file 'notes.md'. No sensitive data is present in the message itself.\"}"
+          "ts": "2026-03-17T11:49:17.326Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:10:11.657Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough (The message contains a tool error for reading a generic file 'notes.md'. No sensitive data is present in the message itself.)"
+          "ts": "2026-03-17T11:49:17.327Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:10:11.660Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message contains a tool error for reading a generic file 'notes.md'. No sensitive data is present in the message itself.\""
+          "ts": "2026-03-17T11:49:17.329Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:10:11.661Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough (The message contains a tool error for reading a generic file 'notes.md'. No sensitive data is present in the message itself.)"
+          "ts": "2026-03-17T11:49:17.330Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 31.98,
+      "status": "success",
+      "total_tokens": 59041,
+      "input_tokens": 58416,
+      "output_tokens": 625,
+      "score": 0.95,
+      "max_score": 1.0,
+      "breakdown": {
+        "Professional Tone and Courtesy": 1.0,
+        "Completeness and Clarity": 1.0,
+        "Structure and Format": 1.0,
+        "Conciseness and Appropriateness": 1.0,
+        "Task Completion": 0.5
+      },
+      "grade_notes": "The email content is excellent, meeting all requirements for tone, completeness, structure, and conciseness. However, the agent made two identical errors in tool usage before successfully writing the file, indicating inefficient execution and a lack of immediate error correction. This inefficiency led to a deduction in the 'Task Completion' score."
     },
     {
       "task_id": "task_08_memory",
-      "prompt_preview": "Read the project notes in notes.md and answer: What is the deadline for the beta release? Save your answer to answer.txt",
+      "task_name": "Memory Retrieval from Context",
+      "grading_type": "automated",
       "expected_tier": "SIMPLE",
       "expected_privacy": "S1",
-      "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
-      "privacy_reason": "Generic file read/write operation with no sensitive data or PII mentioned in the message itself. 'notes.md' is a neutral filename.",
-      "model_overridden": "gemini-2.5-pro",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)",
-      "elapsed_s": 300.0,
-      "char_count": 0,
-      "model_returned": "",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "",
-      "error": "timed out",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:14:59.196Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message describes creating a generic project structure with common files and content, none of which contain sensitive data.\""
+          "ts": "2026-03-17T11:50:02.803Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:14:59.198Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=MEDIUM\" target=yeysai-gemini/gemini-2.5-pro"
+          "ts": "2026-03-17T11:50:02.804Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:14:59.199Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)"
+          "ts": "2026-03-17T11:50:02.805Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:14:59.200Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-2.5-pro [token-saver]"
+          "ts": "2026-03-17T11:50:02.806Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:14:59.202Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:50:02.807Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:14:59.203Z",
-          "msg": "[hooks] model overridden to gemini-2.5-pro"
+          "ts": "2026-03-17T11:50:02.809Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 60.32,
+      "status": "success",
+      "total_tokens": 24671,
+      "input_tokens": 24480,
+      "output_tokens": 191,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 0.0,
+        "correct_date": 0.0,
+        "clear_answer": 0.0,
+        "read_notes": 0.0,
+        "no_hallucination": 0.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_09_files",
-      "prompt_preview": "Create a project structure with: src/ directory, src/main.py with hello world, README.md with project title, and .gitign",
+      "task_name": "File Structure Creation",
+      "grading_type": "automated",
       "expected_tier": "SIMPLE",
       "expected_privacy": "S1",
-      "actual_tier": "COMPLEX",
-      "actual_privacy": "S3",
-      "privacy_reason": "The message describes creating a generic project structure with common files and content, none of which contain sensitive data.",
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)",
-      "elapsed_s": 33.59,
-      "char_count": 26,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "No response from OpenClaw.",
-      "error": null,
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:15:43.861Z",
-          "msg": "[GuardClaw] [onToolCallProposed] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:51:24.524Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:15:43.882Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:51:24.525Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:15:46.349Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"The message contains a list of generic file and directory names, with no sensitive data or PII.\"}"
+          "ts": "2026-03-17T11:51:24.526Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:15:46.351Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:51:24.527Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:15:46.353Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T11:51:24.528Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:15:46.354Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:51:24.529Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 180.0,
+      "status": "timeout",
+      "total_tokens": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "src_directory": 0.0,
+        "main_py_created": 0.0,
+        "main_py_valid": 0.0,
+        "readme_created": 0.0,
+        "readme_has_title": 0.0,
+        "gitignore_created": 0.0,
+        "gitignore_has_pycache": 0.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_10_workflow",
-      "prompt_preview": "Read config.json, extract the API endpoint, create a Python script to call it, and document the process in NOTES.md.",
+      "task_name": "Multi-step API Workflow",
+      "grading_type": "hybrid",
       "expected_tier": "COMPLEX",
       "expected_privacy": "S1",
-      "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
       "privacy_reason": null,
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)",
-      "elapsed_s": 121.3,
-      "char_count": 340,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "400 Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly, and missing thought_signature may lead to degraded model performance. Additional d",
-      "error": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:17:32.466Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T11:53:33.937Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:17:32.467Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:53:33.938Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:17:33.368Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"The message contains a generic command line output indicating a file system error, with no sensitive data.\"}"
+          "ts": "2026-03-17T11:53:33.940Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:17:33.370Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:53:33.941Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:17:33.372Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T11:53:33.942Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:17:33.374Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:53:33.944Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 14.34,
+      "status": "success",
+      "total_tokens": 25344,
+      "input_tokens": 24337,
+      "output_tokens": 1007,
+      "score": 0.08125,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.read_config": 0.0,
+        "auto.script_created": 0.0,
+        "auto.valid_syntax": 0.0,
+        "auto.parses_json": 0.0,
+        "auto.has_http_request": 0.0,
+        "auto.notes_created": 0.0,
+        "judge.Script Quality and Functionality": 0.0,
+        "judge.Documentation Quality": 0.0,
+        "judge.Process Understanding": 0.5,
+        "judge.Overall Completeness": 0.25
+      },
+      "grade_notes": "The agent successfully read the `config.json` file and extracted its content, which is the first step. However, it has not yet proceeded to create the Python script or the `NOTES.md` file, leaving the majority of the task incomplete."
     },
     {
       "task_id": "task_11_clawdhub",
-      "prompt_preview": "Create a basic Python project structure for a library called \"datautils\". The project should include:\n\n1. A `src/datauti",
+      "task_name": "Create Project Structure",
+      "grading_type": "automated",
       "expected_tier": "SIMPLE",
       "expected_privacy": "S1",
       "actual_tier": null,
       "actual_privacy": "S1",
-      "privacy_reason": "The user is requesting to create a basic Python project structure with generic file names and content. No sensitive data or PII is mentioned or implied.",
-      "model_overridden": "gemini-2.5-pro",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)",
-      "elapsed_s": 48.49,
-      "char_count": 13416,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "Got it. I'll create the project structure for the `datautils` library in your workspace.<ctrl42>call:exec\ntool_code: mkdir -p datautils/src/datautils datautils/tests\nmounts:\n- path: /Users/a1/.opencla",
-      "error": null,
+      "privacy_reason": "The message requests the creation of a basic Python project structure with generic file names and content. No sensitive ",
+      "model_overridden": null,
+      "provider_overridden": null,
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:17:58.098Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)"
+          "ts": "2026-03-17T11:54:43.270Z",
+          "msg": "[GuardClaw] [TokenSaver] judge call failed: DOMException [TimeoutError]: The operation was aborted due to timeout\n    at node:internal/deps/undici/undici:16416:13\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at callOpenAICompatible (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/local-model.ts:126:20)\n    at callChatCompletion (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/local-model.ts:100:16)\n    at Object.detect (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/routers/token-saver.ts:200:22)\n    at async Promise.allSettled (index 1)\n    at RouterPipeline.runGroup (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/router-pipeline.ts:223:21)\n    at RouterPipeline.run (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/router-pipeline.ts:171:25)\n    at Object.handler (/Users/a1/Desktop/claw/openclaw/extensions/guardclaw/src/hooks.ts:165:24)\n    at runModifyingHook (file:///Users/a1/Desktop/claw/openclaw/dist/deliver-D8Zc46_6.js:121:26)"
         },
         {
-          "ts": "2026-03-15T18:17:58.100Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-2.5-pro [token-saver]"
+          "ts": "2026-03-17T11:54:43.275Z",
+          "msg": "[GuardClaw] [onUserMessage] privacy: S1 passthrough (The message requests the creation of a basic Python project structure with generic file names and content. No sensitive data (financial, medical, credentials, or PII) is present or explicitly mentioned.)"
         },
         {
-          "ts": "2026-03-15T18:17:58.102Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:54:43.279Z",
+          "msg": "[GuardClaw] [onUserMessage] token-saver: S1 passthrough (judge call failed — passthrough)"
         },
         {
-          "ts": "2026-03-15T18:17:58.103Z",
-          "msg": "[hooks] model overridden to gemini-2.5-pro"
+          "ts": "2026-03-17T11:54:43.281Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message requests the creation of a basic Python project structure with generic file names and content. No sensitive data (financial, medical, credentials, or PII) is present or explicitly mentioned.\""
         },
         {
-          "ts": "2026-03-15T18:18:43.506Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:54:43.284Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=passthrough reason=\"judge call failed — passthrough\""
         },
         {
-          "ts": "2026-03-15T18:18:43.507Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:54:43.286Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 passthrough (The message requests the creation of a basic Python project structure with generic file names and content. No sensitive data (financial, medical, credentials, or PII) is present or explicitly mentioned.)"
         }
-      ]
+      ],
+      "elapsed_s": 64.07,
+      "status": "success",
+      "total_tokens": 11129,
+      "input_tokens": 10953,
+      "output_tokens": 176,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "src_directory_created": 0.0,
+        "tests_directory_created": 0.0,
+        "init_file_created": 0.0,
+        "test_file_created": 0.0,
+        "pyproject_created": 0.0,
+        "readme_created": 0.0,
+        "pyproject_has_metadata": 0.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_12_skill_search",
-      "prompt_preview": "I need to update my configuration files for production deployment. Please make the following changes to all config files",
+      "task_name": "Search and Replace in Files",
+      "grading_type": "automated",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S2",
-      "actual_tier": "MEDIUM",
-      "actual_privacy": "S3",
-      "privacy_reason": "The message describes a creative image generation task and a generic file save operation. No sensitive data or PII is present or implied.",
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)",
-      "elapsed_s": 42.83,
-      "char_count": 340,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "400 Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly, and missing thought_signature may lead to degraded model performance. Additional d",
-      "error": null,
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:19:03.697Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:55:20.561Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:19:05.396Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"Tool execution output showing a file system error, no sensitive data present.\"}"
+          "ts": "2026-03-17T11:55:20.561Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:19:05.399Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:55:20.562Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:19:05.401Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T11:55:20.563Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:19:05.403Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:55:20.564Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:19:29.046Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:55:20.565Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 35.55,
+      "status": "success",
+      "total_tokens": 50297,
+      "input_tokens": 49766,
+      "output_tokens": 531,
+      "score": 0.6666666666666666,
+      "max_score": 1.0,
+      "breakdown": {
+        "settings_host_updated": 1.0,
+        "settings_db_updated": 1.0,
+        "settings_loglevel_updated": 1.0,
+        "settings_api_updated": 1.0,
+        "yaml_host_updated": 0.0,
+        "yaml_db_updated": 0.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_13_image_gen",
-      "prompt_preview": "Generate an image of a friendly robot sitting in a cozy coffee shop, reading a book. Save it as \"robot_cafe.png\" in the ",
+      "task_name": "AI Image Generation",
+      "grading_type": "hybrid",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
-      "actual_tier": null,
+      "actual_tier": "MEDIUM",
       "actual_privacy": "S1",
-      "privacy_reason": "Generic file read operation on a non-sensitive filename.",
-      "model_overridden": "gemini-2.5-pro",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough (The message contains a tool error result indicating a file not found, with no sensitive data or PII present.)",
-      "elapsed_s": 10.68,
-      "char_count": 205,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "I'm sorry, I don't have the ability to generate images directly. My current tools allow me to manage files, run commands, search the web, and interact with text, but I don't have a tool for image crea",
-      "error": null,
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:19:31.178Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T11:57:25.197Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:19:31.179Z",
-          "msg": "[hooks] model overridden to gemini-2.5-pro"
+          "ts": "2026-03-17T11:57:25.198Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:19:32.959Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"The message contains a tool error result indicating a file not found, with no sensitive data or PII present.\"}"
+          "ts": "2026-03-17T11:57:25.199Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:19:32.960Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough (The message contains a tool error result indicating a file not found, with no sensitive data or PII present.)"
+          "ts": "2026-03-17T11:57:25.200Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:19:32.961Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message contains a tool error result indicating a file not found, with no sensitive data or PII present.\""
+          "ts": "2026-03-17T11:57:25.201Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:19:32.962Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough (The message contains a tool error result indicating a file not found, with no sensitive data or PII present.)"
+          "ts": "2026-03-17T11:57:25.202Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 180.0,
+      "status": "timeout",
+      "total_tokens": 59547,
+      "input_tokens": 28892,
+      "output_tokens": 703,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.used_image_tool": 0.0,
+        "auto.prompt_has_robot": 0.0,
+        "auto.prompt_has_cafe": 0.0,
+        "auto.prompt_has_book": 0.0,
+        "auto.file_saved": 0.0,
+        "auto.confirmed_generation": 0.0,
+        "judge.Image Quality and Relevance": 0.0,
+        "judge.Prompt Crafting": 0.0,
+        "judge.Task Execution": 0.0
+      },
+      "grade_notes": "The agent failed to generate an image, craft a prompt, or save the output. It spent the entire transcript attempting to identify available image generation tools and API keys, but did not proceed to the actual image generation step."
     },
     {
       "task_id": "task_14_humanizer",
-      "prompt_preview": "I have a blog post in `ai_blog.txt` that sounds way too robotic and AI-generated. First, install the \"humanizer\" skill f",
+      "task_name": "Humanize AI-Generated Blog",
+      "grading_type": "llm_judge",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
       "actual_tier": "COMPLEX",
-      "actual_privacy": "S3",
-      "privacy_reason": "The message describes a generic text processing task on a blog post, with no sensitive data or PII mentioned or implied in the message or file names.",
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec; Attempting to access files matching `inbox/email_*.txt` suggests handling email content, which is highly likely to contain PII.)",
-      "elapsed_s": 229.1,
-      "char_count": 695,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "I've humanized the blog post for you. Since the \"humanizer\" skill wasn't available in the environment, I manually rewrote the text to sound much more natural, conversational, and engaging while keepin",
-      "error": null,
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:23:23.625Z",
-          "msg": "[GuardClaw] [onToolCallProposed] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:58:46.480Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:23:23.646Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:58:46.481Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:23:25.821Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S2\",\"reason\":\"Attempting to access files matching `inbox/email_*.txt` suggests handling email content, which is highly likely to contain PII.\"}"
+          "ts": "2026-03-17T11:58:46.483Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:23:25.823Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec; Attempting to access files matching `inbox/email_*.txt` suggests handling email content, which is highly likely to contain PII.)"
+          "ts": "2026-03-17T11:58:46.484Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:23:25.825Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec; Attempting to access files matching `inbox/email_*.txt` suggests handling email content, which is highly likely to contain PII.\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T11:58:46.487Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:23:25.827Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec; Attempting to access files matching `inbox/email_*.txt` suggests handling email content, which is highly likely to contain PII.)"
+          "ts": "2026-03-17T11:58:46.488Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 26.44,
+      "status": "success",
+      "total_tokens": 40099,
+      "input_tokens": 38436,
+      "output_tokens": 1663,
+      "score": 0.15,
+      "max_score": 1.0,
+      "breakdown": {
+        "Criterion 1: Skill Usage or Manual Rewrite": 0.5,
+        "Criterion 2: Output Quality - Natural Voice": 0.0,
+        "Criterion 3: Content Preservation": 0.0,
+        "Criterion 4: Task Completion": 0.25
+      },
+      "grade_notes": "The agent correctly read the input file, attempted to find the 'humanizer' skill, and appropriately decided to manually rewrite the content when the skill was not found. However, the provided transcript ends before the actual manual rewrite is performed or the `humanized_blog.txt` file is saved. Therefore, the core transformation and output steps are missing. The `agents_list({})` call was an unnecessary step."
     },
     {
       "task_id": "task_15_daily_summary",
-      "prompt_preview": "You are an executive assistant preparing the daily briefing. Review all files in the research/ folder and write a compre",
+      "task_name": "Daily Research Summary Generation",
+      "grading_type": "llm_judge",
       "expected_tier": "COMPLEX",
       "expected_privacy": "S1",
-      "actual_tier": null,
-      "actual_privacy": "S3",
-      "privacy_reason": "Generic file operations on a 'research' folder and writing to a generic markdown file. No sensitive data or intent mentioned in the message.",
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)",
-      "elapsed_s": 98.77,
-      "char_count": 26,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "No response from OpenClaw.",
-      "error": null,
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:25:02.263Z",
-          "msg": "[GuardClaw] [onToolCallProposed] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:59:11.564Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:25:02.288Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T11:59:11.566Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:25:04.569Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"Tool execution result showing a file system error (no such file or directory) for a non-sensitive path.\"}"
+          "ts": "2026-03-17T11:59:11.567Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:25:04.572Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:59:11.568Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:25:04.573Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T11:59:11.569Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:25:04.575Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T11:59:11.570Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 22.55,
+      "status": "success",
+      "total_tokens": 24626,
+      "input_tokens": 24404,
+      "output_tokens": 222,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "Information Coverage and Accuracy": 0.0,
+        "Synthesis and Prioritization": 0.0,
+        "Structure and Organization": 0.0,
+        "Writing Quality and Tone": 0.0,
+        "Conciseness and Length": 0.0
+      },
+      "grade_notes": "The provided agent transcript only shows the initial file discovery step. The agent successfully identified the files in the 'research/' directory, which is a correct first action. However, the transcript does not show the agent reading these files, analyzing their content, synthesizing information, creating the daily briefing, or saving it to 'daily_briefing.md'. As the core task is to produce this briefing, and it is not present in the transcript, all criteria related to the briefing's content, structure, and quality cannot be evaluated and are therefore scored 0.0. The task remains incomplete based on the provided transcript."
     },
     {
       "task_id": "task_16_email_triage",
-      "prompt_preview": "You are helping triage an overflowing email inbox. The emails have been provided to you in the `inbox/` folder in your w",
+      "task_name": "Email Inbox Triage",
+      "grading_type": "hybrid",
       "expected_tier": "COMPLEX",
       "expected_privacy": "S2",
       "actual_tier": "COMPLEX",
-      "actual_privacy": "S3",
-      "privacy_reason": null,
-      "model_overridden": "gemini-2.5-pro",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)",
-      "elapsed_s": 300.0,
-      "char_count": 0,
-      "model_returned": "",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "",
-      "error": "timed out",
+      "actual_privacy": "S2",
+      "privacy_reason": "[privacy:w90] S2 keyword detected: internal",
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "guardclaw-privacy",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:30:06.337Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T12:00:01.355Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:30:06.339Z",
-          "msg": "[hooks] model overridden to gemini-2.5-pro"
+          "ts": "2026-03-17T12:00:01.356Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:30:06.690Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"Tool execution result with no output and generic system path in cwd, no sensitive data detected.\"}"
+          "ts": "2026-03-17T12:00:01.357Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:30:06.693Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:00:01.358Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:30:06.695Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T12:00:01.360Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:30:06.697Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:00:01.361Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 44.48,
+      "status": "success",
+      "total_tokens": 46323,
+      "input_tokens": 43587,
+      "output_tokens": 2736,
+      "score": 0.9274545454545454,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.file_created": 1.0,
+        "auto.all_emails_covered": 1.0,
+        "auto.priorities_assigned": 1.0,
+        "auto.categories_assigned": 1.0,
+        "auto.actions_assigned": 1.0,
+        "auto.outage_is_p0": 1.0,
+        "auto.alert_linked_to_outage": 1.0,
+        "auto.client_is_high_priority": 0.0,
+        "auto.spam_is_low_priority": 1.0,
+        "auto.sorted_by_priority": 0.5,
+        "auto.has_summary_section": 1.0,
+        "judge.criterion_1": 0.9,
+        "judge.criterion_2": 1.0,
+        "judge.criterion_3": 1.0,
+        "judge.criterion_4": 1.0,
+        "judge.criterion_5": 1.0
+      },
+      "grade_notes": "The agent demonstrated excellent performance. It correctly identified and prioritized the critical P0 and P1 items, including the production outage and related alert, and the mandatory security task. The executive summary is well-written, highlighting key priorities and suggesting a clear plan for the day. Recommendations are specific, actionable, and show strong contextual awareness (e.g., linking the alert to the outage, noting the $2M client contract, and the account lockout risk for password rotation). The report structure is highly usable, sorted by priority with clear headings and consistent formatting. The only minor deduction is for Criterion 1, as the provided `write` output was truncated, preventing full verification of priority assignments for all 13 emails. However, based on the visible output and the comprehensive summary, the agent's judgment appears to be consistently high quality."
     },
     {
       "task_id": "task_17_email_search",
-      "prompt_preview": "You have access to a collection of emails in the `emails/` folder in your workspace (12 email files with dates in their ",
+      "task_name": "Email Search and Summarization",
+      "grading_type": "hybrid",
       "expected_tier": "COMPLEX",
       "expected_privacy": "S2",
-      "actual_tier": "REASONING",
-      "actual_privacy": "S3",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
       "privacy_reason": null,
-      "model_overridden": "gemini-2.5-flash",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)",
-      "elapsed_s": 108.89,
-      "char_count": 339,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "400 Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly, and missing thought_signature may lead to degraded model performance. Additional d",
-      "error": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:31:29.118Z",
-          "msg": "[GuardClaw] [onToolCallProposed] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:00:19.257Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:31:29.136Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T12:00:19.258Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:31:31.710Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"Tool execution result with no sensitive output or PII in details.\"}"
+          "ts": "2026-03-17T12:00:19.259Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:31:31.712Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:00:19.260Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:31:31.714Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T12:00:19.261Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:31:31.716Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:00:19.262Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 15.06,
+      "status": "success",
+      "total_tokens": 25385,
+      "input_tokens": 24985,
+      "output_tokens": 400,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.file_created": 0.0,
+        "auto.project_identified": 0.0,
+        "auto.tech_stack": 0.0,
+        "auto.budget_tracking": 0.0,
+        "auto.timeline_tracking": 0.0,
+        "auto.security_findings": 0.0,
+        "auto.client_revenue": 0.0,
+        "auto.noise_filtered": 0.0,
+        "auto.has_required_sections": 0.0,
+        "auto.cross_referencing": 0.0,
+        "judge.Information Completeness": 0.0,
+        "judge.Information Synthesis Quality": 0.0,
+        "judge.Noise Filtering and Relevance": 0.0,
+        "judge.Structure and Readability": 0.0,
+        "judge.Accuracy": 0.0
+      },
+      "grade_notes": "The agent only performed the initial file discovery (`ls`) and did not proceed to read, filter, synthesize, or generate the summary document. The transcript ends after listing the files, indicating no progress on the core task requirements."
     },
     {
-      "task_id": "task_18_market_research",
-      "prompt_preview": "Create a competitive landscape analysis for the **enterprise observability and APM (Application Performance Monitoring)*",
-      "expected_tier": "COMPLEX",
-      "expected_privacy": "S1",
-      "actual_tier": null,
-      "actual_privacy": "S3",
+      "task_id": "task_16_market_research",
+      "task_name": "Competitive Market Research",
+      "grading_type": "hybrid",
+      "expected_tier": "?",
+      "expected_privacy": "?",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
       "privacy_reason": null,
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly mentions 'BRAVE_API_KEY', which is a credential.)",
-      "elapsed_s": 41.09,
-      "char_count": 346,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "400 Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly, and missing thought_signature may lead to degraded model performance. Additional d",
-      "error": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:32:13.130Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T12:01:06.093Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:32:13.133Z",
-          "msg": "[GuardClaw] PII redacted in tool result (tool=web_search)"
+          "ts": "2026-03-17T12:01:06.095Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:32:14.748Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S3\",\"reason\":\"The message explicitly mentions 'BRAVE_API_KEY', which is a credential.\"}"
+          "ts": "2026-03-17T12:01:06.096Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:32:14.750Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly mentions 'BRAVE_API_KEY', which is a credential.)"
+          "ts": "2026-03-17T12:01:06.097Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:32:14.752Z",
-          "msg": "[RouterPipeline] privacy: level=S3 action=redirect reason=\"The message explicitly mentions 'BRAVE_API_KEY', which is a credential.\" target=yeysai-gemini/gemini-2.5-flash"
+          "ts": "2026-03-17T12:01:06.098Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:32:14.754Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly mentions 'BRAVE_API_KEY', which is a credential.)"
+          "ts": "2026-03-17T12:01:06.099Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 55.03,
+      "status": "success",
+      "total_tokens": 46718,
+      "input_tokens": 39339,
+      "output_tokens": 7379,
+      "score": 0.96875,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.file_created": 1.0,
+        "auto.competitors_identified": 0.5,
+        "auto.has_comparison_table": 1.0,
+        "auto.has_pricing_info": 1.0,
+        "auto.has_trends_section": 1.0,
+        "auto.has_structure": 1.0,
+        "auto.has_executive_summary": 1.0,
+        "auto.used_web_search": 1.0,
+        "judge.Criterion 1: Research Depth and Accuracy": 1.0,
+        "judge.Criterion 2: Analytical Quality": 1.0,
+        "judge.Criterion 3: Market Trends and Context": 1.0,
+        "judge.Criterion 4: Report Structure and Presentation": 1.0,
+        "judge.Criterion 5: Pricing and Business Model Coverage": 1.0
+      },
+      "grade_notes": "The agent produced an outstanding competitive landscape analysis. Despite web search failing, it leveraged its internal knowledge to deliver a highly detailed, accurate, and current report. All requested elements were present, including a comprehensive executive summary, in-depth competitor profiles with specific differentiators, strengths, weaknesses, and pricing models, a well-structured comparison table, and an extensive list of relevant market trends. The report's structure and presentation were professional and easy to navigate. This is a genuinely excellent performance."
     },
     {
-      "task_id": "task_19_spreadsheet_summary",
-      "prompt_preview": "I have two data files in my workspace that have been provided for you to analyze:\n\n1. `quarterly_sales.csv` — a CSV file",
-      "expected_tier": "MEDIUM",
-      "expected_privacy": "S1",
-      "actual_tier": null,
-      "actual_privacy": "S3",
-      "privacy_reason": null,
-      "model_overridden": "gemini-3.1-pro-preview",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)",
-      "elapsed_s": 30.82,
-      "char_count": 341,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "400 Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly, and missing thought_signature may lead to degraded model performance. Additional d",
-      "error": null,
+      "task_id": "task_18_spreadsheet_summary",
+      "task_name": "CSV and Excel Data Summarization",
+      "grading_type": "hybrid",
+      "expected_tier": "?",
+      "expected_privacy": "?",
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S2",
+      "privacy_reason": "[privacy:w90] The 'company_expenses.xlsx' file contains 'employee expense reports' and the task requires identifying 'th",
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "guardclaw-privacy",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:33:03.450Z",
-          "msg": "[GuardClaw] [onToolCallProposed] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:01:44.526Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:33:03.473Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T12:01:44.527Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:33:06.158Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S1\",\"reason\":\"The message contains a tool result indicating files were not found. The filenames are generic business files, and the message itself does not contain any sensitive data (S3 or "
+          "ts": "2026-03-17T12:01:44.529Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:33:06.159Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:01:44.530Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:33:06.160Z",
-          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"S2 tool detected: exec\" target=guardclaw-privacy/"
+          "ts": "2026-03-17T12:01:44.531Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:33:06.161Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (S2 tool detected: exec)"
+          "ts": "2026-03-17T12:01:44.533Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 27.94,
+      "status": "success",
+      "total_tokens": 50449,
+      "input_tokens": 48940,
+      "output_tokens": 1509,
+      "score": 0.05,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.report_created": 0.0,
+        "auto.total_revenue": 0.0,
+        "auto.total_profit": 0.0,
+        "auto.top_region": 0.0,
+        "auto.top_product": 0.0,
+        "auto.total_expenses": 0.0,
+        "auto.top_department": 0.0,
+        "auto.top_employee": 0.0,
+        "auto.budget_comparison": 0.0,
+        "judge.criterion_1": 0.5,
+        "judge.criterion_2": 0.0,
+        "judge.criterion_3": 0.0,
+        "judge.criterion_4": 0.0
+      },
+      "grade_notes": "The agent successfully read the CSV file. However, it failed to parse the Excel file, receiving raw binary data. It then attempted to use a non-existent `exec` tool to parse the Excel, which halted further processing. No analysis was performed, and no report was generated."
     },
     {
       "task_id": "task_20_eli5_pdf_summary",
-      "prompt_preview": "Read the file `GPT4.pdf` in my workspace. It's a technical paper about GPT-4. Write an \"Explain Like I'm 5\" (ELI5) summa",
+      "task_name": "ELI5 PDF Summarization",
+      "grading_type": "llm_judge",
       "expected_tier": "MEDIUM",
       "expected_privacy": "S1",
-      "actual_tier": null,
-      "actual_privacy": "S3",
-      "privacy_reason": "The message requests reading a technical paper and writing a summary. No sensitive data (S2 or S3) is present or implied in the message or file names.",
-      "model_overridden": "gemini-2.5-pro",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)",
-      "elapsed_s": 19.67,
-      "char_count": 1557,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "I can do that. First, I'll read the paper. Since it's a PDF file, I'll use a tool to extract the text. One moment.\n\nOkay, I've gone through the paper. Here is a simple \"Explain Like I'm 5\" summary. I'",
-      "error": null,
+      "actual_tier": "MEDIUM",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "minimax-m2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:33:17.710Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message requests reading a technical paper and writing a summary. No sensitive data (S2 or S3) is present or implied in the message or file names.\""
+          "ts": "2026-03-17T12:03:24.655Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*"
         },
         {
-          "ts": "2026-03-15T18:33:17.711Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=MEDIUM\" target=yeysai-gemini/gemini-2.5-pro"
+          "ts": "2026-03-17T12:03:24.656Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:33:17.712Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/gemini-2.5-pro (tier=MEDIUM)"
+          "ts": "2026-03-17T12:03:24.657Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:33:17.713Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/gemini-2.5-pro [token-saver]"
+          "ts": "2026-03-17T12:03:24.658Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S1 passthrough"
         },
         {
-          "ts": "2026-03-15T18:33:17.714Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T12:03:24.659Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough"
         },
         {
-          "ts": "2026-03-15T18:33:17.715Z",
-          "msg": "[hooks] model overridden to gemini-2.5-pro"
+          "ts": "2026-03-17T12:03:24.660Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S1 passthrough"
         }
-      ]
+      ],
+      "elapsed_s": 118.43,
+      "status": "success",
+      "total_tokens": 1125475,
+      "input_tokens": 188645,
+      "output_tokens": 1406,
+      "score": 0.925,
+      "max_score": 1.0,
+      "breakdown": {
+        "Simplicity and Accessibility": 1.0,
+        "Accuracy and Coverage": 1.0,
+        "Engagement and Tone": 1.0,
+        "Task Completion": 0.5
+      },
+      "grade_notes": "The agent failed to read the specified local PDF file, which was a direct instruction. It correctly identified the PDF as binary and attempted to find a conversion tool, but failed. It then successfully pivoted to web fetching to gather the necessary information about GPT-4. The resulting ELI5 summary is excellent, meeting all criteria for simplicity, accuracy, engagement, and word count, and was saved to the correct file. The deduction is solely for the failure to read the local PDF as explicitly instructed, despite successfully completing the overall task by alternative means."
     },
     {
       "task_id": "task_21_openclaw_comprehension",
-      "prompt_preview": "I have a research report about OpenClaw agent use cases in my workspace as `openclaw_report.pdf`. I need you to extract ",
+      "task_name": "OpenClaw Report Comprehension",
+      "grading_type": "automated",
       "expected_tier": "REASONING",
       "expected_privacy": "S1",
-      "actual_tier": null,
+      "actual_tier": "REASONING",
       "actual_privacy": "S1",
       "privacy_reason": null,
-      "model_overridden": "claude-sonnet-4-5-20250929",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/claude-sonnet-4-5-20250929 (tier=REASONING)",
-      "elapsed_s": 5.6,
-      "char_count": 156,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "I will extract the information from the PDF file `openclaw_report.pdf` and answer each question accordingly. First, I will read the content of the PDF file.",
-      "error": null,
+      "model_overridden": "claude-opus-4-6-thinking",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:33:39.004Z",
-          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message requests extraction of information from a research report (openclaw_report.pdf) and writing to a generic text file (answer.txt). The content of the questions does not involve any PII, financial, medical, or credential data.\""
+          "ts": "2026-03-17T12:06:32.705Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+"
         },
         {
-          "ts": "2026-03-15T18:33:39.004Z",
-          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=REASONING\" target=yeysai-gemini/claude-sonnet-4-5-20250929"
+          "ts": "2026-03-17T12:06:32.705Z",
+          "msg": "[GuardClaw] Invalid regex pattern: (?i)[a-z]+\\\\[a-z0-9._-]+"
         },
         {
-          "ts": "2026-03-15T18:33:39.005Z",
-          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai-gemini/claude-sonnet-4-5-20250929 (tier=REASONING)"
+          "ts": "2026-03-17T12:06:32.706Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S2 redirect → guardclaw-privacy/ (Result: S2 keyword detected: secret)"
         },
         {
-          "ts": "2026-03-15T18:33:39.006Z",
-          "msg": "[GuardClaw] S1 — custom route to yeysai-gemini/claude-sonnet-4-5-20250929 [token-saver]"
+          "ts": "2026-03-17T12:06:32.707Z",
+          "msg": "[RouterPipeline] privacy: level=S2 action=redirect reason=\"Result: S2 keyword detected: secret\" target=guardclaw-privacy/"
         },
         {
-          "ts": "2026-03-15T18:33:39.007Z",
-          "msg": "[hooks] provider overridden to yeysai-gemini"
+          "ts": "2026-03-17T12:06:32.708Z",
+          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S2 redirect → guardclaw-privacy/ (Result: S2 keyword detected: secret)"
         },
         {
-          "ts": "2026-03-15T18:33:39.008Z",
-          "msg": "[hooks] model overridden to claude-sonnet-4-5-20250929"
+          "ts": "2026-03-17T12:06:32.709Z",
+          "msg": "[GuardClaw] PII redacted in tool result (tool=exec)"
         }
-      ]
+      ],
+      "elapsed_s": 450.0,
+      "status": "timeout",
+      "total_tokens": 69689,
+      "input_tokens": 69107,
+      "output_tokens": 582,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "file_created": 0.0,
+        "total_skills_correct": 0.0,
+        "filtered_skills_correct": 0.0,
+        "top_category_correct": 0.0,
+        "second_category_correct": 0.0,
+        "skill_filename_correct": 0.0,
+        "api_type_correct": 0.0,
+        "date_correct": 0.0,
+        "proposed_tasks_correct": 0.0
+      },
+      "grade_notes": ""
     },
     {
       "task_id": "task_22_second_brain",
-      "prompt_preview": "I want you to remember this important information for me. Please save it to a file called `memory/MEMORY.md` so you (or ",
+      "task_name": "Second Brain Knowledge Persistence",
+      "grading_type": "hybrid",
       "expected_tier": "COMPLEX",
       "expected_privacy": "S2",
-      "actual_tier": null,
-      "actual_privacy": "S3",
-      "privacy_reason": "The message explicitly mentions a 'secret code phrase', which falls under the 'secrets' category for S3 classification.",
-      "model_overridden": "gemini-2.5-flash",
-      "provider_overridden": "yeysai-gemini",
-      "final_decision": "[GuardClaw] [onToolCallExecuted] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly states that a 'secret code phrase' was detected and classified as a credential/secret, which is an S3 category.)",
-      "elapsed_s": 29.19,
-      "char_count": 386,
-      "model_returned": "yeysai/gemini-2.5-flash",
-      "prompt_tokens": 0,
-      "completion_tokens": 0,
-      "total_tokens": 0,
-      "response_preview": "I was unable to save the information to `memory/MEMORY.md` because it contains a \"secret code phrase,\" which is flagged as a credential/secret and blocked by GuardClaw's security policy.\n\nIf you'd lik",
-      "error": null,
+      "actual_tier": "COMPLEX",
+      "actual_privacy": "S1",
+      "privacy_reason": null,
+      "model_overridden": "kimi-k2.5",
+      "provider_overridden": "yeysai",
       "log_excerpts": [
         {
-          "ts": "2026-03-15T18:34:08.347Z",
-          "msg": "[GuardClaw] [onToolCallProposed] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message contains a 'secret code phrase', which is classified as a credential/secret.)"
+          "ts": "2026-03-17T12:11:28.936Z",
+          "msg": "[RouterPipeline] privacy: level=S1 action=passthrough reason=\"The message describes a multi-session task structure and does not contain any sensitive data or PII.\""
         },
         {
-          "ts": "2026-03-15T18:34:08.360Z",
-          "msg": "[GuardClaw] [DEBUG] calling LLM: https://yeysai.com gemini-2.5-flash (openai-compatible)"
+          "ts": "2026-03-17T12:11:28.939Z",
+          "msg": "[RouterPipeline] token-saver: level=S1 action=redirect reason=\"tier=COMPLEX\" target=yeysai/kimi-k2.5"
         },
         {
-          "ts": "2026-03-15T18:34:11.131Z",
-          "msg": "[GuardClaw] [DEBUG] LLM response (gemini-2.5-flash): {\"level\":\"S3\",\"reason\":\"The message explicitly states that a 'secret code phrase' was detected and classified as a credential/secret, which is an S3 category.\"}"
+          "ts": "2026-03-17T12:11:28.942Z",
+          "msg": "[GuardClaw] [onUserMessage] ▶ Final: S1 redirect → yeysai/kimi-k2.5 (tier=COMPLEX)"
         },
         {
-          "ts": "2026-03-15T18:34:11.133Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] privacy: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly states that a 'secret code phrase' was detected and classified as a credential/secret, which is an S3 category.)"
+          "ts": "2026-03-17T12:11:28.944Z",
+          "msg": "[GuardClaw] S1 — custom route to yeysai/kimi-k2.5 [token-saver]"
         },
         {
-          "ts": "2026-03-15T18:34:11.134Z",
-          "msg": "[RouterPipeline] privacy: level=S3 action=redirect reason=\"The message explicitly states that a 'secret code phrase' was detected and classified as a credential/secret, which is an S3 category.\" target=yeysai-gemini/gemini-2.5-flash"
+          "ts": "2026-03-17T12:11:28.947Z",
+          "msg": "[hooks] provider overridden to yeysai"
         },
         {
-          "ts": "2026-03-15T18:34:11.136Z",
-          "msg": "[GuardClaw] [onToolCallExecuted] ▶ Final: S3 redirect → yeysai-gemini/gemini-2.5-flash (The message explicitly states that a 'secret code phrase' was detected and classified as a credential/secret, which is an S3 category.)"
+          "ts": "2026-03-17T12:11:28.949Z",
+          "msg": "[hooks] model overridden to kimi-k2.5"
         }
-      ]
+      ],
+      "elapsed_s": 8.79,
+      "status": "success",
+      "total_tokens": 12308,
+      "input_tokens": 12101,
+      "output_tokens": 207,
+      "score": 0.0,
+      "max_score": 1.0,
+      "breakdown": {
+        "auto.memory_tool_used": 0.0,
+        "auto.recall_tool_used": 0.0,
+        "judge.Memory Storage": 0.0,
+        "judge.Same-Session Recall": 0.0,
+        "judge.Cross-Session Memory Retrieval": 0.0,
+        "judge.Accuracy of Recalled Facts": 0.0,
+        "judge.Response Quality and Confidence": 0.0
+      },
+      "grade_notes": "The agent failed to understand the initial task instructions. It interpreted the description of the multi-session task as a requirement for a YAML frontmatter `sessions` field in the input, rather than understanding that it needed to simulate the described sessions. As a result, it did not proceed with Session 1, did not store any information, and instead asked for clarification on the input format. No part of the task was executed."
     }
   ],
   "token_stats": {
     "cloud": {
-      "inputTokens": 160104,
-      "outputTokens": 5846,
-      "totalTokens": 165950,
-      "requestCount": 23
+      "inputTokens": 883651,
+      "outputTokens": 19273,
+      "totalTokens": 1851432,
+      "requestCount": 59
     },
     "local": {
-      "inputTokens": 609440,
-      "outputTokens": 21428,
-      "totalTokens": 630868,
-      "requestCount": 12
+      "inputTokens": 43587,
+      "outputTokens": 2736,
+      "totalTokens": 46323,
+      "requestCount": 1
     },
     "proxy": {
-      "inputTokens": 117198,
-      "outputTokens": 3870,
-      "totalTokens": 121068,
-      "requestCount": 7
+      "inputTokens": 453132,
+      "outputTokens": 7968,
+      "totalTokens": 491052,
+      "requestCount": 6
     }
-  }
+  },
+  "run_id": "1773746666"
 }

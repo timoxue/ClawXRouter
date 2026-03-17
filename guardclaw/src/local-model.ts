@@ -108,6 +108,8 @@ export async function callChatCompletion(
  * OpenAI-compatible chat completions call.
  * POST ${endpoint}/v1/chat/completions — works with Ollama, vLLM, LiteLLM, LocalAI, LMStudio, SGLang, TGI, etc.
  */
+const GUARDCLAW_FETCH_TIMEOUT_MS = 60_000;
+
 async function callOpenAICompatible(
   endpoint: string,
   model: string,
@@ -129,14 +131,20 @@ async function callOpenAICompatible(
       messages,
       temperature: options?.temperature ?? 0.1,
       max_tokens: options?.maxTokens ?? 800,
-      stream: false,
+      stream: true,
       ...(options?.stop ? { stop: options.stop } : {}),
       ...(options?.frequencyPenalty != null ? { frequency_penalty: options.frequencyPenalty } : {}),
     }),
+    signal: AbortSignal.timeout(GUARDCLAW_FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
     throw new Error(`Chat completions API error: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream") && response.body) {
+    return await consumeSSEStream(response.body);
   }
 
   const data = (await response.json()) as {
@@ -154,6 +162,60 @@ async function callOpenAICompatible(
       }
     : undefined;
 
+  return { text, usage };
+}
+
+async function consumeSSEStream(
+  body: ReadableStream<Uint8Array>,
+): Promise<ChatCompletionResult> {
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let textParts: string[] = [];
+  let usage: LlmUsageInfo | undefined;
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === "[DONE]") continue;
+
+        try {
+          const chunk = JSON.parse(payload) as {
+            choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
+            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+          };
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta?.content) {
+            textParts.push(delta.content);
+          }
+          if (chunk.usage) {
+            usage = {
+              input: chunk.usage.prompt_tokens ?? 0,
+              output: chunk.usage.completion_tokens ?? 0,
+              total: chunk.usage.total_tokens ?? 0,
+            };
+          }
+        } catch {
+          // skip malformed SSE chunks
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  let text = textParts.join("");
+  text = stripThinkingTags(text);
   return { text, usage };
 }
 

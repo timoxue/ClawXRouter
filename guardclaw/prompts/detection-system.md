@@ -43,6 +43,8 @@ Rules:
 - Do NOT escalate just because a file MIGHT contain sensitive data — only escalate when evidence exists in the message
 - "Read X file and summarize" with no PII in the request → S1
 - "Analyze quarterly_sales.csv" or "company_expenses.xlsx" with NO actual financial PII in the message → S1
+- Tool calls (read, write, exec, shell) within the agent workspace are NORMAL operations → S1 unless parameters explicitly contain credentials or PII
+- Reading config.json, settings.json, database.yml for task purposes → S1 (classify based on actual content, not filename speculation)
 - When genuinely unsure AND the filename/context suggests sensitivity → pick higher level
 
 Output format: {"level":"S1|S2|S3","reason":"brief"}

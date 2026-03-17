@@ -84,7 +84,12 @@ function getDetectorsForCheckpoint(
 }
 
 /**
- * Run all detectors and collect results
+ * Run detectors and collect results.
+ *
+ * Short-circuits on S3: once any detector returns S3 (highest level),
+ * remaining detectors are skipped — no further detection can raise the
+ * level and running an LLM judge for a message that will stay local is
+ * both wasteful and a needless exposure of sensitive content.
  */
 async function runDetectors(
   detectors: DetectorType[],
@@ -110,9 +115,10 @@ async function runDetectors(
       }
 
       results.push(result);
+
+      if (result.level === "S3") break;
     } catch (err) {
       console.error(`[GuardClaw] Detector ${detector} failed:`, err);
-      // Continue with other detectors
     }
   }
 

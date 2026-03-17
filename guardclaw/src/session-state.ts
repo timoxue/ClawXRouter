@@ -181,6 +181,27 @@ export function trackSessionLevel(sessionKey: string, level: SensitivityLevel): 
   }
 }
 
+// ── Active local routing tracking ───────────────────────────────────────
+// Tracks sessions whose current turn is being served by a local model
+// due to S3 detection.  Set at the start of before_model_resolve (S3),
+// cleared at the start of the NEXT before_model_resolve call.
+// Used by tool_result_persist to skip unnecessary PII redaction when
+// data never leaves the local environment.
+
+const activeLocalRouting = new Set<string>();
+
+export function setActiveLocalRouting(sessionKey: string): void {
+  activeLocalRouting.add(sessionKey);
+}
+
+export function clearActiveLocalRouting(sessionKey: string): void {
+  activeLocalRouting.delete(sessionKey);
+}
+
+export function isActiveLocalRouting(sessionKey: string): boolean {
+  return activeLocalRouting.has(sessionKey);
+}
+
 /**
  * Helper to compare and return higher level
  */

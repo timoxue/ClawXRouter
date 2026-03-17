@@ -187,6 +187,52 @@ const plugin = {
       // Non-fatal: runtime config patching is best-effort
     }
 
+    // Propagate thinking-level defaults for reasoning models mirrored into
+    // guardclaw-privacy.  The runtime model catalog may not include the
+    // virtual-provider entries, so `resolveThinkingDefault` falls through to
+    // "off" — causing thinking-model output to be stripped.  Injecting a
+    // per-model `params.thinking` entry fixes the lookup.
+    const mirroredModels = privacyProviderEntry.models as Array<Record<string, unknown>>;
+    if (!agentDefaults) {
+      const agts = (api.config as Record<string, unknown>).agents as Record<string, unknown>;
+      if (!agts.defaults) agts.defaults = {};
+    }
+    const ad = (api.config as Record<string, unknown>).agents as Record<string, unknown>;
+    const defs = ad.defaults as Record<string, unknown>;
+    if (!defs.models) defs.models = {};
+    const modelsOverridesRef = defs.models as Record<string, Record<string, unknown>>;
+    for (const m of mirroredModels) {
+      if (m.reasoning === true && typeof m.id === "string") {
+        const proxyModelKey = `guardclaw-privacy/${m.id}`;
+        const existing = modelsOverridesRef[proxyModelKey] ?? {};
+        if (!existing.params || !(existing.params as Record<string, unknown>).thinking) {
+          modelsOverridesRef[proxyModelKey] = {
+            ...existing,
+            params: { ...(existing.params as Record<string, unknown> ?? {}), thinking: "low" },
+          };
+        }
+      }
+    }
+    // Also patch runtimeConfig thinking defaults
+    try {
+      const runtimeCfg2 = api.runtime.config.loadConfig();
+      if (runtimeCfg2) {
+        const rtAgts = (runtimeCfg2 as Record<string, unknown>).agents as Record<string, unknown> | undefined;
+        const rtDefs = (rtAgts?.defaults ?? {}) as Record<string, unknown>;
+        if (!rtDefs.models) rtDefs.models = {};
+        const rtMO = rtDefs.models as Record<string, Record<string, unknown>>;
+        for (const m of mirroredModels) {
+          if (m.reasoning === true && typeof m.id === "string") {
+            const pk = `guardclaw-privacy/${m.id}`;
+            const ex = rtMO[pk] ?? {};
+            if (!ex.params || !(ex.params as Record<string, unknown>).thinking) {
+              rtMO[pk] = { ...ex, params: { ...(ex.params as Record<string, unknown> ?? {}), thinking: "low" } };
+            }
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+
     // Propagate streaming=false to guardclaw-privacy models so the agent
     // SDK uses non-streaming HTTP calls through the proxy.
     const existingModelsOverrides = (agentDefaults?.models as Record<string, Record<string, unknown>> | undefined) ?? {};

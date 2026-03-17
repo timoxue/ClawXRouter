@@ -37,7 +37,11 @@ import {
   stashDetection,
   getPendingDetection,
   consumeDetection,
+  setActiveLocalRouting,
+  clearActiveLocalRouting,
+  isActiveLocalRouting,
 } from "./session-state.js";
+import { detectByRules } from "./rules.js";
 import { isProtectedMemoryPath, redactSensitiveInfo } from "./utils.js";
 import {
   GUARDCLAW_S2_OPEN,
@@ -47,6 +51,32 @@ import {
 import { getGlobalPipeline } from "./router-pipeline.js";
 import { getGlobalCollector } from "./token-stats.js";
 import { getLiveConfig } from "./live-config.js";
+
+function getPipelineConfig(): Record<string, unknown> {
+  return { privacy: getLiveConfig() };
+}
+
+/**
+ * Should this session read from the full (unredacted) memory track?
+ *
+ * Only sessions whose data stays entirely local may access MEMORY-FULL.md:
+ *   - S3 active local routing (Guard Agent turn)
+ *   - Guard sub-sessions (always local)
+ *   - S2 with s2Policy === "local"
+ *
+ * S2-proxy sessions send data to cloud after desensitisation, so they MUST
+ * read from the clean (already-redacted) MEMORY.md to avoid leaking PII
+ * that regex-based tool_result_persist redaction might miss.
+ */
+function shouldUseFullMemoryTrack(sessionKey: string): boolean {
+  if (isActiveLocalRouting(sessionKey)) return true;
+  if (isGuardSessionKey(sessionKey)) return true;
+  if (isSessionMarkedPrivate(sessionKey)) {
+    const policy = getLiveConfig().s2Policy ?? "proxy";
+    return policy === "local";
+  }
+  return false;
+}
 
 const DEFAULT_GUARD_AGENT_SYSTEM_PROMPT = `You are a privacy-aware analyst. Analyze the data the user provides. Do your job.
 
@@ -64,13 +94,15 @@ function getGuardAgentSystemPrompt(): string {
   return loadPrompt("guard-agent-system", DEFAULT_GUARD_AGENT_SYSTEM_PROMPT);
 }
 
-const PRIVACY_S2_SYSTEM_INSTRUCTION = `[PRIVACY GUARD - IMPORTANT]
-The user's message may contain a desensitized data section.
-You MUST:
-1. NEVER reference, quote, or echo any specific PII values
-2. Use generic references (e.g., "your address", "the recipient") instead of actual values
-3. NEVER include [REDACTED:xxx] tags in your response — use natural language
-4. Reply in the same language as the user.`;
+// Internal tools whose results naturally contain tokens/auth headers and
+// should NOT be subject to privacy pipeline detection or PII redaction.
+const TOOL_PRIVACY_ALLOWLIST = new Set([
+  "gateway",
+  "web_fetch",
+  "web_search",
+  "image_gen",
+  "image_generation",
+]);
 
 // Workspace dir cache — set from first hook that has PluginHookAgentContext
 let _cachedWorkspaceDir: string | undefined;
@@ -90,6 +122,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const sessionKey = ctx.sessionKey ?? "";
       if (!sessionKey || !prompt) return;
 
+      clearActiveLocalRouting(sessionKey);
+
       const privacyConfig = getPrivacyConfigFromApi(api);
       if (!privacyConfig.enabled) return;
 
@@ -106,8 +140,36 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const msgStr = String(prompt);
       if (shouldSkipMessage(msgStr)) return;
 
-      // Run the router pipeline (text-based detection only; file content
-      // is intercepted later via tool_result_persist when tools read them)
+      // ── S3 fast path: rule-based pre-check ──────────────────────────
+      // Rules are synchronous and deterministic. When they detect S3 we
+      // can route to the local model immediately — no need to run the
+      // full pipeline (LLM detector, token-saver, custom routers, etc.)
+      // which would waste compute and needlessly expose sensitive content.
+      const rulePreCheck = detectByRules(
+        { checkpoint: "onUserMessage", message: msgStr, sessionKey },
+        privacyConfig,
+      );
+
+      if (rulePreCheck.level === "S3") {
+        recordDetection(sessionKey, "S3", "onUserMessage", rulePreCheck.reason);
+        trackSessionLevel(sessionKey, "S3");
+        setActiveLocalRouting(sessionKey);
+        stashDetection(sessionKey, {
+          level: "S3",
+          reason: rulePreCheck.reason,
+          originalPrompt: msgStr,
+          timestamp: Date.now(),
+        });
+
+        const guardCfg = getGuardAgentConfig(privacyConfig);
+        const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
+        const provider = guardCfg?.provider ?? defaultProvider;
+        const model = guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1";
+        api.logger.info(`[GuardClaw] S3 (rule fast-path) — routing to ${provider}/${model}`);
+        return { providerOverride: provider, modelOverride: model };
+      }
+
+      // ── Normal path: run the full router pipeline ──────────────────
       const pipeline = getGlobalPipeline();
       if (!pipeline) {
         api.logger.warn("[GuardClaw] Router pipeline not initialized");
@@ -122,12 +184,38 @@ export function registerHooks(api: OpenClawPluginApi): void {
           sessionKey,
           agentId: ctx.agentId,
         },
-        api.pluginConfig ?? {},
+        getPipelineConfig(),
       );
 
       recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason);
       if (decision.level === "S1" && decision.action === "passthrough") {
         return;
+      }
+
+      // S3 from LLM detector (rules didn't catch it above): route to local
+      if (decision.level === "S3") {
+        trackSessionLevel(sessionKey, "S3");
+        setActiveLocalRouting(sessionKey);
+        stashDetection(sessionKey, {
+          level: "S3",
+          reason: decision.reason,
+          originalPrompt: msgStr,
+          timestamp: Date.now(),
+        });
+        if (decision.target) {
+          api.logger.info(`[GuardClaw] S3 — routing to ${decision.target.provider}/${decision.target.model} [${decision.routerId}]`);
+          return {
+            providerOverride: decision.target.provider,
+            ...(decision.target.model ? { modelOverride: decision.target.model } : {}),
+          };
+        }
+        const guardCfg = getGuardAgentConfig(privacyConfig);
+        const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
+        api.logger.info(`[GuardClaw] S3 — routing to ${guardCfg?.provider ?? defaultProvider}/${guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1"} [${decision.routerId}]`);
+        return {
+          providerOverride: guardCfg?.provider ?? defaultProvider,
+          modelOverride: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
+        };
       }
 
       // Desensitize for S2 (needed for both proxy markers and local prompt)
@@ -146,18 +234,11 @@ export function registerHooks(api: OpenClawPluginApi): void {
         timestamp: Date.now(),
       });
 
-      // Apply routing based on decision
-      if (decision.level === "S3" || (decision.level === "S2" && decision.action === "redirect" && decision.target?.provider !== "guardclaw-privacy")) {
-        if (decision.level === "S3") {
-          // S3 → Guard Agent: physically isolated session/workspace.
-          // Only track the level for stats; don't permanently taint the main
-          // session — its context window never contains S3 data.
-          trackSessionLevel(sessionKey, "S3");
-        } else {
-          markSessionAsPrivate(sessionKey, decision.level);
-        }
+      // S2-local: route to edge model
+      if (decision.level === "S2" && decision.action === "redirect" && decision.target?.provider !== "guardclaw-privacy") {
+        markSessionAsPrivate(sessionKey, decision.level);
         if (decision.target) {
-          api.logger.info(`[GuardClaw] ${decision.level} — routing to ${decision.target.provider}/${decision.target.model} [${decision.routerId}]`);
+          api.logger.info(`[GuardClaw] S2 — routing to ${decision.target.provider}/${decision.target.model} [${decision.routerId}]`);
           return {
             providerOverride: decision.target.provider,
             ...(decision.target.model ? { modelOverride: decision.target.model } : {}),
@@ -204,6 +285,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       if (decision.action === "block") {
         if (decision.level === "S3") {
           trackSessionLevel(sessionKey, "S3");
+          setActiveLocalRouting(sessionKey);
         } else {
           markSessionAsPrivate(sessionKey, decision.level);
         }
@@ -244,17 +326,17 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return;
       }
 
-      // S2-local: inject guard agent system prompt
+      // S2-local: data stays on-device — keep original system prompt intact.
       if (pending.level === "S2" && (privacyConfig.s2Policy ?? "proxy") === "local") {
-        const guardPrompt = getGuardAgentSystemPrompt();
-        return { prependSystemContext: guardPrompt };
+        return;
       }
 
-      // S2-proxy: inject markers for privacy-proxy to strip
+      // S2-proxy: inject desensitized content markers for privacy-proxy to strip.
+      // System prompt is left unchanged — the proxy handles PII removal at the
+      // transport layer so the cloud model never sees raw PII regardless.
       if (pending.level === "S2" && pending.desensitized) {
         return {
           prependContext: `${GUARDCLAW_S2_OPEN}\n${pending.desensitized}\n${GUARDCLAW_S2_CLOSE}`,
-          appendSystemContext: PRIVACY_S2_SYSTEM_INSTRUCTION,
         };
       }
     } catch (err) {
@@ -275,8 +357,9 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const privacyConfig = getPrivacyConfigFromApi(api);
       const baseDir = privacyConfig.session?.baseDir ?? "~/.openclaw";
 
-      // File-access guard for cloud models
-      if (!isGuardSessionKey(sessionKey)) {
+      // File-access guard for cloud models only — local models (Guard Agent
+      // sessions and S3 active routing) are trusted to read full history.
+      if (!isGuardSessionKey(sessionKey) && !isActiveLocalRouting(sessionKey)) {
         const pathValues = extractPathValuesFromParams(typedParams);
         for (const p of pathValues) {
           if (isProtectedMemoryPath(p, baseDir)) {
@@ -286,8 +369,9 @@ export function registerHooks(api: OpenClawPluginApi): void {
         }
       }
 
-      // Memory read routing: private sessions read from MEMORY-FULL.md / memory-full/
-      if (toolName === "memory_get" && isSessionMarkedPrivate(sessionKey)) {
+      // Memory read routing: only fully-local sessions read from MEMORY-FULL.md.
+      // S2-proxy sessions stay on the clean track to avoid leaking PII to cloud.
+      if (toolName === "memory_get" && shouldUseFullMemoryTrack(sessionKey)) {
         const p = String(typedParams.path ?? "");
         if (p === "MEMORY.md" || p === "memory.md") {
           return { params: { ...typedParams, path: "MEMORY-FULL.md" } };
@@ -308,7 +392,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
             const decision = await pipeline.run(
               "onToolCallProposed",
               { checkpoint: "onToolCallProposed", message: contentField, toolName, toolParams: typedParams, sessionKey, agentId: ctx.agentId },
-              api.pluginConfig ?? {},
+              getPipelineConfig(),
             );
             recordDetection(sessionKey, decision.level, "onToolCallProposed", decision.reason);
 
@@ -329,26 +413,31 @@ export function registerHooks(api: OpenClawPluginApi): void {
         }
       }
 
-      // General tool call detection via pipeline
-      const pipeline = getGlobalPipeline();
-      if (pipeline) {
-        const decision = await pipeline.run(
-          "onToolCallProposed",
-          { checkpoint: "onToolCallProposed", toolName, toolParams: typedParams, sessionKey, agentId: ctx.agentId },
-          api.pluginConfig ?? {},
-        );
-        recordDetection(sessionKey, decision.level, "onToolCallProposed", decision.reason);
+      // General tool call detection via pipeline.
+      // S3 local routing: the model is already local — re-running the
+      // pipeline would block the very tool calls the local model needs.
+      // Internal infrastructure tools are also exempt from pipeline checks.
+      if (!isActiveLocalRouting(sessionKey) && !TOOL_PRIVACY_ALLOWLIST.has(toolName)) {
+        const pipeline = getGlobalPipeline();
+        if (pipeline) {
+          const decision = await pipeline.run(
+            "onToolCallProposed",
+            { checkpoint: "onToolCallProposed", toolName, toolParams: typedParams, sessionKey, agentId: ctx.agentId },
+            getPipelineConfig(),
+          );
+          recordDetection(sessionKey, decision.level, "onToolCallProposed", decision.reason);
 
-        if (decision.level === "S3" || decision.action === "block") {
-          if (decision.level === "S3") {
-            trackSessionLevel(sessionKey, "S3");
-          } else {
-            markSessionAsPrivate(sessionKey, decision.level);
+          if (decision.level === "S3" || decision.action === "block") {
+            if (decision.level === "S3") {
+              trackSessionLevel(sessionKey, "S3");
+            } else {
+              markSessionAsPrivate(sessionKey, decision.level);
+            }
+            return { block: true, blockReason: `GuardClaw: tool "${toolName}" blocked — ${decision.level} (${decision.reason ?? "sensitive"})` };
           }
-          return { block: true, blockReason: `GuardClaw: tool "${toolName}" blocked — ${decision.level} (${decision.reason ?? "sensitive"})` };
-        }
-        if (decision.level === "S2") {
-          markSessionAsPrivate(sessionKey, "S2");
+          if (decision.level === "S2") {
+            markSessionAsPrivate(sessionKey, "S2");
+          }
         }
       }
     } catch (err) {
@@ -365,20 +454,23 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const sessionKey = ctx.sessionKey ?? "";
       if (!toolName) return;
 
-      // Pipeline detection
-      const pipeline = getGlobalPipeline();
-      if (pipeline) {
-        const decision = await pipeline.run(
-          "onToolCallExecuted",
-          { checkpoint: "onToolCallExecuted", toolName, toolResult: result, sessionKey, agentId: ctx.agentId },
-          api.pluginConfig ?? {},
-        );
-        recordDetection(sessionKey, decision.level, "onToolCallExecuted", decision.reason);
+      // Pipeline detection — skip when already in S3 local routing
+      // Also skip for internal infrastructure tools whose results naturally contain tokens
+      if (!isActiveLocalRouting(sessionKey) && !TOOL_PRIVACY_ALLOWLIST.has(toolName)) {
+        const pipeline = getGlobalPipeline();
+        if (pipeline) {
+          const decision = await pipeline.run(
+            "onToolCallExecuted",
+            { checkpoint: "onToolCallExecuted", toolName, toolResult: result, sessionKey, agentId: ctx.agentId },
+            getPipelineConfig(),
+          );
+          recordDetection(sessionKey, decision.level, "onToolCallExecuted", decision.reason);
 
-        if (decision.level === "S3") {
-          trackSessionLevel(sessionKey, "S3");
-        } else if (decision.level === "S2") {
-          markSessionAsPrivate(sessionKey, "S2");
+          if (decision.level === "S3") {
+            trackSessionLevel(sessionKey, "S3");
+          } else if (decision.level === "S2") {
+            markSessionAsPrivate(sessionKey, "S2");
+          }
         }
       }
 
@@ -413,12 +505,21 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // QMD indexes both MEMORY.md and MEMORY-FULL.md (via extraPaths).
       // Filter out the wrong track so each session type only sees its own.
       if (ctx.toolName === "memory_search") {
-        const filtered = filterMemorySearchResults(msg, isSessionMarkedPrivate(sessionKey));
+        const filtered = filterMemorySearchResults(msg, shouldUseFullMemoryTrack(sessionKey));
         if (filtered) return { message: filtered };
         return;
       }
 
       // ── PII detection & redaction on all other tool results ──
+      // S3 sessions are routed to a local model — data never leaves the
+      // local environment, so PII redaction is unnecessary and would
+      // degrade the local model's analysis quality.
+      if (isActiveLocalRouting(sessionKey)) return;
+
+      // Internal infrastructure tools (gateway, web_fetch, etc.) naturally contain
+      // auth headers/tokens that must NOT be redacted or the tool breaks.
+      if (ctx.toolName && TOOL_PRIVACY_ALLOWLIST.has(ctx.toolName)) return;
+
       const textContent = extractMessageText(msg);
       if (!textContent || textContent.length < 10) return;
 
@@ -609,7 +710,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const decision = await pipeline.run(
         "onToolCallExecuted",
         { checkpoint: "onToolCallExecuted", message: content },
-        api.pluginConfig ?? {},
+        getPipelineConfig(),
       );
 
       if (decision.level === "S3" || decision.action === "block") {
@@ -643,7 +744,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const decision = await pipeline.run(
         "onUserMessage",
         { checkpoint: "onUserMessage", message: prompt, sessionKey, agentId: ctx.agentId },
-        api.pluginConfig ?? {},
+        getPipelineConfig(),
       );
 
       // S3: subagent keeps original system prompt and skills (already routed to local model)
@@ -834,10 +935,10 @@ async function syncMemoryWrite(
 
 /**
  * Filter memory_search results: strip results from the wrong memory track.
- * Cloud sessions should not see MEMORY-FULL.md / memory-full/ results.
- * Private sessions should not see MEMORY.md / memory/ results (prefer full).
+ * Cloud-bound sessions should not see MEMORY-FULL.md / memory-full/ results.
+ * Fully-local sessions should not see MEMORY.md / memory/ results (prefer full).
  */
-function filterMemorySearchResults(msg: unknown, isPrivate: boolean): unknown | null {
+function filterMemorySearchResults(msg: unknown, useFullTrack: boolean): unknown | null {
   if (!msg || typeof msg !== "object") return null;
   const m = msg as Record<string, unknown>;
 
@@ -854,13 +955,13 @@ function filterMemorySearchResults(msg: unknown, isPrivate: boolean): unknown | 
     const filtered = results.filter((r: unknown) => {
       if (!r || typeof r !== "object") return true;
       const rPath = String((r as Record<string, unknown>).path ?? "");
-      if (isPrivate) {
-        // Private session: exclude clean-track results (prefer full)
+      if (useFullTrack) {
+        // Fully-local session: exclude clean-track results (prefer full)
         if (rPath === "MEMORY.md" || rPath === "memory.md" || rPath.startsWith("memory/")) {
           return false;
         }
       } else {
-        // Cloud session: exclude full-track results
+        // Cloud-bound session: exclude full-track results
         if (rPath === "MEMORY-FULL.md" || rPath.startsWith("memory-full/")) {
           return false;
         }
