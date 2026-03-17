@@ -972,6 +972,11 @@ function dashboardHtml(): string {
     </div>
   </div>
 
+  <div class="adv-toggle" onclick="toggleAdv(this)">
+    <span class="adv-arrow">&#9654;</span> <span data-i18n="cfg.adv">Advanced Settings</span>
+  </div>
+  <div class="adv-body">
+
   <div class="config-section">
     <h3><span data-i18n="cfg.guard">Privacy Guard Agent</span> <span class="badge badge-hot">instant</span></h3>
     <div class="hint" style="margin-bottom:14px" data-i18n="cfg.guard_desc">A local agent that handles sensitive tasks entirely on-device.</div>
@@ -1019,6 +1024,8 @@ function dashboardHtml(): string {
     </div>
   </div>
 
+  </div>
+
   <div class="config-section">
     <h3><span data-i18n="cfg.pricing">Model Pricing</span> <span class="badge badge-hot">instant</span></h3>
     <div class="hint" style="margin-bottom:14px" data-i18n="cfg.pricing_desc">Configure per-model pricing for cloud API cost estimation (USD per 1M tokens). Only cloud models are tracked.</div>
@@ -1027,9 +1034,9 @@ function dashboardHtml(): string {
       <tbody id="pricing-body"></tbody>
     </table>
     <div class="add-row" style="margin-top:12px">
-      <input id="pricing-new-model" placeholder="e.g. gpt-4o" style="flex:2">
-      <input id="pricing-new-input" type="number" step="0.01" placeholder="Input $/1M" style="flex:1">
-      <input id="pricing-new-output" type="number" step="0.01" placeholder="Output $/1M" style="flex:1">
+      <input id="pricing-new-model" placeholder="e.g. gpt-4o" style="flex:2;padding:10px 14px;background:var(--bg-input);border:1px solid transparent;border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;outline:none">
+      <input id="pricing-new-input" type="number" step="0.01" placeholder="Input $/1M" style="flex:1;padding:10px 14px;background:var(--bg-input);border:1px solid transparent;border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;outline:none">
+      <input id="pricing-new-output" type="number" step="0.01" placeholder="Output $/1M" style="flex:1;padding:10px 14px;background:var(--bg-input);border:1px solid transparent;border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;outline:none">
       <button class="btn btn-sm btn-outline" onclick="addPricingRow()" data-i18n="cfg.pricing_add">Add Model</button>
     </div>
     <div style="margin-top:10px">
@@ -1194,6 +1201,7 @@ var T = {
   'cfg.custom_mod':{en:'Custom Module Path',zh:'自定义模块路径'},
   'cfg.cls':{en:'Cost-Optimizer Classifier',zh:'成本优化分类器'},
   'cfg.cls_desc':{en:'LLM used by the Cost-Optimizer to determine task complexity. Falls back to the Local Model settings above if empty.',zh:'成本优化路由用于判断任务复杂度的 LLM。留空则使用上方本地模型配置。'},
+  'cfg.adv':{en:'Advanced Settings',zh:'高级设置'},
   'cfg.guard':{en:'Privacy Guard Agent',zh:'隐私守护 Agent'},
   'cfg.guard_desc':{en:'A local agent that handles sensitive tasks entirely on-device.',zh:'完全在本地运行的隐私守护 Agent。'},
   'cfg.agent_id':{en:'Agent ID',zh:'Agent ID'},
@@ -1412,13 +1420,21 @@ function renderPricing() {
   }
   tbody.innerHTML = keys.sort().map(function(model) {
     var p = _pricing[model];
+    var eid = escHtml(model);
     return '<tr>' +
-      '<td style="font-family:var(--font-mono);font-size:12px">' + escHtml(model) + '</td>' +
-      '<td>$' + (p.inputPer1M != null ? p.inputPer1M : '-') + '</td>' +
-      '<td>$' + (p.outputPer1M != null ? p.outputPer1M : '-') + '</td>' +
-      '<td><button style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;font-size:14px" onclick="removePricing(\\'' + escHtml(model) + '\\')">&times;</button></td>' +
+      '<td style="font-family:var(--font-mono);font-size:12px">' + eid + '</td>' +
+      '<td><input type="number" step="0.01" min="0" value="' + (p.inputPer1M ?? 0) + '" data-pricing-model="' + eid + '" data-pricing-field="inputPer1M" onchange="updatePricing(this)" style="width:80px;padding:6px 8px;background:var(--bg-input);border:1px solid transparent;border-radius:4px;font-size:12px;color:var(--text-primary);outline:none"></td>' +
+      '<td><input type="number" step="0.01" min="0" value="' + (p.outputPer1M ?? 0) + '" data-pricing-model="' + eid + '" data-pricing-field="outputPer1M" onchange="updatePricing(this)" style="width:80px;padding:6px 8px;background:var(--bg-input);border:1px solid transparent;border-radius:4px;font-size:12px;color:var(--text-primary);outline:none"></td>' +
+      '<td><button style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;font-size:14px" onclick="removePricing(\\'' + eid + '\\')">&times;</button></td>' +
       '</tr>';
   }).join('');
+}
+
+function updatePricing(el) {
+  var model = el.getAttribute('data-pricing-model');
+  var field = el.getAttribute('data-pricing-field');
+  if (!model || !field || !_pricing[model]) return;
+  _pricing[model][field] = parseFloat(el.value) || 0;
 }
 
 function addPricingRow() {
