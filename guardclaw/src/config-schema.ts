@@ -90,6 +90,15 @@ export const guardClawConfigSchema = Type.Object({
         }),
       ),
       localProviders: Type.Optional(Type.Array(Type.String())),
+      modelPricing: Type.Optional(
+        Type.Record(
+          Type.String(),
+          Type.Object({
+            inputPer1M: Type.Optional(Type.Number()),
+            outputPer1M: Type.Optional(Type.Number()),
+          }),
+        ),
+      ),
       session: Type.Optional(
         Type.Object({
           isolateGuardHistory: Type.Optional(Type.Boolean()),
@@ -159,6 +168,16 @@ export const defaultPrivacyConfig = {
     model: "ollama/openbmb/minicpm4.1",
   },
   localProviders: [] as string[],
+  modelPricing: {
+    "claude-sonnet-4.6": { inputPer1M: 3, outputPer1M: 15 },
+    "claude-3.5-sonnet": { inputPer1M: 3, outputPer1M: 15 },
+    "claude-3.5-haiku": { inputPer1M: 0.8, outputPer1M: 4 },
+    "gpt-4o": { inputPer1M: 2.5, outputPer1M: 10 },
+    "gpt-4o-mini": { inputPer1M: 0.15, outputPer1M: 0.6 },
+    "o4-mini": { inputPer1M: 1.1, outputPer1M: 4.4 },
+    "gemini-2.0-flash": { inputPer1M: 0.1, outputPer1M: 0.4 },
+    "deepseek-chat": { inputPer1M: 0.27, outputPer1M: 1.1 },
+  } as Record<string, { inputPer1M?: number; outputPer1M?: number }>,
   session: {
     isolateGuardHistory: true,
     baseDir: "~/.openclaw",

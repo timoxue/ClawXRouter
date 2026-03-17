@@ -82,5 +82,9 @@ function mergeConfig(userConfig: PrivacyConfig): PrivacyConfig {
       ...defaultPrivacyConfig.localProviders,
       ...(userConfig.localProviders ?? []),
     ],
+    modelPricing: {
+      ...defaultPrivacyConfig.modelPricing,
+      ...userConfig.modelPricing,
+    },
   } as PrivacyConfig;
 }

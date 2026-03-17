@@ -163,6 +163,7 @@ export async function statsHttpHandler(
         checkpoints: liveConfig.checkpoints,
         rules: liveConfig.rules,
         localProviders: liveConfig.localProviders,
+        modelPricing: liveConfig.modelPricing,
         session: liveConfig.session,
         routers: cfgAny.routers,
         pipeline: cfgAny.pipeline,
@@ -343,8 +344,9 @@ function dashboardHtml(): string {
   .panel{display:none;padding:24px}
   .panel.active{display:block}
 
-  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
-  @media(max-width:860px){.cards{grid-template-columns:repeat(2,1fr)}}
+  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+  @media(max-width:1000px){.cards{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:700px){.cards{grid-template-columns:repeat(2,1fr)}}
   .card{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:16px 18px;box-shadow:var(--shadow-sm);transition:box-shadow .2s,transform .2s}
   .card:hover{box-shadow:var(--shadow-card);transform:translateY(-1px)}
   .card-label{font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px}
@@ -354,6 +356,7 @@ function dashboardHtml(): string {
   .card.local .card-value{color:#059669}
   .card.proxy .card-value{color:#d97706}
   .card.privacy .card-value{color:#7c3aed}
+  .card.cost .card-value{color:#dc2626}
 
   .chart-wrap{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:16px 18px;margin-bottom:20px;box-shadow:var(--shadow-sm)}
   .chart-wrap h3{font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:10px}
@@ -559,18 +562,23 @@ function dashboardHtml(): string {
       <div class="card-value" id="privacy-rate">-</div>
       <div class="card-sub" id="privacy-sub" data-i18n="overview.sub">of total tokens protected</div>
     </div>
+    <div class="card cost">
+      <div class="card-label" data-i18n="overview.cost">Cloud Cost</div>
+      <div class="card-value" id="cloud-cost">-</div>
+      <div class="card-sub" id="cloud-cost-sub" data-i18n="overview.cost_sub">estimated cloud API cost</div>
+    </div>
   </div>
   <div class="chart-wrap">
     <h3 data-i18n="overview.chart">Hourly Token Usage</h3>
     <canvas id="hourlyChart" height="80"></canvas>
   </div>
   <table class="data-table">
-    <thead><tr><th data-i18n="table.category">Category</th><th data-i18n="table.input">Input</th><th data-i18n="table.output">Output</th><th data-i18n="table.cache">Cache Read</th><th data-i18n="table.total">Total</th><th data-i18n="table.requests">Requests</th></tr></thead>
+    <thead><tr><th data-i18n="table.category">Category</th><th data-i18n="table.input">Input</th><th data-i18n="table.output">Output</th><th data-i18n="table.cache">Cache Read</th><th data-i18n="table.total">Total</th><th data-i18n="table.requests">Requests</th><th data-i18n="table.cost">Cost</th></tr></thead>
     <tbody id="detail-body"></tbody>
   </table>
   <h4 style="margin-top:18px;margin-bottom:6px;color:var(--text-secondary);" data-i18n="table.by_source">By Source (Router vs Task)</h4>
   <table class="data-table">
-    <thead><tr><th data-i18n="table.source">Source</th><th data-i18n="table.input">Input</th><th data-i18n="table.output">Output</th><th data-i18n="table.cache">Cache Read</th><th data-i18n="table.total">Total</th><th data-i18n="table.requests">Requests</th></tr></thead>
+    <thead><tr><th data-i18n="table.source">Source</th><th data-i18n="table.input">Input</th><th data-i18n="table.output">Output</th><th data-i18n="table.cache">Cache Read</th><th data-i18n="table.total">Total</th><th data-i18n="table.requests">Requests</th><th data-i18n="table.cost">Cost</th></tr></thead>
     <tbody id="source-body"></tbody>
   </table>
   <div class="info-bar" id="info-bar"></div>
@@ -582,8 +590,8 @@ function dashboardHtml(): string {
 <!-- Sessions -->
 <div id="sessions-panel" class="panel">
   <table class="data-table">
-    <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
-    <tbody id="sessions-body"><tr><td colspan="10" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
+    <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.cost">Cost</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
+    <tbody id="sessions-body"><tr><td colspan="11" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
   </table>
 </div>
 
@@ -964,6 +972,11 @@ function dashboardHtml(): string {
     </div>
   </div>
 
+  <div class="adv-toggle" onclick="toggleAdv(this)">
+    <span class="adv-arrow">&#9654;</span> <span data-i18n="cfg.adv">Advanced Settings</span>
+  </div>
+  <div class="adv-body">
+
   <div class="config-section">
     <h3><span data-i18n="cfg.guard">Privacy Guard Agent</span> <span class="badge badge-hot">instant</span></h3>
     <div class="hint" style="margin-bottom:14px" data-i18n="cfg.guard_desc">A local agent that handles sensitive tasks entirely on-device.</div>
@@ -1011,6 +1024,26 @@ function dashboardHtml(): string {
     </div>
   </div>
 
+  </div>
+
+  <div class="config-section">
+    <h3><span data-i18n="cfg.pricing">Model Pricing</span> <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfg.pricing_desc">Configure per-model pricing for cloud API cost estimation (USD per 1M tokens). Only cloud models are tracked.</div>
+    <table class="data-table" id="pricing-table">
+      <thead><tr><th data-i18n="cfg.pricing_model">Model</th><th data-i18n="cfg.pricing_input">Input $/1M</th><th data-i18n="cfg.pricing_output">Output $/1M</th><th style="width:40px"></th></tr></thead>
+      <tbody id="pricing-body"></tbody>
+    </table>
+    <div class="add-row" style="margin-top:12px">
+      <input id="pricing-new-model" placeholder="e.g. gpt-4o" style="flex:2;padding:10px 14px;background:var(--bg-input);border:1px solid transparent;border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;outline:none">
+      <input id="pricing-new-input" type="number" step="0.01" placeholder="Input $/1M" style="flex:1;padding:10px 14px;background:var(--bg-input);border:1px solid transparent;border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;outline:none">
+      <input id="pricing-new-output" type="number" step="0.01" placeholder="Output $/1M" style="flex:1;padding:10px 14px;background:var(--bg-input);border:1px solid transparent;border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;outline:none">
+      <button class="btn btn-sm btn-outline" onclick="addPricingRow()" data-i18n="cfg.pricing_add">Add Model</button>
+    </div>
+    <div style="margin-top:10px">
+      <button class="btn btn-sm btn-outline" onclick="loadDefaultPricing()" data-i18n="cfg.pricing_load">Load Defaults</button>
+    </div>
+  </div>
+
   <div class="save-bar">
     <button class="btn btn-primary" onclick="saveConfig()" data-i18n="cfg.save">Save Configuration</button>
   </div>
@@ -1040,6 +1073,8 @@ var T = {
   'overview.local':{en:'Local Tokens',zh:'本地 Tokens'},
   'overview.redacted':{en:'Redacted Tokens',zh:'脱敏 Tokens'},
   'overview.protection':{en:'Data Protection Rate',zh:'数据保护率'},
+  'overview.cost':{en:'Cloud Cost',zh:'云端费用'},
+  'overview.cost_sub':{en:'estimated cloud API cost',zh:'估算云端 API 费用'},
   'overview.sub':{en:'of total tokens protected',zh:'受保护的 Token 占比'},
   'overview.chart':{en:'Hourly Token Usage',zh:'每小时 Token 用量'},
   'overview.requests':{en:'requests',zh:'请求'},
@@ -1054,6 +1089,7 @@ var T = {
   'table.cache':{en:'Cache Read',zh:'缓存读取'},
   'table.total':{en:'Total',zh:'总计'},
   'table.requests':{en:'Requests',zh:'请求数'},
+  'table.cost':{en:'Cost',zh:'费用'},
   'table.by_source':{en:'By Source (Router vs Task)',zh:'按来源（路由开销 vs 任务执行）'},
   'table.source':{en:'Source',zh:'来源'},
   'sessions.session':{en:'Session',zh:'会话'},
@@ -1061,6 +1097,7 @@ var T = {
   'sessions.cloud':{en:'Cloud',zh:'云端'},
   'sessions.local':{en:'Local',zh:'本地'},
   'sessions.redacted':{en:'Redacted',zh:'脱敏'},
+  'sessions.cost':{en:'Cost',zh:'费用'},
   'sessions.total':{en:'Total',zh:'总计'},
   'sessions.requests':{en:'Requests',zh:'请求数'},
   'sessions.last_active':{en:'Last Active',zh:'最近活跃'},
@@ -1164,6 +1201,7 @@ var T = {
   'cfg.custom_mod':{en:'Custom Module Path',zh:'自定义模块路径'},
   'cfg.cls':{en:'Cost-Optimizer Classifier',zh:'成本优化分类器'},
   'cfg.cls_desc':{en:'LLM used by the Cost-Optimizer to determine task complexity. Falls back to the Local Model settings above if empty.',zh:'成本优化路由用于判断任务复杂度的 LLM。留空则使用上方本地模型配置。'},
+  'cfg.adv':{en:'Advanced Settings',zh:'高级设置'},
   'cfg.guard':{en:'Privacy Guard Agent',zh:'隐私守护 Agent'},
   'cfg.guard_desc':{en:'A local agent that handles sensitive tasks entirely on-device.',zh:'完全在本地运行的隐私守护 Agent。'},
   'cfg.agent_id':{en:'Agent ID',zh:'Agent ID'},
@@ -1182,6 +1220,13 @@ var T = {
   'cfg.base_dir':{en:'Base Directory',zh:'基础目录'},
   'cfg.local_prov':{en:'Local Providers',zh:'本地供应商'},
   'cfg.local_prov_hint':{en:'Additional providers treated as "local" (safe for confidential data routing)',zh:'额外视为"本地"的供应商（可安全路由机密数据）'},
+  'cfg.pricing':{en:'Model Pricing',zh:'模型定价'},
+  'cfg.pricing_desc':{en:'Configure per-model pricing for cloud API cost estimation (USD per 1M tokens). Only cloud models are tracked.',zh:'配置云端模型的单价用于费用估算（美元/百万 Token）。仅统计云端模型。'},
+  'cfg.pricing_model':{en:'Model',zh:'模型'},
+  'cfg.pricing_input':{en:'Input $/1M',zh:'输入 $/1M'},
+  'cfg.pricing_output':{en:'Output $/1M',zh:'输出 $/1M'},
+  'cfg.pricing_add':{en:'Add Model',zh:'添加模型'},
+  'cfg.pricing_load':{en:'Load Defaults',zh:'加载默认'},
   'cfg.save':{en:'Save Configuration',zh:'保存配置'},
   'cfg.saved':{en:'Configuration saved',zh:'配置已保存'},
   'common.add':{en:'Add',zh:'添加'},
@@ -1351,6 +1396,76 @@ function addRouter() {
   moduleInput.value = '';
 }
 
+// ── Model Pricing ──
+var _pricing = {};
+
+var DEFAULT_PRICING = {
+  'claude-sonnet-4.6': { inputPer1M: 3, outputPer1M: 15 },
+  'claude-3.5-sonnet': { inputPer1M: 3, outputPer1M: 15 },
+  'claude-3.5-haiku': { inputPer1M: 0.8, outputPer1M: 4 },
+  'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10 },
+  'gpt-4o-mini': { inputPer1M: 0.15, outputPer1M: 0.6 },
+  'o4-mini': { inputPer1M: 1.1, outputPer1M: 4.4 },
+  'gemini-2.0-flash': { inputPer1M: 0.1, outputPer1M: 0.4 },
+  'deepseek-chat': { inputPer1M: 0.27, outputPer1M: 1.1 }
+};
+
+function renderPricing() {
+  var tbody = document.getElementById('pricing-body');
+  if (!tbody) return;
+  var keys = Object.keys(_pricing);
+  if (!keys.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-tertiary);font-size:13px;padding:14px 0">No pricing configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = keys.sort().map(function(model) {
+    var p = _pricing[model];
+    var eid = escHtml(model);
+    return '<tr>' +
+      '<td style="font-family:var(--font-mono);font-size:12px">' + eid + '</td>' +
+      '<td><input type="number" step="0.01" min="0" value="' + (p.inputPer1M ?? 0) + '" data-pricing-model="' + eid + '" data-pricing-field="inputPer1M" onchange="updatePricing(this)" style="width:80px;padding:6px 8px;background:var(--bg-input);border:1px solid transparent;border-radius:4px;font-size:12px;color:var(--text-primary);outline:none"></td>' +
+      '<td><input type="number" step="0.01" min="0" value="' + (p.outputPer1M ?? 0) + '" data-pricing-model="' + eid + '" data-pricing-field="outputPer1M" onchange="updatePricing(this)" style="width:80px;padding:6px 8px;background:var(--bg-input);border:1px solid transparent;border-radius:4px;font-size:12px;color:var(--text-primary);outline:none"></td>' +
+      '<td><button style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;font-size:14px" onclick="removePricing(\\'' + eid + '\\')">&times;</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function updatePricing(el) {
+  var model = el.getAttribute('data-pricing-model');
+  var field = el.getAttribute('data-pricing-field');
+  if (!model || !field || !_pricing[model]) return;
+  _pricing[model][field] = parseFloat(el.value) || 0;
+}
+
+function addPricingRow() {
+  var modelEl = document.getElementById('pricing-new-model');
+  var inputEl = document.getElementById('pricing-new-input');
+  var outputEl = document.getElementById('pricing-new-output');
+  var model = modelEl.value.trim();
+  if (!model) return;
+  _pricing[model] = {
+    inputPer1M: parseFloat(inputEl.value) || 0,
+    outputPer1M: parseFloat(outputEl.value) || 0
+  };
+  modelEl.value = '';
+  inputEl.value = '';
+  outputEl.value = '';
+  modelEl.focus();
+  renderPricing();
+}
+
+function removePricing(model) {
+  delete _pricing[model];
+  renderPricing();
+}
+
+function loadDefaultPricing() {
+  Object.keys(DEFAULT_PRICING).forEach(function(k) {
+    if (!_pricing[k]) _pricing[k] = Object.assign({}, DEFAULT_PRICING[k]);
+  });
+  renderPricing();
+}
+
 // ── Tabs ──
 document.querySelectorAll('.tab').forEach(function(t) {
   t.addEventListener('click', function() {
@@ -1384,9 +1499,16 @@ function fmtTime(ts) {
   return hh + ':' + mm + ':' + ss;
 }
 
+function fmtCost(n) {
+  if (n == null || n === 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
+}
+
 function fillRow(cat, b) {
+  var cost = b.estimatedCost || 0;
   return '<tr><td>' + cat + '</td><td>' + fmt(b.inputTokens) + '</td><td>' + fmt(b.outputTokens) +
-    '</td><td>' + fmt(b.cacheReadTokens) + '</td><td>' + fmt(b.totalTokens) + '</td><td>' + b.requestCount + '</td></tr>';
+    '</td><td>' + fmt(b.cacheReadTokens) + '</td><td>' + fmt(b.totalTokens) + '</td><td>' + b.requestCount + '</td><td>' + fmtCost(cost) + '</td></tr>';
 }
 
 // ── Overview ──
@@ -1415,6 +1537,10 @@ async function refreshStats() {
     document.getElementById('privacy-sub').textContent = total > 0
       ? fmt(prot) + ' / ' + fmt(total) + ' ' + t('overview.sub')
       : t('overview.no_data');
+
+    var cloudCost = (lt.cloud.estimatedCost || 0) + (lt.proxy.estimatedCost || 0);
+    document.getElementById('cloud-cost').textContent = fmtCost(cloudCost);
+    document.getElementById('cloud-cost-sub').textContent = t('overview.cost_sub');
 
     document.getElementById('detail-body').innerHTML =
       fillRow(t('chart.cloud'), lt.cloud) + fillRow(t('chart.local'), lt.local) + fillRow(t('chart.redacted'), lt.proxy);
@@ -1504,7 +1630,7 @@ async function refreshSessions() {
     var sessions = await fetch(BASE + '/sessions').then(function(r) { return r.json(); });
     var tbody = document.getElementById('sessions-body');
     if (!sessions || !sessions.length) {
-      tbody.innerHTML = '<tr><td colspan="10" class="empty-state">' + t('sessions.empty') + '</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" class="empty-state">' + t('sessions.empty') + '</td></tr>';
       return;
     }
     tbody.innerHTML = sessions.map(function(s) {
@@ -1512,6 +1638,7 @@ async function refreshSessions() {
       var bs = s.bySource || {};
       var routerTokens = (bs.router || {}).totalTokens || 0;
       var taskTokens = (bs.task || {}).totalTokens || 0;
+      var sessCost = (s.cloud.estimatedCost || 0) + (s.proxy.estimatedCost || 0);
       return '<tr>' +
         '<td><span class="session-key" title="' + escHtml(s.sessionKey) + '">' + escHtml(shortKey) + '</span></td>' +
         '<td><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></td>' +
@@ -1521,6 +1648,7 @@ async function refreshSessions() {
         '<td>' + fmt(routerTokens) + '</td>' +
         '<td>' + fmt(taskTokens) + '</td>' +
         '<td>' + fmt(totalForSession(s)) + '</td>' +
+        '<td>' + fmtCost(sessCost) + '</td>' +
         '<td>' + totalReqsForSession(s) + '</td>' +
         '<td>' + timeAgo(s.lastActiveAt) + '</td>' +
         '</tr>';
@@ -1618,6 +1746,14 @@ async function loadConfig() {
     _tags['toolpath-s3'] = (toolRules.S3 && toolRules.S3.paths) ? toolRules.S3.paths.slice() : [];
     _tags['lp'] = Array.isArray(p.localProviders) ? p.localProviders.slice() : [];
 
+    _pricing = {};
+    if (p.modelPricing && typeof p.modelPricing === 'object') {
+      Object.keys(p.modelPricing).forEach(function(k) {
+        _pricing[k] = Object.assign({}, p.modelPricing[k]);
+      });
+    }
+    renderPricing();
+
     _tags['pipe-um'] = Array.isArray(pipeline.onUserMessage) ? pipeline.onUserMessage.slice() : [];
     _tags['pipe-tcp'] = Array.isArray(pipeline.onToolCallProposed) ? pipeline.onToolCallProposed.slice() : [];
     _tags['pipe-tce'] = Array.isArray(pipeline.onToolCallExecuted) ? pipeline.onToolCallExecuted.slice() : [];
@@ -1670,6 +1806,7 @@ async function saveConfig() {
         s2Policy: document.getElementById('cfg-s2policy').value,
         proxyPort: portVal ? parseInt(portVal) : undefined,
         localProviders: _tags['lp'].length > 0 ? _tags['lp'] : [],
+        modelPricing: Object.keys(_pricing).length > 0 ? _pricing : undefined,
         session: {
           isolateGuardHistory: document.getElementById('cfg-sess-isolate').checked,
           baseDir: document.getElementById('cfg-sess-basedir').value || undefined,
