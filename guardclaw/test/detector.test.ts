@@ -91,7 +91,7 @@ describe("Detector Core", () => {
 
     test("should use default detectors when none configured", async () => {
       const minimalConfig = {
-        privacy: { enabled: true },
+        privacy: { enabled: true, localModel: { enabled: false } },
       };
 
       const context: DetectionContext = {

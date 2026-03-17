@@ -22,6 +22,18 @@ export type SessionMessage = {
  */
 export class DualSessionManager {
   private baseDir: string;
+  private writeLocks = new Map<string, Promise<void>>();
+
+  /**
+   * Serialize writes to the same file to prevent interleaved JSONL lines
+   * when multiple fire-and-forget writes race from sync hooks.
+   */
+  private async withWriteLock(lockKey: string, fn: () => Promise<void>): Promise<void> {
+    const prev = this.writeLocks.get(lockKey) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    this.writeLocks.set(lockKey, next);
+    await next;
+  }
 
   constructor(baseDir: string = "~/.openclaw") {
     // Expand ~ to home directory
@@ -147,7 +159,9 @@ export class DualSessionManager {
   }
 
   /**
-   * Write message to history file
+   * Write message to history file.
+   * Uses a per-file write lock to serialize concurrent appends
+   * (e.g. from fire-and-forget calls in sync hooks).
    */
   private async writeToHistory(
     sessionKey: string,
@@ -155,26 +169,26 @@ export class DualSessionManager {
     agentId: string,
     historyType: "full" | "clean"
   ): Promise<void> {
-    try {
-      const historyPath = this.getHistoryPath(sessionKey, agentId, historyType);
+    const historyPath = this.getHistoryPath(sessionKey, agentId, historyType);
 
-      // Ensure directory exists
-      const dir = path.dirname(historyPath);
-      await fs.promises.mkdir(dir, { recursive: true });
+    await this.withWriteLock(historyPath, async () => {
+      try {
+        const dir = path.dirname(historyPath);
+        await fs.promises.mkdir(dir, { recursive: true });
 
-      // Append message as JSONL
-      const line = JSON.stringify({
-        ...message,
-        timestamp: message.timestamp ?? Date.now(),
-      });
+        const line = JSON.stringify({
+          ...message,
+          timestamp: message.timestamp ?? Date.now(),
+        });
 
-      await fs.promises.appendFile(historyPath, line + "\n", "utf-8");
-    } catch (err) {
-      console.error(
-        `[GuardClaw] Failed to write to ${historyType} history for ${sessionKey}:`,
-        err
-      );
-    }
+        await fs.promises.appendFile(historyPath, line + "\n", "utf-8");
+      } catch (err) {
+        console.error(
+          `[GuardClaw] Failed to write to ${historyType} history for ${sessionKey}:`,
+          err
+        );
+      }
+    });
   }
 
   /**

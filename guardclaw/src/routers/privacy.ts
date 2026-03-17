@@ -108,7 +108,7 @@ export const privacyRouter: GuardClawRouter = {
       return { level: "S1", action: "passthrough", reason: "Privacy detection disabled" };
     }
 
-    const result = await detectSensitivityLevel(context, pluginConfig);
+    const result = await detectSensitivityLevel(context, pluginConfig, privacyConfig);
 
     return detectionToDecision(result.level, result.reason, privacyConfig);
   },

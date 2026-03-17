@@ -104,6 +104,30 @@ export type PrivacyConfig = {
     inputPer1M?: number;
     outputPer1M?: number;
   }>;
+  /**
+   * Toggle high-false-positive redaction rules individually.
+   * All default to false (off) to avoid over-redaction.
+   */
+  redaction?: RedactionOptions;
+};
+
+export type RedactionOptions = {
+  /** Internal IP addresses (10.x, 172.16-31.x, 192.168.x). Default: false */
+  internalIp?: boolean;
+  /** Email addresses. Default: false */
+  email?: boolean;
+  /** .env file content (KEY=VALUE lines). Default: false */
+  envVar?: boolean;
+  /** Credit card number pattern (13-19 digits). Default: false */
+  creditCard?: boolean;
+  /** Chinese mobile phone number (1[3-9]x 11 digits). Default: false */
+  chinesePhone?: boolean;
+  /** Chinese ID card number (18 digits / 17+X). Default: false */
+  chineseId?: boolean;
+  /** Chinese address patterns (省/市/区/路/号 etc.). Default: false */
+  chineseAddress?: boolean;
+  /** PIN / pin code contextual rule. Default: false */
+  pin?: boolean;
 };
 
 export type DetectionContext = {
@@ -216,10 +240,13 @@ export function numericToLevel(numeric: SensitivityLevelNumeric): SensitivityLev
       return "S2";
     case 3:
       return "S3";
+    default:
+      return "S1";
   }
 }
 
 export function maxLevel(...levels: SensitivityLevel[]): SensitivityLevel {
+  if (levels.length === 0) return "S1";
   const numeric = levels.map(levelToNumeric);
   const max = Math.max(...numeric) as SensitivityLevelNumeric;
   return numericToLevel(max);

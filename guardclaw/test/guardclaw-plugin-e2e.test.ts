@@ -270,7 +270,8 @@ describe("GuardClaw Plugin E2E", () => {
         "Phone: 13912345678",
       ].join("\n");
 
-      const redacted = redactSensitiveInfo(input);
+      const opts = { email: true, internalIp: true, chinesePhone: true };
+      const redacted = redactSensitiveInfo(input, opts);
 
       expect(redacted).toContain("[REDACTED:PRIVATE_KEY]");
       expect(redacted).toContain("[REDACTED:EMAIL]");

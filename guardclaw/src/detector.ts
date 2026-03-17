@@ -18,19 +18,24 @@ import { detectByLocalModel } from "./local-model.js";
 import { defaultPrivacyConfig } from "./config-schema.js";
 
 /**
- * Main detection function that coordinates all detectors
+ * Main detection function that coordinates all detectors.
+ *
+ * Accepts either a raw `pluginConfig` (legacy — will merge with defaults)
+ * or a pre-merged `PrivacyConfig` via the `resolvedConfig` option to avoid
+ * double-merging when called from routers that already merged config.
  */
 export async function detectSensitivityLevel(
   context: DetectionContext,
-  pluginConfig: Record<string, unknown>
+  pluginConfig: Record<string, unknown>,
+  resolvedConfig?: PrivacyConfig,
 ): Promise<DetectionResult> {
-  const privacyConfig = mergeWithDefaults(
+  const privacyConfig = resolvedConfig ?? mergeWithDefaults(
     (pluginConfig?.privacy as PrivacyConfig) ?? {},
     defaultPrivacyConfig
   );
 
-  // Check if privacy is enabled
-  if (privacyConfig.enabled === false) {
+  // Check if privacy is enabled (skip when dry-run so dashboards get real classification)
+  if (privacyConfig.enabled === false && !context.dryRun) {
     return {
       level: "S1",
       levelNumeric: 1,
@@ -72,7 +77,7 @@ function getDetectorsForCheckpoint(
 
   switch (checkpoint) {
     case "onUserMessage":
-      return checkpoints.onUserMessage ?? ["localModelDetector"];
+      return checkpoints.onUserMessage ?? ["ruleDetector", "localModelDetector"];
     case "onToolCallProposed":
       return checkpoints.onToolCallProposed ?? ["ruleDetector"];
     case "onToolCallExecuted":
@@ -207,10 +212,12 @@ function mergeWithDefaults(
     },
     localModel: {
       enabled: userConfig.localModel?.enabled ?? defaults.localModel?.enabled,
+      type: userConfig.localModel?.type ?? defaults.localModel?.type,
       provider: userConfig.localModel?.provider ?? defaults.localModel?.provider,
       model: userConfig.localModel?.model ?? defaults.localModel?.model,
       endpoint: userConfig.localModel?.endpoint ?? defaults.localModel?.endpoint,
       apiKey: userConfig.localModel?.apiKey ?? defaults.localModel?.apiKey,
+      module: userConfig.localModel?.module ?? defaults.localModel?.module,
     },
     guardAgent: {
       id: userConfig.guardAgent?.id ?? defaults.guardAgent?.id,
@@ -221,6 +228,9 @@ function mergeWithDefaults(
       isolateGuardHistory:
         userConfig.session?.isolateGuardHistory ?? defaults.session?.isolateGuardHistory,
       baseDir: userConfig.session?.baseDir ?? defaults.session?.baseDir,
+      injectDualHistory:
+        userConfig.session?.injectDualHistory ?? defaults.session?.injectDualHistory,
+      historyLimit: userConfig.session?.historyLimit ?? defaults.session?.historyLimit,
     },
   };
 }

@@ -133,6 +133,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       clearActiveLocalRouting(sessionKey);
       resetTurnLevel(sessionKey);
+      consumeDetection(sessionKey);
 
       const privacyConfig = getLiveConfig();
       if (!privacyConfig.enabled) return;
@@ -328,6 +329,73 @@ export function registerHooks(api: OpenClawPluginApi): void {
         };
       }
 
+      // Transform action: the router rewrote the prompt content.
+      // For S2/S3 we must still route safely — use the transformed content
+      // as the desensitized payload and route through the appropriate path.
+      if (decision.action === "transform") {
+        if (decision.level === "S3") {
+          trackSessionLevel(sessionKey, "S3");
+          setActiveLocalRouting(sessionKey);
+          stashDetection(sessionKey, {
+            level: "S3",
+            reason: decision.reason,
+            originalPrompt: msgStr,
+            timestamp: Date.now(),
+          });
+          const guardCfg = getGuardAgentConfig(privacyConfig);
+          const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
+          api.logger.info(`[GuardClaw] S3 TRANSFORM — routing to edge model [${decision.routerId}]`);
+          return {
+            providerOverride: guardCfg?.provider ?? defaultProvider,
+            modelOverride: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
+          };
+        }
+
+        if (decision.level === "S2") {
+          const transformedText = decision.transformedContent ?? desensitized ?? msgStr;
+          stashDetection(sessionKey, {
+            level: "S2",
+            reason: decision.reason,
+            desensitized: transformedText,
+            originalPrompt: msgStr,
+            timestamp: Date.now(),
+          });
+          markSessionAsPrivate(sessionKey, "S2");
+
+          const s2Policy = privacyConfig.s2Policy ?? "proxy";
+          if (s2Policy === "local") {
+            const guardCfg = getGuardAgentConfig(privacyConfig);
+            const defaultProvider = privacyConfig.localModel?.provider ?? "ollama";
+            api.logger.info(`[GuardClaw] S2 TRANSFORM — routing to local ${guardCfg?.provider ?? defaultProvider} [${decision.routerId}]`);
+            return {
+              providerOverride: guardCfg?.provider ?? defaultProvider,
+              modelOverride: guardCfg?.modelName ?? privacyConfig.localModel?.model ?? "openbmb/minicpm4.1",
+            };
+          }
+
+          // S2-proxy: route through privacy proxy to strip any residual PII
+          const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
+          const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
+          const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
+          const providerConfig = api.config.models?.providers?.[defaultProvider];
+          if (providerConfig) {
+            const pc = providerConfig as Record<string, unknown>;
+            const providerApi = (pc.api as string) ?? undefined;
+            stashOriginalProvider(sessionKey, {
+              baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(defaultProvider, providerApi),
+              apiKey: (pc.apiKey as string) ?? "",
+              provider: defaultProvider,
+              api: providerApi,
+            });
+          }
+          api.logger.info(`[GuardClaw] S2 TRANSFORM — routing through privacy proxy [${decision.routerId}]`);
+          return { providerOverride: "guardclaw-privacy" };
+        }
+
+        // S1 + transform: no sensitive data, let original provider handle it
+        return;
+      }
+
       // Default: no override — let the original provider handle the request
       // so provider-specific sanitization (Google turn ordering, tool schema
       // cleaning, transcript policy) in openclaw core still triggers correctly.
@@ -454,7 +522,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
           if (ruleResult.level === "S3") {
             trackSessionLevel(sessionKey, "S3");
-            setActiveLocalRouting(sessionKey);
             return { block: true, blockReason: `GuardClaw: ${isSpawn ? "subagent task" : "A2A message"} blocked — S3 (${ruleResult.reason ?? "sensitive"})` };
           }
           if (ruleResult.level === "S2") {
@@ -501,7 +568,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
         if (level === "S3") {
           trackSessionLevel(sessionKey, "S3");
-          setActiveLocalRouting(sessionKey);
           return { block: true, blockReason: `GuardClaw: tool "${toolName}" blocked — S3 (${reason ?? "sensitive"})` };
         }
         if (level === "S2") {
@@ -558,7 +624,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
           sessionManager.writeToFull(sessionKey, {
             role: "tool", content: textContent, timestamp: Date.now(), sessionKey,
           }).catch(() => {});
-          const redacted = redactSensitiveInfo(textContent);
+          const redacted = redactSensitiveInfo(textContent, getLiveConfig().redaction);
           if (redacted !== textContent) {
             api.logger.info(`[GuardClaw] S3 tool result PII-redacted for transcript (tool=${ctx.toolName ?? "unknown"})`);
             sessionManager.writeToClean(sessionKey, {
@@ -606,17 +672,27 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       const detectedSensitive = ruleCheck.level === "S3" || ruleCheck.level === "S2";
 
+      // S3 detected at tool_result_persist is TOO LATE for local routing:
+      // the cloud model is already processing this turn and has seen prior
+      // context. Setting activeLocalRouting here would be misleading.
+      // Instead, degrade to S2 behaviour: record S3 for audit, but apply
+      // S2-level treatment (PII redaction) since that is the strongest
+      // mitigation still available at this stage.
+      const effectiveLevel = ruleCheck.level === "S3" ? "S2" as const : ruleCheck.level;
+
       if (detectedSensitive) {
-        if (ruleCheck.level === "S3") {
-          trackSessionLevel(sessionKey, "S3");
-          setActiveLocalRouting(sessionKey);
-        } else {
-          markSessionAsPrivate(sessionKey, ruleCheck.level);
-        }
+        trackSessionLevel(sessionKey, ruleCheck.level); // audit: record true S3
+        markSessionAsPrivate(sessionKey, effectiveLevel);
         recordDetection(sessionKey, ruleCheck.level, "onToolCallExecuted", ruleCheck.reason);
+        if (ruleCheck.level === "S3") {
+          api.logger.warn(
+            `[GuardClaw] S3 detected in tool result AFTER cloud model already active — ` +
+            `degrading to S2 (PII redaction). tool=${ctx.toolName ?? "unknown"}, reason=${ruleCheck.reason ?? "rule-match"}`,
+          );
+        }
       }
 
-      const redacted = redactSensitiveInfo(textContent);
+      const redacted = redactSensitiveInfo(textContent, getLiveConfig().redaction);
       const wasRedacted = redacted !== textContent;
 
       if (detectedSensitive || wasRedacted || wasPrivateBefore) {
@@ -648,14 +724,23 @@ export function registerHooks(api: OpenClawPluginApi): void {
         );
 
         if (llmResult.level !== "S1" && llmResult.levelNumeric > ruleCheck.levelNumeric) {
-          if (llmResult.level === "S3") {
-            trackSessionLevel(sessionKey, "S3");
-            setActiveLocalRouting(sessionKey);
-          } else if (!detectedSensitive) {
-            markSessionAsPrivate(sessionKey, "S2");
+          // LLM-detected S3: PII redaction below will prevent the raw content
+          // from reaching the cloud model (sync hook blocks). Model routing
+          // cannot change mid-turn, so session marking stays at S2.
+          const llmEffective = llmResult.level === "S3" ? "S2" as const : llmResult.level;
+          trackSessionLevel(sessionKey, llmResult.level); // audit: true level
+          if (!detectedSensitive) {
+            markSessionAsPrivate(sessionKey, llmEffective);
           }
           recordDetection(sessionKey, llmResult.level, "onToolCallExecuted", llmResult.reason);
-          api.logger.info(`[GuardClaw] LLM elevated tool result to ${llmResult.level} (tool=${ctx.toolName ?? "unknown"}, reason=${llmResult.reason ?? "semantic"})`);
+          if (llmResult.level === "S3") {
+            api.logger.warn(
+              `[GuardClaw] LLM elevated tool result to S3 — PII redacted before reaching cloud model. ` +
+              `tool=${ctx.toolName ?? "unknown"}, reason=${llmResult.reason ?? "semantic"}`,
+            );
+          } else {
+            api.logger.info(`[GuardClaw] LLM elevated tool result to ${llmResult.level} (tool=${ctx.toolName ?? "unknown"}, reason=${llmResult.reason ?? "semantic"})`);
+          }
 
           // Use the snapshot taken before detection: if the turn wasn't
           // already private AND rules/regex didn't write above, the LLM
@@ -667,9 +752,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
             sessionManager.writeToClean(sessionKey, { role: "tool", content: redacted, timestamp: ts, sessionKey }).catch(() => {});
           }
 
+          // S3 at persist time: redact before the result enters the model
+          // context and the persisted transcript.
           if (llmResult.level === "S3") {
-            const placeholder = replaceMessageText(msg, "[Tool result contains private data — routed to local processing]");
-            if (placeholder) return { message: placeholder };
+            const s3Redacted = wasRedacted ? redacted : redactSensitiveInfo(textContent, getLiveConfig().redaction);
+            const modified = replaceMessageText(msg, s3Redacted);
+            if (modified) return { message: modified };
           }
         }
       }
@@ -727,7 +815,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
           if (role === "assistant" && isActiveLocalRouting(sessionKey)) {
             // Local model response may contain echoed PII — write original
             // to full track, PII-redacted version to clean track.
-            const redacted = redactSensitiveInfo(msgText);
+            const redacted = redactSensitiveInfo(msgText, getLiveConfig().redaction);
             sessionManager.writeToFull(sessionKey, {
               role: "assistant", content: msgText, timestamp: ts, sessionKey,
             }).catch((err) => {
@@ -758,7 +846,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       if (role === "assistant" && isActiveLocalRouting(sessionKey)) {
         const assistantText = extractMessageText(msg);
         if (assistantText && assistantText.length >= 10) {
-          const redacted = redactSensitiveInfo(assistantText);
+          const redacted = redactSensitiveInfo(assistantText, getLiveConfig().redaction);
           if (redacted !== assistantText) {
             api.logger.info("[GuardClaw] PII-redacted local model response before transcript write");
             return { message: { ...(msg as Record<string, unknown>), content: [{ type: "text", text: redacted }] } };
@@ -870,9 +958,10 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const pipeline = getGlobalPipeline();
       if (!pipeline) return;
 
+      const sessionKey = ctx.sessionKey ?? "";
       const decision = await pipeline.run(
         "onUserMessage",
-        { checkpoint: "onUserMessage", message: content },
+        { checkpoint: "onUserMessage", message: content, sessionKey },
         getPipelineConfig(),
       );
 
@@ -1000,6 +1089,9 @@ function extractMessageText(msg: unknown): string {
 
 /**
  * Replace text content in an AgentMessage, preserving the message structure.
+ * For content arrays, replaces the FIRST text part in-place and removes
+ * subsequent text parts, preserving the original ordering of non-text parts
+ * (images, file references, etc.).
  */
 function replaceMessageText(msg: unknown, newText: string): unknown | null {
   if (typeof msg === "string") return newText;
@@ -1011,7 +1103,22 @@ function replaceMessageText(msg: unknown, newText: string): unknown | null {
   }
 
   if (Array.isArray(m.content)) {
-    return { ...m, content: [{ type: "text", text: newText }] };
+    let textReplaced = false;
+    const newContent: Array<Record<string, unknown>> = [];
+    for (const part of m.content as Array<Record<string, unknown>>) {
+      if (part && typeof part === "object" && part.type === "text") {
+        if (!textReplaced) {
+          newContent.push({ type: "text", text: newText });
+          textReplaced = true;
+        }
+      } else {
+        newContent.push(part);
+      }
+    }
+    if (!textReplaced) {
+      newContent.unshift({ type: "text", text: newText });
+    }
+    return { ...m, content: newContent };
   }
 
   return null;

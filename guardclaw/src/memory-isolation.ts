@@ -282,6 +282,7 @@ export class MemoryIsolationManager {
    * Shared PII redaction: prefer local model, fall back to regex.
    */
   private async redactContent(text: string, privacyConfig?: PrivacyConfig): Promise<string> {
+    const redactionOpts = privacyConfig?.redaction;
     if (privacyConfig) {
       const { desensitized, wasModelUsed } = await desensitizeWithLocalModel(text, privacyConfig);
 
@@ -294,11 +295,11 @@ export class MemoryIsolationManager {
       console.log(
         `[GuardClaw] PII redacted via rules (model ${wasModelUsed ? "returned unchanged" : "unavailable"})`,
       );
-      return redactSensitiveInfo(text);
+      return redactSensitiveInfo(text, redactionOpts);
     }
 
     console.log("[GuardClaw] PII redacted via rules (no config)");
-    return redactSensitiveInfo(text);
+    return redactSensitiveInfo(text, redactionOpts);
   }
 
   /**

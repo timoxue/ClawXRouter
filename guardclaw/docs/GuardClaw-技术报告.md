@@ -676,7 +676,7 @@ new RouterPipeline(logger?)
 | `startPrivacyProxy(port, logger?)` | 启动代理服务器，返回 `ProxyHandle` |
 | `stripPiiMarkers(messages)` | 从消息数组中剥离 `<guardclaw-s2>` 标记 |
 | `stashOriginalProvider(key, target)` | 暂存原始 Provider 信息（按会话 key） |
-| `consumeOriginalProvider(key)` | 消费并返回暂存的 Provider 信息 |
+| `getStashedProvider(key)` | 查询暂存的 Provider 信息（TTL 缓存，不删除） |
 | `setDefaultProviderTarget(target)` | 设置默认 Provider 目标（fallback） |
 
 **标记协议**:

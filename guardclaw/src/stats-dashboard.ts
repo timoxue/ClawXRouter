@@ -1013,6 +1013,19 @@ function dashboardHtml(): string {
   </div>
 
   <div class="config-section">
+    <h3><span data-i18n="cfg.redaction">Rule-based Redaction</span> <span class="badge badge-hot">instant</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfg.redaction_desc">Toggle individual PII pattern rules. Off by default to reduce false positives.</div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_ip">Internal IP Addresses (10.x, 172.x, 192.168.x)</label><label class="toggle"><input type="checkbox" id="cfg-rd-internalIp"><span class="slider"></span></label></div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_email">Email Addresses</label><label class="toggle"><input type="checkbox" id="cfg-rd-email"><span class="slider"></span></label></div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_env">Environment Variables (.env KEY=VALUE)</label><label class="toggle"><input type="checkbox" id="cfg-rd-envVar"><span class="slider"></span></label></div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_card">Credit Card Numbers (13-19 digits)</label><label class="toggle"><input type="checkbox" id="cfg-rd-creditCard"><span class="slider"></span></label></div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_phone">Chinese Mobile Phone (1[3-9]x)</label><label class="toggle"><input type="checkbox" id="cfg-rd-chinesePhone"><span class="slider"></span></label></div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_id">Chinese ID Card (18 digits)</label><label class="toggle"><input type="checkbox" id="cfg-rd-chineseId"><span class="slider"></span></label></div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_addr">Chinese Addresses</label><label class="toggle"><input type="checkbox" id="cfg-rd-chineseAddress"><span class="slider"></span></label></div>
+    <div class="field-toggle"><label data-i18n="cfg.rd_pin">PIN / Pin Code</label><label class="toggle"><input type="checkbox" id="cfg-rd-pin"><span class="slider"></span></label></div>
+  </div>
+
+  <div class="config-section">
     <h3><span data-i18n="cfg.local_prov">Local Providers</span> <span class="badge badge-hot">instant</span></h3>
     <div class="field">
       <label data-i18n="cfg.local_prov_hint">Additional providers treated as &quot;local&quot; (safe for confidential data routing)</label>
@@ -1227,6 +1240,16 @@ var T = {
   'cfg.pricing_output':{en:'Output $/1M',zh:'输出 $/1M'},
   'cfg.pricing_add':{en:'Add Model',zh:'添加模型'},
   'cfg.pricing_load':{en:'Load Defaults',zh:'加载默认'},
+  'cfg.redaction':{en:'Rule-based Redaction',zh:'规则脱敏'},
+  'cfg.redaction_desc':{en:'Toggle individual PII pattern rules. Off by default to reduce false positives.',zh:'控制各条 PII 正则规则的启停，默认关闭以减少误报。'},
+  'cfg.rd_ip':{en:'Internal IP Addresses (10.x, 172.x, 192.168.x)',zh:'内网 IP 地址 (10.x, 172.x, 192.168.x)'},
+  'cfg.rd_email':{en:'Email Addresses',zh:'电子邮箱'},
+  'cfg.rd_env':{en:'Environment Variables (.env KEY=VALUE)',zh:'环境变量 (.env KEY=VALUE)'},
+  'cfg.rd_card':{en:'Credit Card Numbers (13-19 digits)',zh:'信用卡号 (13-19 位)'},
+  'cfg.rd_phone':{en:'Chinese Mobile Phone (1[3-9]x)',zh:'中国手机号 (1[3-9]x)'},
+  'cfg.rd_id':{en:'Chinese ID Card (18 digits)',zh:'中国身份证 (18 位)'},
+  'cfg.rd_addr':{en:'Chinese Addresses',zh:'中国地址'},
+  'cfg.rd_pin':{en:'PIN / Pin Code',zh:'PIN 码'},
   'cfg.save':{en:'Save Configuration',zh:'保存配置'},
   'cfg.saved':{en:'Configuration saved',zh:'配置已保存'},
   'common.add':{en:'Add',zh:'添加'},
@@ -1730,6 +1753,12 @@ async function loadConfig() {
     document.getElementById('cfg-sess-isolate').checked = sess.isolateGuardHistory !== false;
     document.getElementById('cfg-sess-basedir').value = sess.baseDir || '';
 
+    var rd = p.redaction || {};
+    ['internalIp','email','envVar','creditCard','chinesePhone','chineseId','chineseAddress','pin'].forEach(function(k) {
+      var el = document.getElementById('cfg-rd-' + k);
+      if (el) el.checked = !!rd[k];
+    });
+
     _checkpoints.um = Array.isArray(ck.onUserMessage) ? ck.onUserMessage.slice() : [];
     _checkpoints.tcp = Array.isArray(ck.onToolCallProposed) ? ck.onToolCallProposed.slice() : [];
     _checkpoints.tce = Array.isArray(ck.onToolCallExecuted) ? ck.onToolCallExecuted.slice() : [];
@@ -1811,6 +1840,14 @@ async function saveConfig() {
           isolateGuardHistory: document.getElementById('cfg-sess-isolate').checked,
           baseDir: document.getElementById('cfg-sess-basedir').value || undefined,
         },
+        redaction: (function() {
+          var rd = {};
+          ['internalIp','email','envVar','creditCard','chinesePhone','chineseId','chineseAddress','pin'].forEach(function(k) {
+            var el = document.getElementById('cfg-rd-' + k);
+            if (el) rd[k] = el.checked;
+          });
+          return rd;
+        })(),
       },
     };
     var res = await fetch(BASE + '/config', {

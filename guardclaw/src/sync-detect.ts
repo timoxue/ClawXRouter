@@ -29,7 +29,7 @@ function getSyncDetect() {
   if (!_syncDetect) {
     _syncDetect = createSyncFn<(context: DetectionContext, config: PrivacyConfig) => DetectionResult>(
       workerPath,
-      { timeout: 20_000, tsRunner: "tsx" },
+      { timeout: 20_000, tsRunner: "node" },
     );
   }
   return _syncDetect;
@@ -41,7 +41,8 @@ export function syncDetectByLocalModel(
 ): DetectionResult {
   try {
     return getSyncDetect()(context, config);
-  } catch {
+  } catch (err) {
+    console.warn("[GuardClaw] syncDetect fallback to S1:", (err as Error)?.message?.slice(0, 120));
     return FALLBACK_S1;
   }
 }

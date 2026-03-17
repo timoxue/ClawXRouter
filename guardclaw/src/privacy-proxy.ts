@@ -17,6 +17,7 @@
 
 import * as http from "node:http";
 import { redactSensitiveInfo } from "./utils.js";
+import { getLiveConfig } from "./live-config.js";
 
 // ── Marker protocol ──
 
@@ -41,7 +42,7 @@ export function stashOriginalProvider(key: string, target: OriginalProviderTarge
   originalProviderTargets.set(key, { target, ts: Date.now() });
 }
 
-export function consumeOriginalProvider(key: string): OriginalProviderTarget | undefined {
+export function getStashedProvider(key: string): OriginalProviderTarget | undefined {
   const entry = originalProviderTargets.get(key);
   if (!entry) return undefined;
   if (Date.now() - entry.ts > PROVIDER_STASH_TTL_MS) {
@@ -302,7 +303,7 @@ function resolveTarget(
   sessionHeader: string | undefined,
 ): OriginalProviderTarget | null {
   if (sessionHeader) {
-    const t = consumeOriginalProvider(sessionHeader);
+    const t = getStashedProvider(sessionHeader);
     if (t) return t;
   }
   return defaultProviderTarget;
@@ -502,15 +503,22 @@ export async function startPrivacyProxy(
         log.info("[GuardClaw Proxy] Cleaned unsupported keywords from tool schemas");
       }
 
-      // Step 2b: Defense-in-depth — run rule-based PII redaction on all user/system
+      // Step 2b: Defense-in-depth — run rule-based PII redaction on non-system
       // messages that will be forwarded to cloud. This catches residual PII when:
       //   - prependContext semantics change (markers not wrapping the user message)
       //   - desensitization by local model missed some PII patterns
       //   - content was injected without going through the marker protocol
+      //
+      // System messages are excluded: they contain legitimate security instructions
+      // (e.g. "Never reveal passwords") that contextual redaction rules would corrupt.
+      const redactionOpts = getLiveConfig().redaction;
       const allMessages = (parsed.messages ?? parsed.contents ?? []) as Array<Record<string, unknown>>;
       for (const msg of allMessages) {
+        const role = String(msg.role ?? "").toLowerCase();
+        if (role === "system") continue;
+
         if (typeof msg.content === "string") {
-          const redacted = redactSensitiveInfo(msg.content);
+          const redacted = redactSensitiveInfo(msg.content, redactionOpts);
           if (redacted !== msg.content) {
             msg.content = redacted;
             log.info("[GuardClaw Proxy] Defense-in-depth: rule-based PII redaction applied to message");
@@ -518,7 +526,7 @@ export async function startPrivacyProxy(
         } else if (Array.isArray(msg.content)) {
           for (const part of msg.content as Array<Record<string, unknown>>) {
             if (part && typeof part.text === "string") {
-              const redacted = redactSensitiveInfo(part.text);
+              const redacted = redactSensitiveInfo(part.text, redactionOpts);
               if (redacted !== part.text) {
                 part.text = redacted;
                 log.info("[GuardClaw Proxy] Defense-in-depth: rule-based PII redaction applied to message part");
@@ -530,7 +538,7 @@ export async function startPrivacyProxy(
         if (Array.isArray(msg.parts)) {
           for (const part of msg.parts as Array<Record<string, unknown>>) {
             if (part && typeof part.text === "string") {
-              const redacted = redactSensitiveInfo(part.text);
+              const redacted = redactSensitiveInfo(part.text, redactionOpts);
               if (redacted !== part.text) {
                 part.text = redacted;
                 log.info("[GuardClaw Proxy] Defense-in-depth: rule-based PII redaction applied to Google part");

@@ -223,7 +223,7 @@ describe("Dual Session Manager", () => {
 
       const context = DualSessionManager.formatAsContext(messages);
 
-      expect(context).toContain("[Previous private conversation context");
+      expect(context).toContain("[Full conversation history (original, authoritative)]");
       expect(context).toContain("User: What's my salary?");
       expect(context).toContain("Assistant: Your base salary is competitive.");
       expect(context).toContain("Tool(read_file): file contents");
@@ -262,7 +262,7 @@ describe("Dual Session Manager", () => {
       const ts = Date.now();
       const originalResponse =
         "查到 13812345678 对应的邮箱是 zhangsan@example.com";
-      const redacted = redactSensitiveInfo(originalResponse);
+      const redacted = redactSensitiveInfo(originalResponse, { chinesePhone: true, email: true });
 
       expect(redacted).not.toBe(originalResponse);
       expect(redacted).toContain("[REDACTED:");
@@ -318,7 +318,7 @@ describe("Dual Session Manager", () => {
 
     test("should redact email addresses in assistant output", () => {
       const response = "发送确认邮件到 zhangsan@example.com 了。";
-      const redacted = redactSensitiveInfo(response);
+      const redacted = redactSensitiveInfo(response, { email: true });
 
       expect(redacted).toContain("[REDACTED:EMAIL]");
       expect(redacted).not.toContain("zhangsan@example.com");
@@ -326,7 +326,7 @@ describe("Dual Session Manager", () => {
 
     test("should redact internal IPs echoed by local model", () => {
       const response = "数据库连接地址是 192.168.1.100:5432。";
-      const redacted = redactSensitiveInfo(response);
+      const redacted = redactSensitiveInfo(response, { internalIp: true });
 
       expect(redacted).toContain("[REDACTED:INTERNAL_IP]");
       expect(redacted).not.toContain("192.168.1.100");

@@ -81,5 +81,6 @@ function mergeConfig(userConfig: PrivacyConfig): PrivacyConfig {
       ...defaultPrivacyConfig.modelPricing,
       ...userConfig.modelPricing,
     },
+    redaction: { ...defaultPrivacyConfig.redaction, ...userConfig.redaction },
   } as PrivacyConfig;
 }

@@ -25,6 +25,7 @@ import { maxLevel } from "../types.js";
 import { callChatCompletion } from "../local-model.js";
 import type { PrivacyConfig } from "../types.js";
 import { getGuardAgentConfig } from "../guard-agent.js";
+import { getKeywordRegex } from "../rules.js";
 
 export interface ConfigurableRouterOptions {
   keywords?: { S2?: string[]; S3?: string[] };
@@ -51,15 +52,13 @@ function checkKeywords(
   text: string,
   keywords: { S2?: string[]; S3?: string[] },
 ): { level: SensitivityLevel; reason?: string } {
-  const lower = text.toLowerCase();
-
   for (const kw of keywords.S3 ?? []) {
-    if (lower.includes(kw.toLowerCase())) {
+    if (getKeywordRegex(kw).test(text)) {
       return { level: "S3", reason: `S3 keyword: ${kw}` };
     }
   }
   for (const kw of keywords.S2 ?? []) {
-    if (lower.includes(kw.toLowerCase())) {
+    if (getKeywordRegex(kw).test(text)) {
       return { level: "S2", reason: `S2 keyword: ${kw}` };
     }
   }

@@ -127,6 +127,18 @@ export const guardClawConfigSchema = Type.Object({
           onToolCallExecuted: Type.Optional(Type.Array(Type.String())),
         }),
       ),
+      redaction: Type.Optional(
+        Type.Object({
+          internalIp: Type.Optional(Type.Boolean()),
+          email: Type.Optional(Type.Boolean()),
+          envVar: Type.Optional(Type.Boolean()),
+          creditCard: Type.Optional(Type.Boolean()),
+          chinesePhone: Type.Optional(Type.Boolean()),
+          chineseId: Type.Optional(Type.Boolean()),
+          chineseAddress: Type.Optional(Type.Boolean()),
+          pin: Type.Optional(Type.Boolean()),
+        }),
+      ),
     }),
   ),
 });
@@ -134,7 +146,9 @@ export const guardClawConfigSchema = Type.Object({
 /**
  * Default configuration values.
  *
- * onUserMessage: LLM judge (via pipeline) for semantic sensitivity detection.
+ * onUserMessage: rules first (fast, deterministic) then LLM judge for semantic detection.
+ *   Both are needed: rules alone miss semantic sensitivity; LLM alone may miss
+ *   keyword-level matches and override rule-based S2 detections with S1.
  * onToolCallProposed: rules-only by default (fast, no LLM overhead per tool call).
  *   Users can add "localModelDetector" to enable LLM detection for tool calls.
  * onToolCallExecuted: rules-only; sync LLM supplement is separately controlled
@@ -145,7 +159,7 @@ export const defaultPrivacyConfig = {
   s2Policy: "proxy" as "proxy" | "local",
   proxyPort: 8403,
   checkpoints: {
-    onUserMessage: ["localModelDetector" as const],
+    onUserMessage: ["ruleDetector" as const, "localModelDetector" as const],
     onToolCallProposed: ["ruleDetector" as const],
     onToolCallExecuted: ["ruleDetector" as const],
   },
@@ -186,6 +200,16 @@ export const defaultPrivacyConfig = {
     "gemini-2.0-flash": { inputPer1M: 0.1, outputPer1M: 0.4 },
     "deepseek-chat": { inputPer1M: 0.27, outputPer1M: 1.1 },
   } as Record<string, { inputPer1M?: number; outputPer1M?: number }>,
+  redaction: {
+    internalIp: false,
+    email: false,
+    envVar: false,
+    creditCard: false,
+    chinesePhone: false,
+    chineseId: false,
+    chineseAddress: false,
+    pin: false,
+  },
   session: {
     isolateGuardHistory: true,
     baseDir: "~/.openclaw",

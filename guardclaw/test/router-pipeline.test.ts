@@ -117,8 +117,8 @@ describe("RouterPipeline", () => {
 
       const result = await pipeline.run("onUserMessage", baseContext, {});
 
-      expect(result.reason).toContain("[a] reason from A");
-      expect(result.reason).toContain("[b] reason from B");
+      expect(result.reason).toContain("[a:w50] reason from A");
+      expect(result.reason).toContain("[b:w50] reason from B");
     });
   });
 

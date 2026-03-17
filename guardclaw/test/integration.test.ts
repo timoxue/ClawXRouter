@@ -206,7 +206,7 @@ describe("GuardClaw Integration", () => {
     });
 
     test("should handle empty configuration gracefully", async () => {
-      const emptyConfig = {};
+      const emptyConfig = { privacy: { localModel: { enabled: false } } };
 
       const context: DetectionContext = {
         checkpoint: "onUserMessage",
