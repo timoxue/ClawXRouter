@@ -25,6 +25,7 @@ export type TokenBucket = {
   cacheReadTokens: number;
   totalTokens: number;
   requestCount: number;
+  estimatedCost: number;
 };
 
 export type SourceBuckets = Record<TokenSource, TokenBucket>;
@@ -78,7 +79,7 @@ const MAX_HOURLY_BUCKETS = 72;
 const MAX_SESSIONS = 200;
 
 function emptyBucket(): TokenBucket {
-  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0, requestCount: 0 };
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0, requestCount: 0, estimatedCost: 0 };
 }
 
 function emptySourceBuckets(): SourceBuckets {
@@ -100,7 +101,7 @@ function emptyStats(): TokenStatsData {
   };
 }
 
-function addToBucket(bucket: TokenBucket, usage: UsageEvent["usage"]): void {
+function addToBucket(bucket: TokenBucket, usage: UsageEvent["usage"], cost = 0): void {
   const input = usage?.input ?? 0;
   const output = usage?.output ?? 0;
   const cacheRead = usage?.cacheRead ?? 0;
@@ -109,6 +110,33 @@ function addToBucket(bucket: TokenBucket, usage: UsageEvent["usage"]): void {
   bucket.cacheReadTokens += cacheRead;
   bucket.totalTokens += usage?.total ?? (input + output);
   bucket.requestCount += 1;
+  bucket.estimatedCost += cost;
+}
+
+/** Look up pricing for a model: exact match, then substring match, then default. */
+function lookupPricing(model: string): { inputPer1M: number; outputPer1M: number } {
+  const pricing = getLiveConfig().modelPricing;
+  if (!pricing) return { inputPer1M: 3, outputPer1M: 15 };
+
+  if (pricing[model]) {
+    return { inputPer1M: pricing[model].inputPer1M ?? 3, outputPer1M: pricing[model].outputPer1M ?? 15 };
+  }
+
+  const lowerModel = model.toLowerCase();
+  for (const [key, val] of Object.entries(pricing)) {
+    if (lowerModel.includes(key.toLowerCase())) {
+      return { inputPer1M: val.inputPer1M ?? 3, outputPer1M: val.outputPer1M ?? 15 };
+    }
+  }
+
+  return { inputPer1M: 3, outputPer1M: 15 };
+}
+
+function calculateCost(model: string, usage: UsageEvent["usage"]): number {
+  const input = usage?.input ?? 0;
+  const output = usage?.output ?? 0;
+  const p = lookupPricing(model);
+  return (input * p.inputPer1M + output * p.outputPer1M) / 1_000_000;
 }
 
 /**
@@ -194,8 +222,12 @@ export class TokenStatsCollector {
     const source: TokenSource = event.source ?? "task";
     const now = Date.now();
 
-    addToBucket(this.data.lifetime[category], event.usage);
-    addToBucket(this.data.bySource[source], event.usage);
+    const cost = category !== "local"
+      ? calculateCost(event.model, event.usage)
+      : 0;
+
+    addToBucket(this.data.lifetime[category], event.usage, cost);
+    addToBucket(this.data.bySource[source], event.usage, cost);
 
     const hourKey = currentHourKey();
     let hourly = this.data.hourly.find((h) => h.hour === hourKey);
@@ -207,8 +239,8 @@ export class TokenStatsCollector {
       }
     }
     if (!hourly.bySource) hourly.bySource = emptySourceBuckets();
-    addToBucket(hourly[category], event.usage);
-    addToBucket(hourly.bySource[source], event.usage);
+    addToBucket(hourly[category], event.usage, cost);
+    addToBucket(hourly.bySource[source], event.usage, cost);
 
     // Per-session tracking
     const sk = event.sessionKey;
@@ -230,8 +262,8 @@ export class TokenStatsCollector {
       if (!sess.bySource) sess.bySource = emptySourceBuckets();
       sess.highestLevel = getSessionHighestLevel(sk);
       sess.lastActiveAt = now;
-      addToBucket(sess[category], event.usage);
-      addToBucket(sess.bySource[source], event.usage);
+      addToBucket(sess[category], event.usage, cost);
+      addToBucket(sess.bySource[source], event.usage, cost);
       this.evictOldSessions();
     }
 

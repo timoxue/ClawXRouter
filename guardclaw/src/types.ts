@@ -81,6 +81,14 @@ export type PrivacyConfig = {
    * Add custom entries here if you run your own inference backend.
    */
   localProviders?: string[];
+  /**
+   * Per-model pricing for cloud API cost estimation (USD per 1M tokens).
+   * Keys are model name strings; lookup tries exact match, then substring match.
+   */
+  modelPricing?: Record<string, {
+    inputPer1M?: number;
+    outputPer1M?: number;
+  }>;
 };
 
 export type DetectionContext = {
