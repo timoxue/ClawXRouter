@@ -35,6 +35,9 @@ import {
   markSessionAsPrivate,
   trackSessionLevel,
   recordDetection,
+  notifyDetectionStart,
+  notifyGenerating,
+  notifyLlmComplete,
   isSessionMarkedPrivate,
   stashDetection,
   getPendingDetection,
@@ -187,6 +190,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return;
       }
 
+      notifyDetectionStart(sessionKey, "onUserMessage");
       const decision = await pipeline.run(
         "onUserMessage",
         {
@@ -198,8 +202,15 @@ export function registerHooks(api: OpenClawPluginApi): void {
         getPipelineConfig(),
       );
 
-      recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason);
+      recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason,
+        decision.routerId, decision.action, decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined);
       api.logger.info(`[GuardClaw] ROUTE: session=${sessionKey} level=${decision.level} action=${decision.action} target=${JSON.stringify(decision.target)} reason=${decision.reason}`);
+
+      if (decision.action !== "block") {
+        notifyGenerating(sessionKey, "onUserMessage", decision.level, decision.routerId, decision.action,
+          decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined);
+      }
+
       if (decision.level === "S1" && decision.action === "passthrough") {
         return;
       }
@@ -915,15 +926,19 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("llm_output", async (event, ctx) => {
     try {
+      const sessionKey = ctx.sessionKey ?? event.sessionId ?? "";
       const collector = getGlobalCollector();
       if (!collector) return;
       collector.record({
-        sessionKey: ctx.sessionKey ?? event.sessionId ?? "",
+        sessionKey,
         provider: event.provider ?? "unknown",
         model: event.model ?? "unknown",
         source: "task",
         usage: event.usage,
       });
+      if (sessionKey) {
+        notifyLlmComplete(sessionKey, "onUserMessage");
+      }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in llm_output hook: ${String(err)}`);
     }

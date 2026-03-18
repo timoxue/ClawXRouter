@@ -218,6 +218,9 @@ export type SessionPrivacyState = {
     level: SensitivityLevel;
     checkpoint: Checkpoint;
     reason?: string;
+    routerId?: string;
+    action?: string;
+    target?: string;
   }>;
 };
 

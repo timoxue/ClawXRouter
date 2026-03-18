@@ -114,7 +114,8 @@ async function callOpenAICompatible(
   messages: ChatMessage[],
   options?: ChatCompletionOptions,
 ): Promise<ChatCompletionResult> {
-  const url = `${endpoint}/v1/chat/completions`;
+  const base = endpoint.replace(/\/v1\/?$/, "");
+  const url = `${base}/v1/chat/completions`;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (options?.apiKey) {
@@ -137,7 +138,9 @@ async function callOpenAICompatible(
   });
 
   if (!response.ok) {
-    throw new Error(`Chat completions API error: ${response.status} ${response.statusText}`);
+    let body = "";
+    try { body = (await response.text()).slice(0, 300); } catch { /* ignore */ }
+    throw new Error(`Chat completions API error: ${response.status} ${response.statusText}${body ? ` – ${body}` : ""} (url=${url})`);
   }
 
   const contentType = response.headers.get("content-type") ?? "";

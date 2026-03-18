@@ -18,9 +18,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { getGlobalCollector } from "./token-stats.js";
+import { getGlobalCollector, onTokenUpdate } from "./token-stats.js";
 import { getLiveConfig, updateLiveConfig } from "./live-config.js";
-import { getAllSessionStates } from "./session-state.js";
+import { getAllSessionStates, getSessionState, onDetection } from "./session-state.js";
 import { loadPrompt, readPromptFromDisk, writePrompt } from "./prompt-loader.js";
 import { DEFAULT_JUDGE_PROMPT } from "./routers/token-saver.js";
 import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "./local-model.js";
@@ -75,7 +75,7 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
 }
 
 function html(res: ServerResponse, body: string): void {
-  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" });
   res.end(body);
 }
 
@@ -133,6 +133,9 @@ export async function statsHttpHandler(
       checkpoint: string;
       reason?: string;
       timestamp: number;
+      routerId?: string;
+      action?: string;
+      target?: string;
     }> = [];
     states.forEach((state) => {
       for (const d of state.detectionHistory) {
@@ -142,11 +145,68 @@ export async function statsHttpHandler(
           checkpoint: d.checkpoint,
           reason: d.reason,
           timestamp: d.timestamp,
+          routerId: d.routerId,
+          action: d.action,
+          target: d.target,
         });
       }
     });
     events.sort((a, b) => b.timestamp - a.timestamp);
     json(res, events.slice(0, 500));
+    return true;
+  }
+
+  if (req.method === "GET" && sub === "/api/session-detections") {
+    const params = new URL(url, "http://localhost").searchParams;
+    const key = params.get("key") ?? "";
+    const state = getSessionState(key);
+    json(res, state?.detectionHistory ?? []);
+    return true;
+  }
+
+  if (req.method === "GET" && sub === "/api/session-detections/stream") {
+    const params = new URL(url, "http://localhost").searchParams;
+    const key = params.get("key") ?? "";
+    console.log(`[GuardClaw] SSE session-detections/stream connected for key=${key}`);
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    (res as any).flushHeaders?.();
+    const state = getSessionState(key);
+    res.write(`event: snapshot\ndata: ${JSON.stringify(state?.detectionHistory ?? [])}\n\n`);
+    const unsubDetection = onDetection((evt) => {
+      if (evt.sessionKey === key) {
+        const phaseMap: Record<string, string> = { start: "detection_start", complete: "detection", generating: "generating", llm_complete: "llm_complete" };
+        const eventName = phaseMap[evt.phase ?? "complete"] ?? "detection";
+        try { res.write(`event: ${eventName}\ndata: ${JSON.stringify(evt)}\n\n`); } catch { /* connection may be closed */ }
+      }
+    });
+    const unsubToken = onTokenUpdate((evt) => {
+      if (evt.sessionKey === key) {
+        try { res.write(`event: token_update\ndata: ${JSON.stringify(evt.stats)}\n\n`); } catch { /* connection may be closed */ }
+      }
+    });
+    req.on("close", () => { unsubDetection(); unsubToken(); });
+    return true;
+  }
+
+  if (req.method === "GET" && sub === "/api/activity-stream") {
+    console.log("[GuardClaw] SSE activity-stream connected");
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    (res as any).flushHeaders?.();
+    res.write(`event: ping\ndata: {}\n\n`);
+    const unsub = onDetection((evt) => {
+      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, phase: evt.phase ?? "complete" })}\n\n`); } catch { /* ignore */ }
+    });
+    req.on("close", unsub);
     return true;
   }
 
@@ -368,6 +428,9 @@ function dashboardHtml(): string {
   .data-table tr:not(:last-child) td{border-bottom:1px solid var(--border-subtle)}
   .data-table tbody tr:hover{background:rgba(37,99,235,.02)}
   #detections-panel .data-table th,#detections-panel .data-table td{text-align:left}
+  .action-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:var(--bg-surface);color:var(--text-secondary)}
+  .action-tag.action-redirect{background:rgba(37,99,235,.1);color:#2563eb}
+  .action-tag.action-block{background:rgba(220,38,38,.1);color:#dc2626}
 
   .info-bar{display:flex;gap:24px;padding:14px 0;font-size:12px;color:var(--text-tertiary)}
 
@@ -414,6 +477,69 @@ function dashboardHtml(): string {
 
   .toast{position:fixed;bottom:24px;right:24px;background:var(--text-primary);color:#fff;padding:14px 22px;border-radius:var(--radius-md);font-size:13px;font-weight:500;display:none;z-index:100;box-shadow:0 12px 40px rgba(0,0,0,.15)}
   .toast.error{background:#dc2626}
+
+  /* Session detail & timeline */
+  .session-detail-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .back-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);background:var(--bg-card);color:var(--text-primary);cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
+  .back-btn:hover{border-color:#d1d5db;background:var(--bg-surface)}
+  .back-arrow{font-size:16px;line-height:1}
+  .sse-indicator{display:flex;align-items:center;gap:6px;font-size:12px;color:#22c55e;font-weight:500}
+  .sse-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;animation:sse-pulse 2s ease-in-out infinite}
+  @keyframes sse-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4)}50%{opacity:.7;box-shadow:0 0 0 4px rgba(34,197,94,0)}}
+
+  .session-detail-header{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:16px 20px;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);margin-bottom:20px;box-shadow:var(--shadow-sm)}
+  .sd-key{font-family:var(--font-mono);font-size:13px;color:var(--text-primary);font-weight:600;word-break:break-all;flex:1;min-width:200px}
+  .sd-stat{display:flex;flex-direction:column;align-items:center;padding:0 14px;border-left:1px solid var(--border-subtle)}
+  .sd-stat:first-of-type{border-left:none}
+  .sd-stat-value{font-size:18px;font-weight:700;color:var(--text-primary);letter-spacing:-.02em;transition:color .3s}
+  .sd-stat-label{font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-top:2px}
+  .sd-stat.flash .sd-stat-value{color:#22c55e}
+  .sd-stat.flash{animation:stat-flash .8s ease}
+  @keyframes stat-flash{0%{background:rgba(34,197,94,.12)}100%{background:transparent}}
+
+  .timeline{position:relative;padding:8px 0 8px 28px;margin-left:12px}
+  .timeline::before{content:'';position:absolute;left:11px;top:0;bottom:0;width:2px;background:var(--border-subtle);border-radius:1px}
+  .timeline-item{position:relative;padding-bottom:24px;opacity:0;animation:tl-fade-in .35s ease forwards}
+  .timeline-item:last-child{padding-bottom:0}
+  .timeline-dot{position:absolute;left:-23px;top:4px;width:12px;height:12px;border-radius:50%;border:2px solid var(--bg-card);box-shadow:0 0 0 2px var(--border-subtle);z-index:1}
+  .timeline-dot.dot-S1{background:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.25)}
+  .timeline-dot.dot-S2{background:#d97706;box-shadow:0 0 0 2px rgba(217,119,6,.25)}
+  .timeline-dot.dot-S3{background:#059669;box-shadow:0 0 0 2px rgba(5,150,105,.25)}
+  .timeline-card{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:12px 16px;box-shadow:var(--shadow-sm);transition:box-shadow .2s}
+  .timeline-card:hover{box-shadow:var(--shadow-card)}
+  .timeline-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .timeline-time{font-size:11px;color:var(--text-tertiary);font-family:var(--font-mono);font-weight:500}
+  .timeline-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .timeline-reason{font-size:12px;color:var(--text-secondary);margin-top:6px;line-height:1.5;padding-left:2px}
+  .timeline-target{font-family:var(--font-mono);font-size:11px;color:var(--accent);background:rgba(37,99,235,.06);padding:2px 8px;border-radius:4px;font-weight:500}
+  .timeline-router{font-size:11px;color:var(--text-tertiary);font-weight:500}
+  .action-tag.action-passthrough{background:rgba(156,163,175,.1);color:#6b7280}
+  .action-tag.action-transform{background:rgba(124,58,237,.1);color:#7c3aed}
+  .tier-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+  .tier-SIMPLE{background:rgba(34,197,94,.1);color:#16a34a}
+  .tier-MEDIUM{background:rgba(59,130,246,.1);color:#2563eb}
+  .tier-COMPLEX{background:rgba(245,158,11,.1);color:#d97706}
+  .tier-REASONING{background:rgba(168,85,247,.1);color:#9333ea}
+
+  #sessions-panel .data-table tbody tr{cursor:pointer;transition:background .15s}
+  #sessions-panel .data-table tbody tr:hover{background:rgba(37,99,235,.04)}
+
+  @keyframes tl-fade-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+  .timeline-item.pending .timeline-dot{background:var(--text-tertiary);animation:dot-pulse 1.5s ease-in-out infinite}
+  .timeline-item.pending .timeline-card{border-style:dashed;opacity:.85}
+  .timeline-item.pending .detecting-label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);font-weight:500}
+  .detecting-spinner{width:14px;height:14px;border:2px solid var(--border-subtle);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:inline-block}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes dot-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+  .generating-indicator{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--accent);font-weight:500;margin-top:6px;padding:4px 10px;background:rgba(37,99,235,.06);border-radius:6px;animation:fade-in .3s ease}
+  .generating-indicator .gen-dots{display:inline-flex;gap:3px}
+  .generating-indicator .gen-dots span{width:4px;height:4px;border-radius:50%;background:var(--accent);animation:gen-bounce .8s ease-in-out infinite}
+  .generating-indicator .gen-dots span:nth-child(2){animation-delay:.15s}
+  .generating-indicator .gen-dots span:nth-child(3){animation-delay:.3s}
+  @keyframes gen-bounce{0%,100%{opacity:.3;transform:translateY(0)}50%{opacity:1;transform:translateY(-3px)}}
+  .timeline-card .complete-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#16a34a;font-weight:600;margin-top:6px;padding:3px 8px;background:rgba(34,197,94,.08);border-radius:5px;animation:fade-in .3s ease}
+  @keyframes fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 
   .rules-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   @media(max-width:700px){.rules-grid{grid-template-columns:1fr}}
@@ -589,10 +715,22 @@ function dashboardHtml(): string {
 
 <!-- Sessions -->
 <div id="sessions-panel" class="panel">
-  <table class="data-table">
-    <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.cost">Cost</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
-    <tbody id="sessions-body"><tr><td colspan="11" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
-  </table>
+  <div id="session-list">
+    <table class="data-table">
+      <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.cost">Cost</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
+      <tbody id="sessions-body"><tr><td colspan="11" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
+    </table>
+  </div>
+  <div id="session-detail" style="display:none">
+    <div class="session-detail-toolbar">
+      <button class="back-btn" onclick="hideSessionDetail()"><span class="back-arrow">&#8592;</span> <span data-i18n="sd.back">Back to Sessions</span></button>
+      <span class="sse-indicator"><span class="sse-dot"></span> <span data-i18n="sd.live">Live</span></span>
+    </div>
+    <div class="session-detail-header" id="sd-header"></div>
+    <div class="timeline" id="session-timeline">
+      <div class="empty-state" data-i18n="sd.timeline_empty">No routing decisions yet</div>
+    </div>
+  </div>
 </div>
 
 <!-- Detection Log -->
@@ -602,10 +740,14 @@ function dashboardHtml(): string {
     <button class="filter-btn" onclick="filterDetections('S1',this)">S1</button>
     <button class="filter-btn" onclick="filterDetections('S2',this)">S2</button>
     <button class="filter-btn" onclick="filterDetections('S3',this)">S3</button>
+    <span style="border-left:1px solid var(--border);height:16px;margin:0 6px"></span>
+    <button class="filter-btn" onclick="filterDetectionRouter('all',this)" data-i18n="det.all_routers" id="router-filter-all" style="font-size:11px">All Routers</button>
+    <button class="filter-btn" onclick="filterDetectionRouter('privacy',this)" style="font-size:11px">Privacy</button>
+    <button class="filter-btn" onclick="filterDetectionRouter('token-saver',this)" style="font-size:11px">Cost-Opt</button>
   </div>
   <table class="data-table">
-    <thead><tr><th data-i18n="det.time">Time</th><th data-i18n="det.session">Session</th><th data-i18n="det.level">Level</th><th data-i18n="det.checkpoint">Checkpoint</th><th data-i18n="det.reason">Reason</th></tr></thead>
-    <tbody id="detections-body"><tr><td colspan="5" class="empty-state" data-i18n="det.empty">No detections yet</td></tr></tbody>
+    <thead><tr><th data-i18n="det.time">Time</th><th data-i18n="det.session">Session</th><th data-i18n="det.level">Level</th><th data-i18n="det.checkpoint">Checkpoint</th><th data-i18n="det.router">Router</th><th data-i18n="det.action">Action</th><th data-i18n="det.target">Target</th><th data-i18n="det.reason">Reason</th></tr></thead>
+    <tbody id="detections-body"><tr><td colspan="8" class="empty-state" data-i18n="det.empty">No detections yet</td></tr></tbody>
   </table>
 </div>
 
@@ -1069,6 +1211,7 @@ var BASE = '/plugins/guardclaw/stats/api';
 var hourlyChart = null;
 var _detections = [];
 var _detectionFilter = 'all';
+var _routerFilter = 'all';
 
 // ── i18n ──
 var LANG = localStorage.getItem('gc-lang') || 'en';
@@ -1115,11 +1258,31 @@ var T = {
   'sessions.requests':{en:'Requests',zh:'请求数'},
   'sessions.last_active':{en:'Last Active',zh:'最近活跃'},
   'sessions.empty':{en:'No session data yet',zh:'暂无会话数据'},
+  'sd.back':{en:'Back to Sessions',zh:'返回会话列表'},
+  'sd.live':{en:'Live',zh:'实时'},
+  'sd.timeline_empty':{en:'No routing decisions yet',zh:'暂无路由决策记录'},
+  'sd.detecting':{en:'Detecting…',zh:'识别中…'},
+  'sd.generating':{en:'Generating response…',zh:'生成回复中…'},
+  'sd.complete':{en:'Complete',zh:'完成'},
+  'sd.checkpoint.onUserMessage':{en:'User Message',zh:'用户消息'},
+  'sd.checkpoint.onToolCallProposed':{en:'Tool Call',zh:'工具调用'},
+  'sd.checkpoint.onToolCallExecuted':{en:'Tool Result',zh:'工具结果'},
+  'sd.router':{en:'Router',zh:'路由'},
+  'sd.target':{en:'Target',zh:'目标'},
+  'sd.reason':{en:'Reason',zh:'原因'},
+  'sd.highest_level':{en:'Highest Level',zh:'最高等级'},
+  'sd.total_steps':{en:'Steps',zh:'步数'},
+  'sd.total_tokens':{en:'Tokens',zh:'Tokens'},
+  'sd.requests':{en:'Requests',zh:'请求数'},
   'det.time':{en:'Time',zh:'时间'},
   'det.session':{en:'Session',zh:'会话'},
   'det.level':{en:'Level',zh:'等级'},
   'det.checkpoint':{en:'Checkpoint',zh:'检查点'},
   'det.reason':{en:'Reason',zh:'原因'},
+  'det.router':{en:'Router',zh:'路由器'},
+  'det.action':{en:'Action',zh:'动作'},
+  'det.target':{en:'Target',zh:'目标'},
+  'det.all_routers':{en:'All Routers',zh:'全部路由'},
   'det.empty':{en:'No detections yet',zh:'暂无检测记录'},
   'det.empty_for':{en:'No detections for ',zh:'暂无检测记录：'},
   'det.all':{en:'All',zh:'全部'},
@@ -1492,6 +1655,7 @@ function loadDefaultPricing() {
 // ── Tabs ──
 document.querySelectorAll('.tab').forEach(function(t) {
   t.addEventListener('click', function() {
+    if (_activeSessionKey && t.dataset.tab !== 'sessions') hideSessionDetail();
     document.querySelectorAll('.tab').forEach(function(x) { x.classList.remove('active'); });
     document.querySelectorAll('.panel').forEach(function(x) { x.classList.remove('active'); });
     t.classList.add('active');
@@ -1504,6 +1668,41 @@ function fmt(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
   return String(n);
+}
+function fmtCost(c) {
+  if (c <= 0) return '$0.00';
+  if (c < 0.01) return '<$0.01';
+  return '$' + c.toFixed(2);
+}
+
+var _counterAnims = {};
+function animateCounter(id, target, formatter) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var wrap = el.parentElement;
+  var key = id;
+  if (_counterAnims[key]) cancelAnimationFrame(_counterAnims[key]);
+  var startVal = parseFloat(el.dataset.val || '0') || 0;
+  if (startVal === target) return;
+  var duration = 600;
+  var startTime = null;
+  if (wrap) { wrap.classList.remove('flash'); void wrap.offsetWidth; wrap.classList.add('flash'); }
+  function tick(now) {
+    if (!startTime) startTime = now;
+    var progress = Math.min((now - startTime) / duration, 1);
+    var ease = 1 - Math.pow(1 - progress, 3);
+    var current = startVal + (target - startVal) * ease;
+    el.textContent = formatter(Math.round(current));
+    if (progress < 1) {
+      _counterAnims[key] = requestAnimationFrame(tick);
+    } else {
+      el.textContent = formatter(target);
+      el.dataset.val = String(target);
+      delete _counterAnims[key];
+      setTimeout(function() { if (wrap) wrap.classList.remove('flash'); }, 800);
+    }
+  }
+  _counterAnims[key] = requestAnimationFrame(tick);
 }
 
 function timeAgo(ts) {
@@ -1656,13 +1855,14 @@ async function refreshSessions() {
       tbody.innerHTML = '<tr><td colspan="11" class="empty-state">' + t('sessions.empty') + '</td></tr>';
       return;
     }
+    _sessionsList = sessions;
     tbody.innerHTML = sessions.map(function(s) {
       var shortKey = s.sessionKey.length > 20 ? s.sessionKey.slice(0, 20) + '...' : s.sessionKey;
       var bs = s.bySource || {};
       var routerTokens = (bs.router || {}).totalTokens || 0;
       var taskTokens = (bs.task || {}).totalTokens || 0;
       var sessCost = (s.cloud.estimatedCost || 0) + (s.proxy.estimatedCost || 0);
-      return '<tr>' +
+      return '<tr onclick="showSessionDetail(\\'' + escHtml(s.sessionKey).replace(/'/g, "\\\\'") + '\\')">' +
         '<td><span class="session-key" title="' + escHtml(s.sessionKey) + '">' + escHtml(shortKey) + '</span></td>' +
         '<td><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></td>' +
         '<td>' + fmt(s.cloud.totalTokens) + '</td>' +
@@ -1679,6 +1879,314 @@ async function refreshSessions() {
   } catch (e) { /* non-critical */ }
 }
 
+// ── Session Detail Timeline (SSE real-time) ──
+var _activeSessionKey = null;
+var _sessionEventSource = null;
+var _timelineDetections = [];
+var _sessionsList = [];
+
+function checkpointLabel(cp) {
+  return t('sd.checkpoint.' + cp) || cp;
+}
+
+function checkpointIcon(cp) {
+  if (cp === 'onUserMessage') return '\\u{1F4AC}';
+  if (cp === 'onToolCallProposed') return '\\u{1F527}';
+  if (cp === 'onToolCallExecuted') return '\\u{1F4CB}';
+  return '\\u{25CF}';
+}
+
+function buildTimelineItemHtml(d, idx) {
+  var actionClass = '';
+  if (d.action === 'redirect') actionClass = 'action-redirect';
+  else if (d.action === 'block') actionClass = 'action-block';
+  else if (d.action === 'transform') actionClass = 'action-transform';
+  else if (d.action === 'passthrough') actionClass = 'action-passthrough';
+
+  var targetHtml = d.target ? '<span class="timeline-target">' + escHtml(d.target) + '</span>' : '';
+  var routerHtml = d.routerId ? '<span class="timeline-router">' + escHtml(d.routerId) + '</span>' : '';
+
+  var tierBadge = '';
+  var reasonText = d.reason || '';
+  if (d.routerId === 'token-saver' && reasonText.indexOf('tier=') === 0) {
+    var tier = reasonText.split('=')[1];
+    tierBadge = '<span class="tier-badge tier-' + escHtml(tier) + '">\u26A1 ' + escHtml(tier) + '</span>';
+    reasonText = '';
+  }
+  var reasonHtml = reasonText ? '<div class="timeline-reason">' + escHtml(reasonText) + '</div>' : '';
+
+  return '<div class="timeline-item" style="animation-delay:' + (idx * 0.04) + 's">' +
+    '<div class="timeline-dot dot-' + d.level + '"></div>' +
+    '<div class="timeline-card">' +
+      '<div class="timeline-top">' +
+        '<span class="timeline-time">' + fmtTime(d.timestamp) + '</span>' +
+        '<span class="level-tag level-' + d.level + '">' + d.level + '</span>' +
+        '<span class="checkpoint-tag">' + checkpointIcon(d.checkpoint) + ' ' + checkpointLabel(d.checkpoint) + '</span>' +
+        tierBadge +
+      '</div>' +
+      '<div class="timeline-meta">' +
+        routerHtml +
+        (d.action ? '<span class="action-tag ' + actionClass + '">' + escHtml(d.action) + '</span>' : '') +
+        targetHtml +
+      '</div>' +
+      reasonHtml +
+    '</div>' +
+  '</div>';
+}
+
+function renderTimeline(detections) {
+  var el = document.getElementById('session-timeline');
+  if (!detections || !detections.length) {
+    el.innerHTML = '<div class="empty-state">' + t('sd.timeline_empty') + '</div>';
+    return;
+  }
+  var sorted = detections.slice().sort(function(a, b) { return a.timestamp - b.timestamp; });
+  el.innerHTML = sorted.map(function(d, i) { return buildTimelineItemHtml(d, i); }).join('');
+}
+
+function buildPendingItemHtml(d) {
+  return '<div class="timeline-item pending" id="pending-' + d.checkpoint + '">' +
+    '<div class="timeline-dot"></div>' +
+    '<div class="timeline-card">' +
+      '<div class="timeline-top">' +
+        '<span class="timeline-time">' + fmtTime(d.timestamp) + '</span>' +
+        '<span class="checkpoint-tag">' + checkpointIcon(d.checkpoint) + ' ' + checkpointLabel(d.checkpoint) + '</span>' +
+      '</div>' +
+      '<div class="timeline-meta">' +
+        '<span class="detecting-label"><span class="detecting-spinner"></span> ' + t('sd.detecting') + '</span>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function appendTimelineItem(d) {
+  var el = document.getElementById('session-timeline');
+  if (_timelineDetections.length === 1 && !el.querySelector('.pending')) {
+    el.innerHTML = '';
+  }
+  var div = document.createElement('div');
+  div.innerHTML = buildTimelineItemHtml(d, _timelineDetections.length - 1);
+  var node = div.firstChild;
+  el.appendChild(node);
+  node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function appendPendingItem(d) {
+  var el = document.getElementById('session-timeline');
+  var empty = el.querySelector('.empty-state');
+  if (empty) empty.remove();
+  var div = document.createElement('div');
+  div.innerHTML = buildPendingItemHtml(d);
+  var node = div.firstChild;
+  el.appendChild(node);
+  node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function resolvePendingItem(d) {
+  var el = document.getElementById('session-timeline');
+  var pending = document.getElementById('pending-' + d.checkpoint);
+  var div = document.createElement('div');
+  div.innerHTML = buildTimelineItemHtml(d, _timelineDetections.length - 1);
+  var node = div.firstChild;
+  if (pending) {
+    el.replaceChild(node, pending);
+  } else {
+    var empties = el.querySelectorAll('.empty-state');
+    for (var i = 0; i < empties.length; i++) empties[i].remove();
+    el.appendChild(node);
+  }
+  if (d.action !== 'block') {
+    var card = node.querySelector('.timeline-card');
+    if (card) {
+      var ind = document.createElement('div');
+      ind.className = 'generating-indicator';
+      ind.id = 'gen-' + d.checkpoint;
+      ind.innerHTML = '<span class="gen-dots"><span></span><span></span><span></span></span> ' + t('sd.generating');
+      card.appendChild(ind);
+    }
+  }
+  node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function addGeneratingIndicator(checkpoint) {
+  if (document.getElementById('gen-' + checkpoint)) return;
+  var el = document.getElementById('session-timeline');
+  if (!el) return;
+  var items = el.querySelectorAll('.timeline-item');
+  var target = null;
+  for (var i = items.length - 1; i >= 0; i--) {
+    if (!items[i].classList.contains('pending')) { target = items[i]; break; }
+  }
+  if (!target) return;
+  var card = target.querySelector('.timeline-card');
+  if (!card || card.querySelector('.generating-indicator')) return;
+  var ind = document.createElement('div');
+  ind.className = 'generating-indicator';
+  ind.id = 'gen-' + checkpoint;
+  ind.innerHTML = '<span class="gen-dots"><span></span><span></span><span></span></span> ' + t('sd.generating');
+  card.appendChild(ind);
+}
+
+function resolveGeneratingIndicator(checkpoint) {
+  var ind = document.getElementById('gen-' + checkpoint);
+  if (ind) {
+    var badge = document.createElement('div');
+    badge.className = 'complete-badge';
+    badge.innerHTML = '\u2713 ' + t('sd.complete');
+    ind.parentNode.replaceChild(badge, ind);
+    setTimeout(function() { badge.style.opacity = '0'; setTimeout(function() { badge.remove(); }, 300); }, 3000);
+  }
+}
+
+function renderSessionHeader(sessionKey) {
+  var hdr = document.getElementById('sd-header');
+  var s = null;
+  for (var i = 0; i < _sessionsList.length; i++) {
+    if (_sessionsList[i].sessionKey === sessionKey) { s = _sessionsList[i]; break; }
+  }
+  if (!s) {
+    hdr.innerHTML = '<div class="sd-key">' + escHtml(sessionKey) + '</div>';
+    return;
+  }
+  var totalTokens = totalForSession(s);
+  var totalReqs = totalReqsForSession(s);
+  var totalCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
+  hdr.innerHTML =
+    '<div class="sd-key">' + escHtml(sessionKey) + '</div>' +
+    '<div class="sd-stat" id="sd-stat-level"><div class="sd-stat-value"><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div></div>' +
+    '<div class="sd-stat" id="sd-stat-tokens-wrap"><div class="sd-stat-value" id="sd-stat-tokens">' + fmt(totalTokens) + '</div><div class="sd-stat-label">' + t('sd.total_tokens') + '</div></div>' +
+    '<div class="sd-stat" id="sd-stat-cost-wrap"><div class="sd-stat-value" id="sd-stat-cost">' + fmtCost(totalCost) + '</div><div class="sd-stat-label">Cost</div></div>' +
+    '<div class="sd-stat" id="sd-stat-reqs-wrap"><div class="sd-stat-value" id="sd-stat-reqs">' + totalReqs + '</div><div class="sd-stat-label">' + t('sd.requests') + '</div></div>';
+}
+
+function closeSessionStream() {
+  if (_sessionEventSource) {
+    _sessionEventSource.close();
+    _sessionEventSource = null;
+  }
+}
+
+function showSessionDetail(sessionKey) {
+  _activeSessionKey = sessionKey;
+  _timelineDetections = [];
+  document.getElementById('session-list').style.display = 'none';
+  document.getElementById('session-detail').style.display = 'block';
+  renderSessionHeader(sessionKey);
+  document.getElementById('session-timeline').innerHTML = '<div class="empty-state">' + t('sd.timeline_empty') + '</div>';
+
+  closeSessionStream();
+  var es = new EventSource(BASE + '/session-detections/stream?key=' + encodeURIComponent(sessionKey));
+  _sessionEventSource = es;
+
+  es.addEventListener('snapshot', function(e) {
+    if (_activeSessionKey !== sessionKey) return;
+    var data = JSON.parse(e.data);
+    _timelineDetections = data;
+    renderTimeline(data);
+  });
+
+  es.addEventListener('detection_start', function(e) {
+    if (_activeSessionKey !== sessionKey) return;
+    var d = JSON.parse(e.data);
+    appendPendingItem(d);
+  });
+
+  es.addEventListener('detection', function(e) {
+    if (_activeSessionKey !== sessionKey) return;
+    var d = JSON.parse(e.data);
+    _timelineDetections.push(d);
+    resolvePendingItem(d);
+  });
+
+  es.addEventListener('generating', function(e) {
+    if (_activeSessionKey !== sessionKey) return;
+    var d = JSON.parse(e.data);
+    addGeneratingIndicator(d.checkpoint);
+  });
+
+  es.addEventListener('llm_complete', function(e) {
+    if (_activeSessionKey !== sessionKey) return;
+    var d = JSON.parse(e.data);
+    resolveGeneratingIndicator(d.checkpoint);
+  });
+
+  es.addEventListener('token_update', function(e) {
+    if (_activeSessionKey !== sessionKey) return;
+    var s = JSON.parse(e.data);
+    var totalTokens = (s.cloud ? s.cloud.totalTokens : 0) + (s.local ? s.local.totalTokens : 0) + (s.proxy ? s.proxy.totalTokens : 0);
+    var totalReqs = (s.cloud ? s.cloud.requestCount : 0) + (s.local ? s.local.requestCount : 0) + (s.proxy ? s.proxy.requestCount : 0);
+    var totalCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
+    animateCounter('sd-stat-tokens', totalTokens, fmt);
+    animateCounter('sd-stat-reqs', totalReqs, String);
+    animateCounter('sd-stat-cost', totalCost, fmtCost);
+  });
+
+  es.onerror = function(ev) {
+    console.warn('[GuardClaw SSE] connection error, readyState=' + es.readyState, ev);
+  };
+}
+
+function hideSessionDetail() {
+  _activeSessionKey = null;
+  closeSessionStream();
+  document.getElementById('session-detail').style.display = 'none';
+  document.getElementById('session-list').style.display = 'block';
+}
+
+// ── Global activity stream for session list live updates ──
+var _activityStream = null;
+var _activityDebounce = null;
+function ensureSessionRow(sessionKey) {
+  var found = false;
+  for (var i = 0; i < _sessionsList.length; i++) {
+    if (_sessionsList[i].sessionKey === sessionKey) { found = true; break; }
+  }
+  if (found) return;
+  var placeholder = {
+    sessionKey: sessionKey,
+    highestLevel: 'S1',
+    cloud: { totalTokens: 0, requestCount: 0, estimatedCost: 0 },
+    local: { totalTokens: 0, requestCount: 0 },
+    proxy: { totalTokens: 0, requestCount: 0, estimatedCost: 0 },
+    bySource: {},
+    lastActiveAt: Date.now()
+  };
+  _sessionsList.unshift(placeholder);
+  var tbody = document.getElementById('sessions-body');
+  if (tbody) {
+    var shortKey = sessionKey.length > 20 ? sessionKey.slice(0, 20) + '...' : sessionKey;
+    var row = document.createElement('tr');
+    row.setAttribute('onclick', "showSessionDetail('" + escHtml(sessionKey).replace(/'/g, "\\'") + "')");
+    row.innerHTML =
+      '<td><span class="session-key" title="' + escHtml(sessionKey) + '">' + escHtml(shortKey) + '</span></td>' +
+      '<td><span class="level-tag level-S1">S1</span></td>' +
+      '<td colspan="9" style="color:var(--text-tertiary);font-style:italic"><span class="detecting-spinner" style="margin-right:6px"></span>' + t('sd.detecting') + '</td>';
+    var empty = tbody.querySelector('.empty-state');
+    if (empty) empty.parentNode.remove();
+    tbody.insertBefore(row, tbody.firstChild);
+  }
+}
+function startActivityStream() {
+  if (_activityStream) return;
+  _activityStream = new EventSource(BASE + '/activity-stream');
+  _activityStream.addEventListener('activity', function(e) {
+    try {
+      var data = JSON.parse(e.data);
+      if (data.phase === 'start' && data.sessionKey) ensureSessionRow(data.sessionKey);
+    } catch(ex) {}
+    if (_activityDebounce) clearTimeout(_activityDebounce);
+    _activityDebounce = setTimeout(function() {
+      refreshSessions();
+      refreshDetections();
+    }, 300);
+  });
+  _activityStream.onerror = function() { /* auto-reconnect */ };
+}
+function stopActivityStream() {
+  if (_activityStream) { _activityStream.close(); _activityStream = null; }
+}
+startActivityStream();
+
 // ── Detection Log ──
 async function refreshDetections() {
   try {
@@ -1689,28 +2197,64 @@ async function refreshDetections() {
 
 function filterDetections(level, el) {
   _detectionFilter = level;
-  document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  var bar = el ? el.parentNode : null;
+  if (bar) {
+    var btns = bar.querySelectorAll('.filter-btn');
+    var sep = bar.querySelector('span');
+    var beforeSep = true;
+    btns.forEach(function(b) {
+      if (sep && b === sep.nextElementSibling) beforeSep = false;
+      if (beforeSep) b.classList.remove('active');
+    });
+  }
+  if (el) el.classList.add('active');
+  renderDetections();
+}
+
+function filterDetectionRouter(router, el) {
+  _routerFilter = router;
+  var bar = el ? el.parentNode : null;
+  if (bar) {
+    var btns = bar.querySelectorAll('.filter-btn');
+    var sep = bar.querySelector('span');
+    var afterSep = false;
+    btns.forEach(function(b) {
+      if (sep && b === sep.nextElementSibling) afterSep = true;
+      if (afterSep) b.classList.remove('active');
+    });
+  }
   if (el) el.classList.add('active');
   renderDetections();
 }
 
 function renderDetections() {
   var tbody = document.getElementById('detections-body');
-  var filtered = _detectionFilter === 'all'
-    ? _detections
-    : _detections.filter(function(d) { return d.level === _detectionFilter; });
+  var filtered = _detections;
+  if (_detectionFilter !== 'all') {
+    filtered = filtered.filter(function(d) { return d.level === _detectionFilter; });
+  }
+  if (_routerFilter !== 'all') {
+    filtered = filtered.filter(function(d) { return d.routerId === _routerFilter; });
+  }
   if (!filtered || !filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">' +
-      (_detectionFilter !== 'all' ? t('det.empty_for') + _detectionFilter : t('det.empty')) + '</td></tr>';
+    var label = '';
+    if (_detectionFilter !== 'all') label += _detectionFilter;
+    if (_routerFilter !== 'all') label += (label ? ' / ' : '') + _routerFilter;
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">' +
+      (label ? t('det.empty_for') + label : t('det.empty')) + '</td></tr>';
     return;
   }
   tbody.innerHTML = filtered.slice(0, 100).map(function(d) {
     var shortKey = d.sessionKey.length > 16 ? d.sessionKey.slice(0, 16) + '...' : d.sessionKey;
+    var actionClass = d.action === 'redirect' ? 'action-redirect' : (d.action === 'block' ? 'action-block' : '');
     return '<tr>' +
       '<td>' + fmtTime(d.timestamp) + '</td>' +
       '<td><span class="session-key" title="' + escHtml(d.sessionKey) + '">' + escHtml(shortKey) + '</span></td>' +
       '<td><span class="level-tag level-' + d.level + '">' + d.level + '</span></td>' +
       '<td><span class="checkpoint-tag">' + escHtml(d.checkpoint || '--') + '</span></td>' +
+      '<td>' + escHtml(d.routerId || '--') + '</td>' +
+      '<td>' + (d.action ? '<span class="action-tag ' + actionClass + '">' + escHtml(d.action) + '</span>' : '--') + '</td>' +
+      '<td>' + escHtml(d.target || '--') + '</td>' +
       '<td>' + escHtml(d.reason || '--') + '</td>' +
       '</tr>';
   }).join('');
@@ -2118,6 +2662,87 @@ async function savePipelineOrder() {
   }
 }
 
+// ── Token-Saver Config ──
+
+function loadTokenSaverConfig() {
+  var tsReg = _routers['token-saver'] || {};
+  var opts = tsReg.options || {};
+  var tiers = opts.tiers || {};
+  document.getElementById('cfg-ts-enabled').checked = tsReg.enabled === true;
+  var tierNames = ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'];
+  for (var i = 0; i < tierNames.length; i++) {
+    var tn = tierNames[i];
+    var t = tiers[tn] || {};
+    var pEl = document.getElementById('cfg-ts-tier-' + tn + '-provider');
+    var mEl = document.getElementById('cfg-ts-tier-' + tn + '-model');
+    if (pEl) pEl.value = t.provider || '';
+    if (mEl) mEl.value = t.model || '';
+  }
+  var cacheEl = document.getElementById('cfg-ts-cachettl');
+  if (cacheEl) cacheEl.value = opts.cacheTtlMs || '';
+}
+
+async function saveTokenSaverConfig() {
+  try {
+    var enabled = document.getElementById('cfg-ts-enabled').checked;
+    var tiers = {};
+    var tierNames = ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'];
+    for (var i = 0; i < tierNames.length; i++) {
+      var tn = tierNames[i];
+      var provider = document.getElementById('cfg-ts-tier-' + tn + '-provider').value || '';
+      var model = document.getElementById('cfg-ts-tier-' + tn + '-model').value || '';
+      if (provider || model) {
+        tiers[tn] = { provider: provider, model: model };
+      }
+    }
+    var cacheTtl = document.getElementById('cfg-ts-cachettl').value;
+    var options = {};
+    if (Object.keys(tiers).length > 0) options.tiers = tiers;
+    if (cacheTtl) options.cacheTtlMs = parseInt(cacheTtl);
+
+    var routerEntry = { enabled: enabled, type: 'builtin', options: options };
+    _routers['token-saver'] = routerEntry;
+
+    var pipelineUpdate = {};
+    var pipeKeys = ['pipe-um', 'pipe-tcp', 'pipe-tce'];
+    var pipeFields = ['onUserMessage', 'onToolCallProposed', 'onToolCallExecuted'];
+    for (var i = 0; i < pipeKeys.length; i++) {
+      var arr = _tags[pipeKeys[i]] ? _tags[pipeKeys[i]].slice() : [];
+      var idx = arr.indexOf('token-saver');
+      if (enabled && idx === -1) {
+        arr.push('token-saver');
+        _tags[pipeKeys[i]] = arr;
+      }
+      if (!enabled && idx !== -1) {
+        arr.splice(idx, 1);
+        _tags[pipeKeys[i]] = arr;
+      }
+      pipelineUpdate[pipeFields[i]] = arr.length ? arr : undefined;
+    }
+
+    var payload = {
+      privacy: {
+        routers: Object.assign({}, _routers),
+        pipeline: pipelineUpdate,
+      },
+    };
+    var res = await fetch(BASE + '/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var result = await res.json();
+    if (result.ok) {
+      showToast(t('cfg.saved'));
+      updateAvailableRouters();
+    } else {
+      showToast(t('common.save_failed') + (result.error || 'unknown'), true);
+    }
+  } catch (e) {
+    showToast(t('common.save_failed') + e.message, true);
+  }
+}
+
 // ── Custom Routers ──
 
 var BUILTIN_ROUTERS = ['privacy', 'token-saver'];
@@ -2408,7 +3033,7 @@ async function saveCustomRouter(id) {
 refreshAll();
 loadConfig();
 loadPrompts();
-setInterval(refreshAll, 30000);
+setInterval(refreshAll, 10000);
 if (LANG !== 'en') setLang(LANG);
 </script>
 </body>

@@ -73,6 +73,20 @@ export type UsageEvent = {
   };
 };
 
+// ── Token update listeners (used by SSE in the dashboard) ──
+
+export type TokenUpdateEvent = {
+  sessionKey: string;
+  stats: SessionTokenStats;
+};
+type TokenUpdateListener = (event: TokenUpdateEvent) => void;
+const tokenUpdateListeners = new Set<TokenUpdateListener>();
+
+export function onTokenUpdate(fn: TokenUpdateListener): () => void {
+  tokenUpdateListeners.add(fn);
+  return () => { tokenUpdateListeners.delete(fn); };
+}
+
 // ── Helpers ──
 
 const MAX_HOURLY_BUCKETS = 72;
@@ -265,6 +279,10 @@ export class TokenStatsCollector {
       addToBucket(sess[category], event.usage, cost);
       addToBucket(sess.bySource[source], event.usage, cost);
       this.evictOldSessions();
+
+      for (const fn of tokenUpdateListeners) {
+        try { fn({ sessionKey: sk, stats: sess }); } catch { /* ignore */ }
+      }
     }
 
     this.data.lastUpdatedAt = now;

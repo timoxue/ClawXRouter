@@ -16,6 +16,57 @@ const pendingDetections = new Map<string, PendingDetection>();
 
 const activeLocalRouting = new Set<string>();
 
+// ── Real-time detection event listeners (used by SSE in the dashboard) ──
+
+export type DetectionEvent = {
+  sessionKey: string;
+  timestamp: number;
+  level: SensitivityLevel;
+  checkpoint: Checkpoint;
+  phase?: "start" | "complete" | "generating" | "llm_complete";
+  reason?: string;
+  routerId?: string;
+  action?: string;
+  target?: string;
+};
+type DetectionListener = (event: DetectionEvent) => void;
+const detectionListeners = new Set<DetectionListener>();
+
+export function onDetection(fn: DetectionListener): () => void {
+  detectionListeners.add(fn);
+  return () => { detectionListeners.delete(fn); };
+}
+
+export function notifyDetectionStart(sessionKey: string, checkpoint: Checkpoint): void {
+  if (!sessionStates.has(sessionKey)) {
+    sessionStates.set(sessionKey, {
+      sessionKey,
+      isPrivate: false,
+      highestLevel: "S1",
+      currentTurnLevel: "S1",
+      detectionHistory: [],
+    });
+  }
+  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level: "S1", checkpoint, phase: "start" };
+  for (const fn of detectionListeners) {
+    try { fn(evt); } catch { /* ignore */ }
+  }
+}
+
+export function notifyGenerating(sessionKey: string, checkpoint: Checkpoint, level: SensitivityLevel, routerId?: string, action?: string, target?: string): void {
+  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level, checkpoint, phase: "generating", routerId, action, target };
+  for (const fn of detectionListeners) {
+    try { fn(evt); } catch { /* ignore */ }
+  }
+}
+
+export function notifyLlmComplete(sessionKey: string, checkpoint: Checkpoint): void {
+  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level: "S1", checkpoint, phase: "llm_complete" };
+  for (const fn of detectionListeners) {
+    try { fn(evt); } catch { /* ignore */ }
+  }
+}
+
 // ── Per-turn privacy level ──────────────────────────────────────────────
 
 /**
@@ -91,7 +142,10 @@ export function recordDetection(
   sessionKey: string,
   level: SensitivityLevel,
   checkpoint: Checkpoint,
-  reason?: string
+  reason?: string,
+  routerId?: string,
+  action?: string,
+  target?: string,
 ): void {
   let state = sessionStates.get(sessionKey);
 
@@ -106,15 +160,24 @@ export function recordDetection(
     sessionStates.set(sessionKey, state);
   }
 
-  state.detectionHistory.push({
+  const record = {
     timestamp: Date.now(),
     level,
     checkpoint,
     reason,
-  });
+    routerId,
+    action,
+    target,
+  };
+  state.detectionHistory.push(record);
 
   if (state.detectionHistory.length > 50) {
     state.detectionHistory = state.detectionHistory.slice(-50);
+  }
+
+  const evt: DetectionEvent = { sessionKey, ...record, phase: "complete" };
+  for (const fn of detectionListeners) {
+    try { fn(evt); } catch { /* ignore */ }
   }
 }
 
