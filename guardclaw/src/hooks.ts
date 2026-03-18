@@ -9,8 +9,8 @@
  *   before_model_resolve  → pipeline.run("onUserMessage") → RouterDecision
  *   before_prompt_build   → reads stashed decision → inject prompt/markers
  *   before_tool_call      → pipeline + memory_get path redirect (dual-track)
- *   after_tool_call       → pipeline + memory dual-write sync
- *   tool_result_persist   → PII redaction + memory_search result filtering
+ *   tool_result_persist   → PII detection + redaction/desensitization + memory_search
+ *                           result filtering + memory dual-write sync
  *   before_message_write  → sanitize transcript based on stashed decision
  *   after_compaction      → full memory sync (FULL → clean)
  *   before_reset          → full memory sync before session clear
@@ -718,6 +718,19 @@ export function registerHooks(api: OpenClawPluginApi): void {
         }
       }
 
+      // Session already S2-private but rules didn't flag this specific result:
+      // the conversation is known to involve sensitive data, so tool results
+      // (e.g. reading the same file that triggered S2) very likely contain PII.
+      // Proactively desensitize to prevent leaking through the proxy / clean track.
+      if (!detectedSensitive && !wasRedacted && wasPrivateBefore && privacyConfig.localModel?.enabled) {
+        const desenResult = syncDesensitizeWithLocalModel(textContent, privacyConfig, sessionKey);
+        if (desenResult.wasModelUsed && !desenResult.failed && desenResult.desensitized !== textContent) {
+          redacted = desenResult.desensitized;
+          wasRedacted = true;
+          api.logger.info(`[GuardClaw] Proactive tool result desensitized for S2-private session (tool=${ctx.toolName ?? "unknown"})`);
+        }
+      }
+
       if (detectedSensitive || wasRedacted || wasPrivateBefore) {
         const sessionManager = getDefaultSessionManager();
         sessionManager.writeToFull(sessionKey, {
@@ -776,13 +789,16 @@ export function registerHooks(api: OpenClawPluginApi): void {
             }
           }
 
-          // Use the snapshot taken before detection: if the turn wasn't
-          // already private AND rules/regex didn't write above, the LLM
-          // is the first to detect — dual-write here.
-          if (!detectedSensitive && !wasRedacted && !wasPrivateBefore) {
+          // Dual-write: ensure both full and clean tracks reflect the LLM's
+          // finding. When the earlier dual-write block already fired (because
+          // wasPrivateBefore was true), it wrote *unredacted* content to the
+          // clean track — overwrite it now with the desensitized version.
+          if (!detectedSensitive && !wasRedacted) {
             const sessionManager = getDefaultSessionManager();
             const ts = Date.now();
-            sessionManager.writeToFull(sessionKey, { role: "tool", content: textContent, timestamp: ts, sessionKey }).catch(() => {});
+            if (!wasPrivateBefore) {
+              sessionManager.writeToFull(sessionKey, { role: "tool", content: textContent, timestamp: ts, sessionKey }).catch(() => {});
+            }
             sessionManager.writeToClean(sessionKey, { role: "tool", content: llmDesensitized ?? redacted, timestamp: ts, sessionKey }).catch(() => {});
           }
 
@@ -795,8 +811,11 @@ export function registerHooks(api: OpenClawPluginApi): void {
           }
 
           // LLM-elevated S2: modify the persisted transcript message.
-          if (llmDesensitized) {
-            const modified = replaceMessageText(msg, llmDesensitized);
+          // If LLM desensitization succeeded, use it; otherwise fall back
+          // to regex redaction so PII doesn't leak to the cloud unmodified.
+          const s2Content = llmDesensitized ?? redactSensitiveInfo(textContent, getLiveConfig().redaction);
+          if (s2Content !== textContent) {
+            const modified = replaceMessageText(msg, s2Content);
             if (modified) return { message: modified };
           }
         }
