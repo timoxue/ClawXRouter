@@ -28,6 +28,7 @@ import {
 } from "./guard-agent.js";
 import { desensitizeWithLocalModel } from "./local-model.js";
 import { syncDetectByLocalModel } from "./sync-detect.js";
+import { syncDesensitizeWithLocalModel } from "./sync-desensitize.js";
 import { getDefaultMemoryManager, GUARD_SECTION_BEGIN, GUARD_SECTION_END } from "./memory-isolation.js";
 import { loadPrompt } from "./prompt-loader.js";
 import { DualSessionManager, getDefaultSessionManager, type SessionMessage } from "./session-manager.js";
@@ -703,8 +704,19 @@ export function registerHooks(api: OpenClawPluginApi): void {
         }
       }
 
-      const redacted = redactSensitiveInfo(textContent, getLiveConfig().redaction);
-      const wasRedacted = redacted !== textContent;
+      let redacted = redactSensitiveInfo(textContent, getLiveConfig().redaction);
+      let wasRedacted = redacted !== textContent;
+
+      // S2 detected by rules but regex missed PII → fall back to LLM
+      // semantic desensitization (sync Worker, same as syncDetect pattern).
+      if (detectedSensitive && !wasRedacted && effectiveLevel === "S2" && privacyConfig.localModel?.enabled) {
+        const desenResult = syncDesensitizeWithLocalModel(textContent, privacyConfig, sessionKey);
+        if (desenResult.wasModelUsed && !desenResult.failed && desenResult.desensitized !== textContent) {
+          redacted = desenResult.desensitized;
+          wasRedacted = true;
+          api.logger.info(`[GuardClaw] S2 tool result LLM-desensitized (regex missed, tool=${ctx.toolName ?? "unknown"})`);
+        }
+      }
 
       if (detectedSensitive || wasRedacted || wasPrivateBefore) {
         const sessionManager = getDefaultSessionManager();
@@ -753,6 +765,17 @@ export function registerHooks(api: OpenClawPluginApi): void {
             api.logger.info(`[GuardClaw] LLM elevated tool result to ${llmResult.level} (tool=${ctx.toolName ?? "unknown"}, reason=${llmResult.reason ?? "semantic"})`);
           }
 
+          // LLM-elevated S2: desensitize before dual-write / transcript so
+          // the clean track and persisted message contain redacted content.
+          let llmDesensitized: string | undefined;
+          if (llmResult.level === "S2" && !wasRedacted && privacyConfig.localModel?.enabled) {
+            const desenResult = syncDesensitizeWithLocalModel(textContent, privacyConfig, sessionKey);
+            if (desenResult.wasModelUsed && !desenResult.failed && desenResult.desensitized !== textContent) {
+              llmDesensitized = desenResult.desensitized;
+              api.logger.info(`[GuardClaw] LLM-elevated S2 tool result desensitized (tool=${ctx.toolName ?? "unknown"})`);
+            }
+          }
+
           // Use the snapshot taken before detection: if the turn wasn't
           // already private AND rules/regex didn't write above, the LLM
           // is the first to detect — dual-write here.
@@ -760,7 +783,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
             const sessionManager = getDefaultSessionManager();
             const ts = Date.now();
             sessionManager.writeToFull(sessionKey, { role: "tool", content: textContent, timestamp: ts, sessionKey }).catch(() => {});
-            sessionManager.writeToClean(sessionKey, { role: "tool", content: redacted, timestamp: ts, sessionKey }).catch(() => {});
+            sessionManager.writeToClean(sessionKey, { role: "tool", content: llmDesensitized ?? redacted, timestamp: ts, sessionKey }).catch(() => {});
           }
 
           // S3 at persist time: redact before the result enters the model
@@ -768,6 +791,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
           if (llmResult.level === "S3") {
             const s3Redacted = wasRedacted ? redacted : redactSensitiveInfo(textContent, getLiveConfig().redaction);
             const modified = replaceMessageText(msg, s3Redacted);
+            if (modified) return { message: modified };
+          }
+
+          // LLM-elevated S2: modify the persisted transcript message.
+          if (llmDesensitized) {
+            const modified = replaceMessageText(msg, llmDesensitized);
             if (modified) return { message: modified };
           }
         }
