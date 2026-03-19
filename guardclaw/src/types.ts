@@ -221,7 +221,16 @@ export type SessionPrivacyState = {
     routerId?: string;
     action?: string;
     target?: string;
+    loopId?: string;
   }>;
+};
+
+export type LoopMeta = {
+  loopId: string;
+  sessionKey: string;
+  userMessagePreview: string;
+  startedAt: number;
+  highestLevel: SensitivityLevel;
 };
 
 export function levelToNumeric(level: SensitivityLevel): SensitivityLevelNumeric {

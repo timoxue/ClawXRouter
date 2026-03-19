@@ -6,7 +6,7 @@
  * message's sensitivity level, not permanent session state.
  */
 
-import type { Checkpoint, SensitivityLevel, SessionPrivacyState } from "./types.js";
+import type { Checkpoint, LoopMeta, SensitivityLevel, SessionPrivacyState } from "./types.js";
 
 // ── In-memory state stores ──────────────────────────────────────────────
 
@@ -16,6 +16,46 @@ const pendingDetections = new Map<string, PendingDetection>();
 
 const activeLocalRouting = new Set<string>();
 
+// ── Per-loop tracking ───────────────────────────────────────────────────
+
+const currentLoopIds = new Map<string, string>();
+const loopMetas = new Map<string, LoopMeta>();
+let loopCounter = 0;
+
+export function startNewLoop(sessionKey: string, userMessage: string): string {
+  const loopId = `${Date.now()}-${++loopCounter}`;
+  currentLoopIds.set(sessionKey, loopId);
+  const preview = userMessage.length > 60 ? userMessage.slice(0, 60) + "…" : userMessage;
+  loopMetas.set(loopId, {
+    loopId,
+    sessionKey,
+    userMessagePreview: preview,
+    startedAt: Date.now(),
+    highestLevel: "S1",
+  });
+  return loopId;
+}
+
+export function getCurrentLoopId(sessionKey: string): string | undefined {
+  return currentLoopIds.get(sessionKey);
+}
+
+export function getLoopMeta(loopId: string): LoopMeta | undefined {
+  return loopMetas.get(loopId);
+}
+
+export function getLoopMetas(): LoopMeta[] {
+  return Array.from(loopMetas.values()).sort((a, b) => b.startedAt - a.startedAt);
+}
+
+function updateLoopHighestLevel(loopId: string | undefined, level: SensitivityLevel): void {
+  if (!loopId) return;
+  const meta = loopMetas.get(loopId);
+  if (meta) {
+    meta.highestLevel = getHigherLevel(meta.highestLevel, level);
+  }
+}
+
 // ── Real-time detection event listeners (used by SSE in the dashboard) ──
 
 export type DetectionEvent = {
@@ -23,11 +63,16 @@ export type DetectionEvent = {
   timestamp: number;
   level: SensitivityLevel;
   checkpoint: Checkpoint;
-  phase?: "start" | "complete" | "generating" | "llm_complete";
+  phase?: "start" | "complete" | "generating" | "llm_complete" | "input_estimate";
   reason?: string;
   routerId?: string;
   action?: string;
   target?: string;
+  estimatedInputTokens?: number;
+  estimatedCost?: number;
+  model?: string;
+  provider?: string;
+  loopId?: string;
 };
 type DetectionListener = (event: DetectionEvent) => void;
 const detectionListeners = new Set<DetectionListener>();
@@ -37,7 +82,7 @@ export function onDetection(fn: DetectionListener): () => void {
   return () => { detectionListeners.delete(fn); };
 }
 
-export function notifyDetectionStart(sessionKey: string, checkpoint: Checkpoint): void {
+export function notifyDetectionStart(sessionKey: string, checkpoint: Checkpoint, loopId?: string): void {
   if (!sessionStates.has(sessionKey)) {
     sessionStates.set(sessionKey, {
       sessionKey,
@@ -47,21 +92,52 @@ export function notifyDetectionStart(sessionKey: string, checkpoint: Checkpoint)
       detectionHistory: [],
     });
   }
-  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level: "S1", checkpoint, phase: "start" };
+  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level: "S1", checkpoint, phase: "start", loopId };
   for (const fn of detectionListeners) {
     try { fn(evt); } catch { /* ignore */ }
   }
 }
 
 export function notifyGenerating(sessionKey: string, checkpoint: Checkpoint, level: SensitivityLevel, routerId?: string, action?: string, target?: string): void {
-  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level, checkpoint, phase: "generating", routerId, action, target };
+  const loopId = currentLoopIds.get(sessionKey);
+  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level, checkpoint, phase: "generating", routerId, action, target, loopId };
   for (const fn of detectionListeners) {
     try { fn(evt); } catch { /* ignore */ }
   }
 }
 
 export function notifyLlmComplete(sessionKey: string, checkpoint: Checkpoint): void {
-  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level: "S1", checkpoint, phase: "llm_complete" };
+  lastInputEstimates.delete(sessionKey);
+  const loopId = currentLoopIds.get(sessionKey);
+  const evt: DetectionEvent = { sessionKey, timestamp: Date.now(), level: "S1", checkpoint, phase: "llm_complete", loopId };
+  for (const fn of detectionListeners) {
+    try { fn(evt); } catch { /* ignore */ }
+  }
+}
+
+const lastInputEstimates = new Map<string, DetectionEvent>();
+
+export function getLastInputEstimate(sessionKey: string): DetectionEvent | undefined {
+  return lastInputEstimates.get(sessionKey);
+}
+
+export function notifyInputEstimate(sessionKey: string, data: {
+  estimatedInputTokens: number;
+  estimatedCost: number;
+  model: string;
+  provider: string;
+}): void {
+  const loopId = currentLoopIds.get(sessionKey);
+  const evt: DetectionEvent = {
+    sessionKey,
+    timestamp: Date.now(),
+    level: getSessionRouteLevel(sessionKey),
+    checkpoint: "onUserMessage",
+    phase: "input_estimate",
+    loopId,
+    ...data,
+  };
+  lastInputEstimates.set(sessionKey, evt);
   for (const fn of detectionListeners) {
     try { fn(evt); } catch { /* ignore */ }
   }
@@ -133,6 +209,18 @@ export function getSessionHighestLevel(sessionKey: string): SensitivityLevel {
   return sessionStates.get(sessionKey)?.highestLevel ?? "S1";
 }
 
+// ── Route-level snapshot (set at before_model_resolve, used for cost classification) ──
+
+const sessionRouteLevels = new Map<string, SensitivityLevel>();
+
+export function setSessionRouteLevel(sessionKey: string, level: SensitivityLevel): void {
+  sessionRouteLevels.set(sessionKey, level);
+}
+
+export function getSessionRouteLevel(sessionKey: string): SensitivityLevel {
+  return sessionRouteLevels.get(sessionKey) ?? "S1";
+}
+
 // ── Detection history ───────────────────────────────────────────────────
 
 /**
@@ -160,6 +248,8 @@ export function recordDetection(
     sessionStates.set(sessionKey, state);
   }
 
+  const loopId = currentLoopIds.get(sessionKey);
+
   const record = {
     timestamp: Date.now(),
     level,
@@ -168,12 +258,15 @@ export function recordDetection(
     routerId,
     action,
     target,
+    loopId,
   };
   state.detectionHistory.push(record);
 
-  if (state.detectionHistory.length > 50) {
-    state.detectionHistory = state.detectionHistory.slice(-50);
+  if (state.detectionHistory.length > 200) {
+    state.detectionHistory = state.detectionHistory.slice(-200);
   }
+
+  updateLoopHighestLevel(loopId, level);
 
   const evt: DetectionEvent = { sessionKey, ...record, phase: "complete" };
   for (const fn of detectionListeners) {
@@ -191,6 +284,10 @@ export function clearSessionState(sessionKey: string): void {
   sessionStates.delete(sessionKey);
   activeLocalRouting.delete(sessionKey);
   pendingDetections.delete(sessionKey);
+  lastInputEstimates.delete(sessionKey);
+  const loopId = currentLoopIds.get(sessionKey);
+  if (loopId) loopMetas.delete(loopId);
+  currentLoopIds.delete(sessionKey);
 }
 
 /**
@@ -198,6 +295,10 @@ export function clearSessionState(sessionKey: string): void {
  */
 export function getAllSessionStates(): Map<string, SessionPrivacyState> {
   return new Map(sessionStates);
+}
+
+export function getSessionState(sessionKey: string): SessionPrivacyState | undefined {
+  return sessionStates.get(sessionKey);
 }
 
 // ── Pending detection stash ─────────────────────────────────────────────

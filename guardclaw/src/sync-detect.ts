@@ -9,7 +9,6 @@
  * Timeout gracefully falls back to S1 (safe).
  */
 
-import { createRequire } from "node:module";
 import { createSyncFn } from "synckit";
 import { fileURLToPath } from "node:url";
 import type { DetectionContext, DetectionResult, PrivacyConfig } from "./types.js";
@@ -23,9 +22,7 @@ const FALLBACK_S1: DetectionResult = {
 };
 
 const workerPath = fileURLToPath(new URL("./llm-detect-worker.ts", import.meta.url));
-
-const _require = createRequire(import.meta.url);
-const tsxPath = _require.resolve("tsx");
+const loaderPath = fileURLToPath(new URL("./worker-loader.mjs", import.meta.url));
 
 let _syncDetect: ((context: DetectionContext, config: PrivacyConfig) => DetectionResult) | null = null;
 
@@ -33,7 +30,7 @@ function getSyncDetect() {
   if (!_syncDetect) {
     _syncDetect = createSyncFn<(context: DetectionContext, config: PrivacyConfig) => DetectionResult>(
       workerPath,
-      { timeout: 20_000, tsRunner: "tsx", execArgv: ["--import", tsxPath] },
+      { timeout: 20_000, execArgv: ["--import", loaderPath] },
     );
   }
   return _syncDetect;

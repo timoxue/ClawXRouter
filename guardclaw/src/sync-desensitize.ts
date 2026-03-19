@@ -9,7 +9,6 @@
  * to decide whether to pass content through or apply regex-only redaction.
  */
 
-import { createRequire } from "node:module";
 import { createSyncFn } from "synckit";
 import { fileURLToPath } from "node:url";
 import type { PrivacyConfig } from "./types.js";
@@ -21,9 +20,7 @@ export type SyncDesensitizeResult = {
 };
 
 const workerPath = fileURLToPath(new URL("./llm-desensitize-worker.ts", import.meta.url));
-
-const _require = createRequire(import.meta.url);
-const tsxPath = _require.resolve("tsx");
+const loaderPath = fileURLToPath(new URL("./worker-loader.mjs", import.meta.url));
 
 let _syncDesensitize: ((content: string, config: PrivacyConfig, sessionKey?: string) => SyncDesensitizeResult) | null = null;
 
@@ -31,7 +28,7 @@ function getSyncDesensitize() {
   if (!_syncDesensitize) {
     _syncDesensitize = createSyncFn<(content: string, config: PrivacyConfig, sessionKey?: string) => SyncDesensitizeResult>(
       workerPath,
-      { timeout: 30_000, tsRunner: "tsx", execArgv: ["--import", tsxPath] },
+      { timeout: 30_000, execArgv: ["--import", loaderPath] },
     );
   }
   return _syncDesensitize;

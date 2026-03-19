@@ -39,6 +39,7 @@ import {
   notifyDetectionStart,
   notifyGenerating,
   notifyLlmComplete,
+  notifyInputEstimate,
   isSessionMarkedPrivate,
   stashDetection,
   getPendingDetection,
@@ -48,6 +49,10 @@ import {
   clearSessionState,
   isActiveLocalRouting,
   resetTurnLevel,
+  setSessionRouteLevel,
+  getSessionRouteLevel,
+  startNewLoop,
+  getCurrentLoopId,
 } from "./session-state.js";
 import { detectByRules } from "./rules.js";
 import { isProtectedMemoryPath, redactSensitiveInfo, extractPathsFromParams, resolveDefaultBaseUrl } from "./utils.js";
@@ -57,7 +62,7 @@ import {
   stashOriginalProvider,
 } from "./privacy-proxy.js";
 import { getGlobalPipeline } from "./router-pipeline.js";
-import { getGlobalCollector } from "./token-stats.js";
+import { getGlobalCollector, lookupPricing } from "./token-stats.js";
 import { getLiveConfig } from "./live-config.js";
 
 function getPipelineConfig(): Record<string, unknown> {
@@ -138,6 +143,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
       clearActiveLocalRouting(sessionKey);
       resetTurnLevel(sessionKey);
       consumeDetection(sessionKey);
+      const loopId = startNewLoop(sessionKey, String(prompt));
+      notifyDetectionStart(sessionKey, "onUserMessage", loopId);
 
       const privacyConfig = getLiveConfig();
       if (!privacyConfig.enabled) return;
@@ -191,7 +198,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return;
       }
 
-      notifyDetectionStart(sessionKey, "onUserMessage");
       const decision = await pipeline.run(
         "onUserMessage",
         {
@@ -205,6 +211,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason,
         decision.routerId, decision.action, decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined);
+      setSessionRouteLevel(sessionKey, decision.level);
       api.logger.info(`[GuardClaw] ROUTE: session=${sessionKey} level=${decision.level} action=${decision.action} target=${JSON.stringify(decision.target)} reason=${decision.reason}`);
 
       if (decision.action !== "block") {
@@ -494,6 +501,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       const typedParams = params as Record<string, unknown>;
       const privacyConfig = getLiveConfig();
+      if (!privacyConfig.enabled) return;
       const baseDir = privacyConfig.session?.baseDir ?? "~/.openclaw";
 
       // File-access guard for cloud models only — local models (Guard Agent
@@ -975,6 +983,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   api.on("llm_output", async (event, ctx) => {
     try {
       const sessionKey = ctx.sessionKey ?? event.sessionId ?? "";
+      api.logger.info(`[GuardClaw] llm_output fired: session=${sessionKey} model=${event.model} usage=${JSON.stringify(event.usage)}`);
       const collector = getGlobalCollector();
       if (!collector) return;
       collector.record({
@@ -983,12 +992,44 @@ export function registerHooks(api: OpenClawPluginApi): void {
         model: event.model ?? "unknown",
         source: "task",
         usage: event.usage,
+        loopId: getCurrentLoopId(sessionKey),
       });
       if (sessionKey) {
         notifyLlmComplete(sessionKey, "onUserMessage");
       }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in llm_output hook: ${String(err)}`);
+    }
+  });
+
+  // =========================================================================
+  // Hook 9b: llm_input — Estimate input cost before cloud LLM generates
+  // =========================================================================
+  api.on("llm_input", async (event, ctx) => {
+    try {
+      const sessionKey = ctx.sessionKey ?? event.sessionId ?? "";
+      const routeLevel = getSessionRouteLevel(sessionKey);
+      if (routeLevel === "S3") return;
+
+      const estimateTokens = (s: string | undefined) => Math.ceil((s?.length ?? 0) / 4);
+      let inputTokens = estimateTokens(event.systemPrompt) + estimateTokens(event.prompt);
+      if (Array.isArray(event.historyMessages)) {
+        for (const m of event.historyMessages) {
+          inputTokens += estimateTokens(typeof m === "string" ? m : JSON.stringify(m));
+        }
+      }
+
+      const pricing = lookupPricing(event.model);
+      const estimatedCost = (inputTokens * pricing.inputPer1M) / 1_000_000;
+
+      notifyInputEstimate(sessionKey, {
+        estimatedInputTokens: inputTokens,
+        estimatedCost,
+        model: event.model,
+        provider: event.provider,
+      });
+    } catch (err) {
+      api.logger.error(`[GuardClaw] Error in llm_input hook: ${String(err)}`);
     }
   });
 

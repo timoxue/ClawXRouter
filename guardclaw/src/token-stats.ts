@@ -9,7 +9,7 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { getSessionHighestLevel } from "./session-state.js";
+import { getSessionHighestLevel, getSessionRouteLevel, getLoopMeta } from "./session-state.js";
 import { getLiveConfig } from "./live-config.js";
 
 // ── Types ──
@@ -47,6 +47,8 @@ export type SessionTokenStats = {
   bySource: SourceBuckets;
   firstSeenAt: number;
   lastActiveAt: number;
+  loopId?: string;
+  userMessagePreview?: string;
 };
 
 export type TokenStatsData = {
@@ -64,6 +66,7 @@ export type UsageEvent = {
   model: string;
   /** "router" for pipeline overhead (judge, detection, PII extraction), "task" for actual request. */
   source?: TokenSource;
+  loopId?: string;
   usage?: {
     input?: number;
     output?: number;
@@ -77,6 +80,7 @@ export type UsageEvent = {
 
 export type TokenUpdateEvent = {
   sessionKey: string;
+  loopId?: string;
   stats: SessionTokenStats;
 };
 type TokenUpdateListener = (event: TokenUpdateEvent) => void;
@@ -128,7 +132,7 @@ function addToBucket(bucket: TokenBucket, usage: UsageEvent["usage"], cost = 0):
 }
 
 /** Look up pricing for a model: exact match, then substring match, then default. */
-function lookupPricing(model: string): { inputPer1M: number; outputPer1M: number } {
+export function lookupPricing(model: string): { inputPer1M: number; outputPer1M: number } {
   const pricing = getLiveConfig().modelPricing;
   if (!pricing) return { inputPer1M: 3, outputPer1M: 15 };
 
@@ -154,18 +158,17 @@ function calculateCost(model: string, usage: UsageEvent["usage"]): number {
 }
 
 /**
- * Classify a request based on the session's Sx sensitivity level.
- *   S1 → cloud
- *   S2 → proxy or local (depends on s2Policy)
- *   S3 → local
+ * Classify a usage event for cost/bucket assignment.
+ * Uses `routeLevel` (set at before_model_resolve time) so that
+ * post-routing S3 escalations (e.g. from tool_result_persist) don't
+ * retroactively zero-out cost for cloud calls already made under S1.
  */
-function classifyBySession(sessionKey: string): RouteCategory {
-  const level = getSessionHighestLevel(sessionKey);
+function classifyEvent(event: UsageEvent): RouteCategory {
+  if (event.source === "router") return "local";
+  if (event.provider === "edge" || event.provider === "local") return "local";
+  const level = getSessionRouteLevel(event.sessionKey);
   if (level === "S3") return "local";
-  if (level === "S2") {
-    const policy = getLiveConfig().s2Policy;
-    return policy === "local" ? "local" : "proxy";
-  }
+  if (level === "S2" && getLiveConfig().s2Policy !== "local") return "proxy";
   return "cloud";
 }
 
@@ -232,7 +235,7 @@ export class TokenStatsCollector {
 
   /** Record a usage event from llm_output hook or router overhead. */
   record(event: UsageEvent): void {
-    const category = classifyBySession(event.sessionKey);
+    const category = classifyEvent(event);
     const source: TokenSource = event.source ?? "task";
     const now = Date.now();
 
@@ -256,11 +259,14 @@ export class TokenStatsCollector {
     addToBucket(hourly[category], event.usage, cost);
     addToBucket(hourly.bySource[source], event.usage, cost);
 
-    // Per-session tracking
+    // Per-loop tracking (keyed by sessionKey:loopId)
     const sk = event.sessionKey;
-    if (sk) {
-      let sess = this.data.sessions[sk];
+    const lid = event.loopId;
+    if (sk && lid) {
+      const compoundKey = `${sk}::${lid}`;
+      let sess = this.data.sessions[compoundKey];
       if (!sess) {
+        const meta = getLoopMeta(lid);
         sess = {
           sessionKey: sk,
           highestLevel: getSessionHighestLevel(sk),
@@ -270,18 +276,21 @@ export class TokenStatsCollector {
           bySource: emptySourceBuckets(),
           firstSeenAt: now,
           lastActiveAt: now,
+          loopId: lid,
+          userMessagePreview: meta?.userMessagePreview ?? "",
         };
-        this.data.sessions[sk] = sess;
+        this.data.sessions[compoundKey] = sess;
       }
       if (!sess.bySource) sess.bySource = emptySourceBuckets();
-      sess.highestLevel = getSessionHighestLevel(sk);
+      const loopMeta = getLoopMeta(lid);
+      sess.highestLevel = loopMeta?.highestLevel ?? getSessionHighestLevel(sk);
       sess.lastActiveAt = now;
       addToBucket(sess[category], event.usage, cost);
       addToBucket(sess.bySource[source], event.usage, cost);
       this.evictOldSessions();
 
       for (const fn of tokenUpdateListeners) {
-        try { fn({ sessionKey: sk, stats: sess }); } catch { /* ignore */ }
+        try { fn({ sessionKey: sk, loopId: lid, stats: sess }); } catch { /* ignore */ }
       }
     }
 

@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getGlobalCollector, onTokenUpdate } from "./token-stats.js";
 import { getLiveConfig, updateLiveConfig } from "./live-config.js";
-import { getAllSessionStates, getSessionState, onDetection } from "./session-state.js";
+import { getAllSessionStates, getSessionState, getLastInputEstimate, onDetection } from "./session-state.js";
 import { loadPrompt, readPromptFromDisk, writePrompt } from "./prompt-loader.js";
 import { DEFAULT_JUDGE_PROMPT } from "./routers/token-saver.js";
 import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "./local-model.js";
@@ -60,10 +60,21 @@ export function initDashboard(d: DashboardDeps): void {
   deps = d;
 }
 
+const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => chunks.push(c));
+    let totalBytes = 0;
+    req.on("data", (c: Buffer) => {
+      totalBytes += c.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error("Request body too large"));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
     req.on("error", reject);
   });
@@ -167,7 +178,8 @@ export async function statsHttpHandler(
   if (req.method === "GET" && sub === "/api/session-detections/stream") {
     const params = new URL(url, "http://localhost").searchParams;
     const key = params.get("key") ?? "";
-    console.log(`[GuardClaw] SSE session-detections/stream connected for key=${key}`);
+    const filterLoopId = params.get("loopId") ?? "";
+    console.log(`[GuardClaw] SSE session-detections/stream connected for key=${key} loopId=${filterLoopId || "(all)"}`);
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -176,18 +188,44 @@ export async function statsHttpHandler(
     });
     (res as any).flushHeaders?.();
     const state = getSessionState(key);
-    res.write(`event: snapshot\ndata: ${JSON.stringify(state?.detectionHistory ?? [])}\n\n`);
+    const history = state?.detectionHistory ?? [];
+    const filtered = filterLoopId ? history.filter((d: any) => d.loopId === filterLoopId) : history;
+    res.write(`event: snapshot\ndata: ${JSON.stringify(filtered)}\n\n`);
+    const collector = getGlobalCollector();
+    if (collector && filterLoopId) {
+      const compoundKey = `${key}::${filterLoopId}`;
+      const allSessions = collector.getSessionStats();
+      const sessStats = allSessions.find((s: any) => s.loopId === filterLoopId && s.sessionKey === key);
+      if (sessStats) {
+        try { res.write(`event: token_update\ndata: ${JSON.stringify(sessStats)}\n\n`); } catch { /* */ }
+      }
+    }
+    const lastEstimate = getLastInputEstimate(key);
+    if (lastEstimate && (!filterLoopId || lastEstimate.loopId === filterLoopId)) {
+      try { res.write(`event: input_estimate\ndata: ${JSON.stringify(lastEstimate)}\n\n`); } catch { /* */ }
+    }
     const unsubDetection = onDetection((evt) => {
-      if (evt.sessionKey === key) {
-        const phaseMap: Record<string, string> = { start: "detection_start", complete: "detection", generating: "generating", llm_complete: "llm_complete" };
-        const eventName = phaseMap[evt.phase ?? "complete"] ?? "detection";
-        try { res.write(`event: ${eventName}\ndata: ${JSON.stringify(evt)}\n\n`); } catch { /* connection may be closed */ }
+      if (evt.sessionKey !== key) return;
+      if (filterLoopId && evt.loopId !== filterLoopId) return;
+      if (evt.phase === "input_estimate") {
+        try { res.write(`event: input_estimate\ndata: ${JSON.stringify(evt)}\n\n`); } catch { /* */ }
+        return;
+      }
+      const phaseMap: Record<string, string> = { start: "detection_start", complete: "detection", generating: "generating", llm_complete: "llm_complete" };
+      const eventName = phaseMap[evt.phase ?? "complete"] ?? "detection";
+      try { res.write(`event: ${eventName}\ndata: ${JSON.stringify(evt)}\n\n`); } catch { /* connection may be closed */ }
+      if (evt.phase === "complete" && filterLoopId) {
+        const c = getGlobalCollector();
+        if (c) {
+          const ss = c.getSessionStats().find((s: any) => s.loopId === filterLoopId && s.sessionKey === key);
+          if (ss) { try { res.write(`event: token_update\ndata: ${JSON.stringify(ss)}\n\n`); } catch { /* */ } }
+        }
       }
     });
     const unsubToken = onTokenUpdate((evt) => {
-      if (evt.sessionKey === key) {
-        try { res.write(`event: token_update\ndata: ${JSON.stringify(evt.stats)}\n\n`); } catch { /* connection may be closed */ }
-      }
+      if (evt.sessionKey !== key) return;
+      if (filterLoopId && evt.loopId !== filterLoopId) return;
+      try { res.write(`event: token_update\ndata: ${JSON.stringify(evt.stats)}\n\n`); } catch { /* connection may be closed */ }
     });
     req.on("close", () => { unsubDetection(); unsubToken(); });
     return true;
@@ -204,9 +242,12 @@ export async function statsHttpHandler(
     (res as any).flushHeaders?.();
     res.write(`event: ping\ndata: {}\n\n`);
     const unsub = onDetection((evt) => {
-      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, phase: evt.phase ?? "complete" })}\n\n`); } catch { /* ignore */ }
+      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, loopId: evt.loopId, phase: evt.phase ?? "complete" })}\n\n`); } catch { /* ignore */ }
     });
-    req.on("close", unsub);
+    const unsubTok = onTokenUpdate((evt) => {
+      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, loopId: evt.loopId, phase: "token_update" })}\n\n`); } catch { /* ignore */ }
+    });
+    req.on("close", () => { unsub(); unsubTok(); });
     return true;
   }
 
@@ -242,6 +283,20 @@ export async function statsHttpHandler(
 
         const existingPrivacy = ((deps.pluginConfig as Record<string, unknown>).privacy ?? {}) as Record<string, unknown>;
         const mergedPrivacy = { ...existingPrivacy, ...body.privacy } as Record<string, unknown>;
+        // Deep-merge routers so saving one router doesn't wipe others
+        if (body.privacy.routers && existingPrivacy.routers) {
+          mergedPrivacy.routers = {
+            ...(existingPrivacy.routers as Record<string, unknown>),
+            ...(body.privacy.routers as Record<string, unknown>),
+          };
+        }
+        // Deep-merge pipeline so saving one section doesn't wipe others
+        if (body.privacy.pipeline && existingPrivacy.pipeline) {
+          mergedPrivacy.pipeline = {
+            ...(existingPrivacy.pipeline as Record<string, unknown>),
+            ...(body.privacy.pipeline as Record<string, unknown>),
+          };
+        }
 
         // Persist to guardclaw.json (does NOT touch openclaw.json → no restart)
         saveGuardClawConfig(mergedPrivacy);
@@ -257,8 +312,6 @@ export async function statsHttpHandler(
               );
             }
           }
-          // Re-configure pipeline with updated router configs and order
-          const mergedPrivacy = { ...existingPrivacy, ...body.privacy } as Record<string, unknown>;
           deps.pipeline.configure({
             routers: mergedPrivacy.routers as Record<string, Parameters<typeof deps.pipeline.register>[1]>,
             pipeline: mergedPrivacy.pipeline as Record<string, string[]>,
@@ -479,7 +532,8 @@ function dashboardHtml(): string {
   .toast.error{background:#dc2626}
 
   /* Session detail & timeline */
-  .session-detail-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  /* session detail handled by JS max-height on timeline */
+  .session-detail-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-shrink:0}
   .back-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);background:var(--bg-card);color:var(--text-primary);cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
   .back-btn:hover{border-color:#d1d5db;background:var(--bg-surface)}
   .back-arrow{font-size:16px;line-height:1}
@@ -487,7 +541,7 @@ function dashboardHtml(): string {
   .sse-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;animation:sse-pulse 2s ease-in-out infinite}
   @keyframes sse-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4)}50%{opacity:.7;box-shadow:0 0 0 4px rgba(34,197,94,0)}}
 
-  .session-detail-header{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:16px 20px;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);margin-bottom:20px;box-shadow:var(--shadow-sm)}
+  .session-detail-header{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:16px 20px;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);margin-bottom:20px;box-shadow:var(--shadow-sm);flex-shrink:0}
   .sd-key{font-family:var(--font-mono);font-size:13px;color:var(--text-primary);font-weight:600;word-break:break-all;flex:1;min-width:200px}
   .sd-stat{display:flex;flex-direction:column;align-items:center;padding:0 14px;border-left:1px solid var(--border-subtle)}
   .sd-stat:first-of-type{border-left:none}
@@ -497,7 +551,7 @@ function dashboardHtml(): string {
   .sd-stat.flash{animation:stat-flash .8s ease}
   @keyframes stat-flash{0%{background:rgba(34,197,94,.12)}100%{background:transparent}}
 
-  .timeline{position:relative;padding:8px 0 8px 28px;margin-left:12px}
+  .timeline{position:relative;padding:8px 0 8px 28px;margin-left:12px;flex:1;overflow-y:auto;min-height:0}
   .timeline::before{content:'';position:absolute;left:11px;top:0;bottom:0;width:2px;background:var(--border-subtle);border-radius:1px}
   .timeline-item{position:relative;padding-bottom:24px;opacity:0;animation:tl-fade-in .35s ease forwards}
   .timeline-item:last-child{padding-bottom:0}
@@ -717,7 +771,7 @@ function dashboardHtml(): string {
 <div id="sessions-panel" class="panel">
   <div id="session-list">
     <table class="data-table">
-      <thead><tr><th data-i18n="sessions.session">Session</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.cost">Cost</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.last_active">Last Active</th></tr></thead>
+      <thead><tr><th data-i18n="sessions.message">Message</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.cost">Cost</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.time">Time</th></tr></thead>
       <tbody id="sessions-body"><tr><td colspan="11" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
     </table>
   </div>
@@ -1458,7 +1512,7 @@ function setLang(lang){
   });
   document.getElementById('lang-toggle').textContent=lang==='en'?'中文':'EN';
   document.querySelectorAll('.add-row .btn-outline').forEach(function(el){el.textContent=t('common.add');});
-  hourlyChart=null;
+  if (hourlyChart) { hourlyChart.destroy(); hourlyChart=null; }
   refreshAll();
   renderCustomRouterCards();
   updateAvailableRouters();
@@ -1593,7 +1647,8 @@ var DEFAULT_PRICING = {
   'gpt-4o-mini': { inputPer1M: 0.15, outputPer1M: 0.6 },
   'o4-mini': { inputPer1M: 1.1, outputPer1M: 4.4 },
   'gemini-2.0-flash': { inputPer1M: 0.1, outputPer1M: 0.4 },
-  'deepseek-chat': { inputPer1M: 0.27, outputPer1M: 1.1 }
+  'deepseek-chat': { inputPer1M: 0.27, outputPer1M: 1.1 },
+  'gpt-5.4': { inputPer1M: 7.5, outputPer1M: 60 }
 };
 
 function renderPricing() {
@@ -1676,7 +1731,7 @@ function fmtCost(c) {
 }
 
 var _counterAnims = {};
-function animateCounter(id, target, formatter) {
+function animateCounter(id, target, formatter, useFloat) {
   var el = document.getElementById(id);
   if (!el) return;
   var wrap = el.parentElement;
@@ -1692,7 +1747,7 @@ function animateCounter(id, target, formatter) {
     var progress = Math.min((now - startTime) / duration, 1);
     var ease = 1 - Math.pow(1 - progress, 3);
     var current = startVal + (target - startVal) * ease;
-    el.textContent = formatter(Math.round(current));
+    el.textContent = formatter(useFloat ? current : Math.round(current));
     if (progress < 1) {
       _counterAnims[key] = requestAnimationFrame(tick);
     } else {
@@ -1721,11 +1776,6 @@ function fmtTime(ts) {
   return hh + ':' + mm + ':' + ss;
 }
 
-function fmtCost(n) {
-  if (n == null || n === 0) return '$0.00';
-  if (n < 0.01) return '<$0.01';
-  return '$' + n.toFixed(2);
-}
 
 function fillRow(cat, b) {
   var cost = b.estimatedCost || 0;
@@ -1841,10 +1891,10 @@ function updateChart(hourly) {
 
 // ── Sessions ──
 function totalForSession(s) {
-  return s.cloud.totalTokens + s.local.totalTokens + s.proxy.totalTokens;
+  return s.cloud.totalTokens + s.proxy.totalTokens;
 }
 function totalReqsForSession(s) {
-  return s.cloud.requestCount + s.local.requestCount + s.proxy.requestCount;
+  return s.cloud.requestCount + s.proxy.requestCount;
 }
 
 async function refreshSessions() {
@@ -1852,18 +1902,32 @@ async function refreshSessions() {
     var sessions = await fetch(BASE + '/sessions').then(function(r) { return r.json(); });
     var tbody = document.getElementById('sessions-body');
     if (!sessions || !sessions.length) {
-      tbody.innerHTML = '<tr><td colspan="11" class="empty-state">' + t('sessions.empty') + '</td></tr>';
+      if (_sessionsList.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="11" class="empty-state">' + t('sessions.empty') + '</td></tr>';
+      }
       return;
+    }
+    var apiKeys = {};
+    for (var i = 0; i < sessions.length; i++) {
+      var k = sessions[i].loopId ? (sessions[i].sessionKey + '::' + sessions[i].loopId) : sessions[i].sessionKey;
+      apiKeys[k] = true;
+    }
+    for (var j = 0; j < _sessionsList.length; j++) {
+      var ek = _sessionsList[j].loopId ? (_sessionsList[j].sessionKey + '::' + _sessionsList[j].loopId) : _sessionsList[j].sessionKey;
+      if (!apiKeys[ek]) sessions.push(_sessionsList[j]);
     }
     _sessionsList = sessions;
     tbody.innerHTML = sessions.map(function(s) {
-      var shortKey = s.sessionKey.length > 20 ? s.sessionKey.slice(0, 20) + '...' : s.sessionKey;
+      var label = s.userMessagePreview || s.sessionKey;
+      var shortLabel = label.length > 40 ? label.slice(0, 40) + '...' : label;
       var bs = s.bySource || {};
       var routerTokens = (bs.router || {}).totalTokens || 0;
       var taskTokens = (bs.task || {}).totalTokens || 0;
       var sessCost = (s.cloud.estimatedCost || 0) + (s.proxy.estimatedCost || 0);
-      return '<tr onclick="showSessionDetail(\\'' + escHtml(s.sessionKey).replace(/'/g, "\\\\'") + '\\')">' +
-        '<td><span class="session-key" title="' + escHtml(s.sessionKey) + '">' + escHtml(shortKey) + '</span></td>' +
+      var lid = s.loopId || '';
+      var onclick = "showSessionDetail('" + escHtml(s.sessionKey).replace(/'/g, "\\\\'") + "','" + escHtml(lid).replace(/'/g, "\\\\'") + "')";
+      return '<tr onclick="' + onclick + '">' +
+        '<td><span class="session-key" title="' + escHtml(label) + '">' + escHtml(shortLabel) + '</span></td>' +
         '<td><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></td>' +
         '<td>' + fmt(s.cloud.totalTokens) + '</td>' +
         '<td>' + fmt(s.local.totalTokens) + '</td>' +
@@ -1873,7 +1937,7 @@ async function refreshSessions() {
         '<td>' + fmt(totalForSession(s)) + '</td>' +
         '<td>' + fmtCost(sessCost) + '</td>' +
         '<td>' + totalReqsForSession(s) + '</td>' +
-        '<td>' + timeAgo(s.lastActiveAt) + '</td>' +
+        '<td>' + fmtTime(s.firstSeenAt) + '</td>' +
         '</tr>';
     }).join('');
   } catch (e) { /* non-critical */ }
@@ -1881,9 +1945,20 @@ async function refreshSessions() {
 
 // ── Session Detail Timeline (SSE real-time) ──
 var _activeSessionKey = null;
+var _activeLoopId = null;
 var _sessionEventSource = null;
+var _sessionPollTimer = null;
 var _timelineDetections = [];
 var _sessionsList = [];
+var _levelRank = { S1: 1, S2: 2, S3: 3 };
+var _sessionHighest = 'S1';
+
+function fmtTime(ts) {
+  if (!ts) return '-';
+  var d = new Date(ts);
+  var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+  return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
 
 function checkpointLabel(cp) {
   return t('sd.checkpoint.' + cp) || cp;
@@ -1982,12 +2057,20 @@ function appendPendingItem(d) {
   node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function removeAllGeneratingIndicators() {
+  var wrap = document.getElementById('sd-stat-status-wrap');
+  if (wrap) wrap.style.display = 'none';
+  var el = document.getElementById('sd-stat-status');
+  if (el) el.innerHTML = '';
+}
+
 function resolvePendingItem(d) {
   var el = document.getElementById('session-timeline');
   var pending = document.getElementById('pending-' + d.checkpoint);
   var div = document.createElement('div');
   div.innerHTML = buildTimelineItemHtml(d, _timelineDetections.length - 1);
   var node = div.firstChild;
+  removeAllGeneratingIndicators();
   if (pending) {
     el.replaceChild(node, pending);
   } else {
@@ -1995,68 +2078,47 @@ function resolvePendingItem(d) {
     for (var i = 0; i < empties.length; i++) empties[i].remove();
     el.appendChild(node);
   }
-  if (d.action !== 'block') {
-    var card = node.querySelector('.timeline-card');
-    if (card) {
-      var ind = document.createElement('div');
-      ind.className = 'generating-indicator';
-      ind.id = 'gen-' + d.checkpoint;
-      ind.innerHTML = '<span class="gen-dots"><span></span><span></span><span></span></span> ' + t('sd.generating');
-      card.appendChild(ind);
-    }
-  }
   node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function addGeneratingIndicator(checkpoint) {
-  if (document.getElementById('gen-' + checkpoint)) return;
-  var el = document.getElementById('session-timeline');
-  if (!el) return;
-  var items = el.querySelectorAll('.timeline-item');
-  var target = null;
-  for (var i = items.length - 1; i >= 0; i--) {
-    if (!items[i].classList.contains('pending')) { target = items[i]; break; }
-  }
-  if (!target) return;
-  var card = target.querySelector('.timeline-card');
-  if (!card || card.querySelector('.generating-indicator')) return;
-  var ind = document.createElement('div');
-  ind.className = 'generating-indicator';
-  ind.id = 'gen-' + checkpoint;
-  ind.innerHTML = '<span class="gen-dots"><span></span><span></span><span></span></span> ' + t('sd.generating');
-  card.appendChild(ind);
+  var wrap = document.getElementById('sd-stat-status-wrap');
+  var el = document.getElementById('sd-stat-status');
+  if (!wrap || !el) return;
+  el.innerHTML = '<span class="generating-indicator" style="margin:0;padding:0;background:none"><span class="gen-dots"><span></span><span></span><span></span></span> ' + t('sd.generating') + '</span>';
+  wrap.style.display = '';
 }
 
-function resolveGeneratingIndicator(checkpoint) {
-  var ind = document.getElementById('gen-' + checkpoint);
-  if (ind) {
-    var badge = document.createElement('div');
-    badge.className = 'complete-badge';
-    badge.innerHTML = '\u2713 ' + t('sd.complete');
-    ind.parentNode.replaceChild(badge, ind);
-    setTimeout(function() { badge.style.opacity = '0'; setTimeout(function() { badge.remove(); }, 300); }, 3000);
-  }
+function resolveGeneratingIndicator() {
+  var wrap = document.getElementById('sd-stat-status-wrap');
+  var el = document.getElementById('sd-stat-status');
+  if (!wrap || !el) return;
+  el.innerHTML = '<span class="complete-badge" style="margin:0">\u2713 ' + t('sd.complete') + '</span>';
+  setTimeout(function() { wrap.style.display = 'none'; el.innerHTML = ''; }, 3000);
 }
 
-function renderSessionHeader(sessionKey) {
+function renderSessionHeader(label) {
   var hdr = document.getElementById('sd-header');
   var s = null;
   for (var i = 0; i < _sessionsList.length; i++) {
-    if (_sessionsList[i].sessionKey === sessionKey) { s = _sessionsList[i]; break; }
+    var si = _sessionsList[i];
+    if (_activeLoopId) {
+      if (si.sessionKey === _activeSessionKey && si.loopId === _activeLoopId) { s = si; break; }
+    } else {
+      if (si.sessionKey === _activeSessionKey) { s = si; break; }
+    }
   }
-  if (!s) {
-    hdr.innerHTML = '<div class="sd-key">' + escHtml(sessionKey) + '</div>';
-    return;
-  }
-  var totalTokens = totalForSession(s);
-  var totalReqs = totalReqsForSession(s);
-  var totalCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
+  var totalTokens = s ? totalForSession(s) : 0;
+  var totalReqs = s ? totalReqsForSession(s) : 0;
+  var totalCost = s ? ((s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0)) : 0;
+  var level = (s && s.highestLevel) ? s.highestLevel : 'S1';
   hdr.innerHTML =
-    '<div class="sd-key">' + escHtml(sessionKey) + '</div>' +
-    '<div class="sd-stat" id="sd-stat-level"><div class="sd-stat-value"><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div></div>' +
+    '<div class="sd-key">' + escHtml(label) + '</div>' +
+    '<div class="sd-stat" id="sd-stat-level"><div class="sd-stat-value"><span class="level-tag level-' + level + '">' + level + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div></div>' +
     '<div class="sd-stat" id="sd-stat-tokens-wrap"><div class="sd-stat-value" id="sd-stat-tokens">' + fmt(totalTokens) + '</div><div class="sd-stat-label">' + t('sd.total_tokens') + '</div></div>' +
     '<div class="sd-stat" id="sd-stat-cost-wrap"><div class="sd-stat-value" id="sd-stat-cost">' + fmtCost(totalCost) + '</div><div class="sd-stat-label">Cost</div></div>' +
-    '<div class="sd-stat" id="sd-stat-reqs-wrap"><div class="sd-stat-value" id="sd-stat-reqs">' + totalReqs + '</div><div class="sd-stat-label">' + t('sd.requests') + '</div></div>';
+    '<div class="sd-stat" id="sd-stat-reqs-wrap"><div class="sd-stat-value" id="sd-stat-reqs">' + totalReqs + '</div><div class="sd-stat-label">' + t('sd.requests') + '</div></div>' +
+    '<div class="sd-stat" id="sd-stat-status-wrap" style="display:none"><div class="sd-stat-value" id="sd-stat-status"></div></div>';
 }
 
 function closeSessionStream() {
@@ -2064,18 +2126,48 @@ function closeSessionStream() {
     _sessionEventSource.close();
     _sessionEventSource = null;
   }
+  if (_sessionPollTimer) {
+    clearInterval(_sessionPollTimer);
+    _sessionPollTimer = null;
+  }
 }
 
-function showSessionDetail(sessionKey) {
+function showSessionDetail(sessionKey, loopId) {
   _activeSessionKey = sessionKey;
+  _activeLoopId = loopId || null;
   _timelineDetections = [];
+  var existingSession = null;
+  for (var i = 0; i < _sessionsList.length; i++) {
+    var s = _sessionsList[i];
+    if (loopId) {
+      if (s.sessionKey === sessionKey && s.loopId === loopId) { existingSession = s; break; }
+    } else {
+      if (s.sessionKey === sessionKey) { existingSession = s; break; }
+    }
+  }
+  _sessionHighest = (existingSession && existingSession.highestLevel) || 'S1';
   document.getElementById('session-list').style.display = 'none';
-  document.getElementById('session-detail').style.display = 'block';
-  renderSessionHeader(sessionKey);
+  var sd = document.getElementById('session-detail');
+  sd.style.display = 'block';
+  var headerLabel = (existingSession && existingSession.userMessagePreview) || sessionKey;
+  renderSessionHeader(headerLabel);
   document.getElementById('session-timeline').innerHTML = '<div class="empty-state">' + t('sd.timeline_empty') + '</div>';
+  requestAnimationFrame(function() {
+    var tl = document.getElementById('session-timeline');
+    if (tl) {
+      var rect = tl.getBoundingClientRect();
+      var available = window.innerHeight - rect.top - 24;
+      if (available > 200) {
+        tl.style.maxHeight = available + 'px';
+        tl.style.overflowY = 'auto';
+      }
+    }
+  });
 
   closeSessionStream();
-  var es = new EventSource(BASE + '/session-detections/stream?key=' + encodeURIComponent(sessionKey));
+  var streamUrl = BASE + '/session-detections/stream?key=' + encodeURIComponent(sessionKey);
+  if (loopId) streamUrl += '&loopId=' + encodeURIComponent(loopId);
+  var es = new EventSource(streamUrl);
   _sessionEventSource = es;
 
   es.addEventListener('snapshot', function(e) {
@@ -2096,6 +2188,11 @@ function showSessionDetail(sessionKey) {
     var d = JSON.parse(e.data);
     _timelineDetections.push(d);
     resolvePendingItem(d);
+    if (d.level && (_levelRank[d.level] || 0) > (_levelRank[_sessionHighest] || 0)) {
+      _sessionHighest = d.level;
+      var lEl = document.getElementById('sd-stat-level');
+      if (lEl) lEl.innerHTML = '<div class="sd-stat-value"><span class="level-tag level-' + d.level + '">' + d.level + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div>';
+    }
   });
 
   es.addEventListener('generating', function(e) {
@@ -2106,59 +2203,151 @@ function showSessionDetail(sessionKey) {
 
   es.addEventListener('llm_complete', function(e) {
     if (_activeSessionKey !== sessionKey) return;
+    resolveGeneratingIndicator();
+  });
+
+  es.addEventListener('input_estimate', function(e) {
+    if (_activeSessionKey !== sessionKey) return;
     var d = JSON.parse(e.data);
-    resolveGeneratingIndicator(d.checkpoint);
+    var costEl = document.getElementById('sd-stat-cost');
+    if (costEl) {
+      var curCost = parseFloat(costEl.dataset.val || '0');
+      if (d.estimatedCost > curCost) {
+        costEl.textContent = fmtCost(d.estimatedCost);
+        costEl.dataset.val = String(d.estimatedCost);
+        var cw = costEl.parentElement;
+        if (cw) { cw.classList.remove('flash'); void cw.offsetWidth; cw.classList.add('flash'); }
+      }
+    }
+    var tokEl = document.getElementById('sd-stat-tokens');
+    if (tokEl) {
+      var curTok = parseFloat(tokEl.dataset.val || '0');
+      if (d.estimatedInputTokens > curTok) {
+        tokEl.textContent = fmt(d.estimatedInputTokens);
+        tokEl.dataset.val = String(d.estimatedInputTokens);
+        var tw = tokEl.parentElement;
+        if (tw) { tw.classList.remove('flash'); void tw.offsetWidth; tw.classList.add('flash'); }
+      }
+    }
   });
 
   es.addEventListener('token_update', function(e) {
     if (_activeSessionKey !== sessionKey) return;
     var s = JSON.parse(e.data);
-    var totalTokens = (s.cloud ? s.cloud.totalTokens : 0) + (s.local ? s.local.totalTokens : 0) + (s.proxy ? s.proxy.totalTokens : 0);
-    var totalReqs = (s.cloud ? s.cloud.requestCount : 0) + (s.local ? s.local.requestCount : 0) + (s.proxy ? s.proxy.requestCount : 0);
+    var totalTokens = (s.cloud ? s.cloud.totalTokens : 0) + (s.proxy ? s.proxy.totalTokens : 0);
+    var totalReqs = (s.cloud ? s.cloud.requestCount : 0) + (s.proxy ? s.proxy.requestCount : 0);
     var totalCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
-    animateCounter('sd-stat-tokens', totalTokens, fmt);
-    animateCounter('sd-stat-reqs', totalReqs, String);
-    animateCounter('sd-stat-cost', totalCost, fmtCost);
+    function setStatMonotonic(id, val, formatter) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var cur = parseFloat(el.dataset.val || '0');
+      if (val < cur) return;
+      var formatted = formatter(val);
+      if (el.textContent === formatted) return;
+      el.textContent = formatted;
+      el.dataset.val = String(val);
+      var w = el.parentElement;
+      if (w) { w.classList.remove('flash'); void w.offsetWidth; w.classList.add('flash'); }
+    }
+    setStatMonotonic('sd-stat-tokens', totalTokens, fmt);
+    setStatMonotonic('sd-stat-cost', totalCost, fmtCost);
+    var reqEl = document.getElementById('sd-stat-reqs');
+    if (reqEl) {
+      var fmtReqs = String(totalReqs);
+      if (reqEl.textContent !== fmtReqs) {
+        reqEl.textContent = fmtReqs;
+        reqEl.dataset.val = String(totalReqs);
+        var rw = reqEl.parentElement;
+        if (rw) { rw.classList.remove('flash'); void rw.offsetWidth; rw.classList.add('flash'); }
+      }
+    }
+    if (s.highestLevel && (_levelRank[s.highestLevel] || 0) > (_levelRank[_sessionHighest] || 0)) {
+      _sessionHighest = s.highestLevel;
+      var lEl = document.getElementById('sd-stat-level');
+      if (lEl) lEl.innerHTML = '<div class="sd-stat-value"><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div>';
+    }
   });
 
   es.onerror = function(ev) {
     console.warn('[GuardClaw SSE] connection error, readyState=' + es.readyState, ev);
   };
+
+  var _pollLoopId = loopId || null;
+  _sessionPollTimer = setInterval(function() {
+    if (_activeSessionKey !== sessionKey) return;
+    fetch(BASE + '/sessions').then(function(r) { return r.json(); }).then(function(list) {
+      if (_activeSessionKey !== sessionKey) return;
+      var s = null;
+      for (var i = 0; i < list.length; i++) {
+        if (_pollLoopId) {
+          if (list[i].sessionKey === sessionKey && list[i].loopId === _pollLoopId) { s = list[i]; break; }
+        } else {
+          if (list[i].sessionKey === sessionKey) { s = list[i]; break; }
+        }
+      }
+      if (!s) return;
+      var totalTokens = (s.cloud ? s.cloud.totalTokens : 0) + (s.proxy ? s.proxy.totalTokens : 0);
+      var totalReqs = (s.cloud ? s.cloud.requestCount : 0) + (s.proxy ? s.proxy.requestCount : 0);
+      var totalCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
+      var el2t = document.getElementById('sd-stat-tokens');
+      if (el2t && totalTokens >= parseFloat(el2t.dataset.val || '0')) { el2t.textContent = fmt(totalTokens); el2t.dataset.val = String(totalTokens); }
+      var el2c = document.getElementById('sd-stat-cost');
+      if (el2c && totalCost >= parseFloat(el2c.dataset.val || '0')) { el2c.textContent = fmtCost(totalCost); el2c.dataset.val = String(totalCost); }
+      var el2r = document.getElementById('sd-stat-reqs');
+      if (el2r) { el2r.textContent = String(totalReqs); el2r.dataset.val = String(totalReqs); }
+      if (s.highestLevel && (_levelRank[s.highestLevel] || 0) > (_levelRank[_sessionHighest] || 0)) {
+        _sessionHighest = s.highestLevel;
+        var lEl = document.getElementById('sd-stat-level');
+        if (lEl) lEl.innerHTML = '<div class="sd-stat-value"><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div>';
+      }
+    }).catch(function() {});
+  }, 5000);
 }
 
 function hideSessionDetail() {
   _activeSessionKey = null;
+  _activeLoopId = null;
   closeSessionStream();
-  document.getElementById('session-detail').style.display = 'none';
+  var sd = document.getElementById('session-detail');
+  sd.style.display = 'none';
+  var tl = document.getElementById('session-timeline');
+  if (tl) { tl.style.maxHeight = ''; tl.style.overflowY = ''; }
   document.getElementById('session-list').style.display = 'block';
 }
 
 // ── Global activity stream for session list live updates ──
 var _activityStream = null;
 var _activityDebounce = null;
-function ensureSessionRow(sessionKey) {
+function ensureSessionRow(sessionKey, loopId) {
+  var matchKey = loopId ? (sessionKey + '::' + loopId) : sessionKey;
   var found = false;
   for (var i = 0; i < _sessionsList.length; i++) {
-    if (_sessionsList[i].sessionKey === sessionKey) { found = true; break; }
+    var ek = _sessionsList[i].loopId ? (_sessionsList[i].sessionKey + '::' + _sessionsList[i].loopId) : _sessionsList[i].sessionKey;
+    if (ek === matchKey) { found = true; break; }
   }
   if (found) return;
   var placeholder = {
     sessionKey: sessionKey,
+    loopId: loopId || undefined,
     highestLevel: 'S1',
     cloud: { totalTokens: 0, requestCount: 0, estimatedCost: 0 },
     local: { totalTokens: 0, requestCount: 0 },
     proxy: { totalTokens: 0, requestCount: 0, estimatedCost: 0 },
     bySource: {},
+    firstSeenAt: Date.now(),
     lastActiveAt: Date.now()
   };
   _sessionsList.unshift(placeholder);
   var tbody = document.getElementById('sessions-body');
   if (tbody) {
-    var shortKey = sessionKey.length > 20 ? sessionKey.slice(0, 20) + '...' : sessionKey;
+    var label = sessionKey;
+    var shortLabel = label.length > 40 ? label.slice(0, 40) + '...' : label;
+    var lid = loopId || '';
+    var onclick = "showSessionDetail('" + escHtml(sessionKey).replace(/'/g, "\\'") + "','" + escHtml(lid).replace(/'/g, "\\'") + "')";
     var row = document.createElement('tr');
-    row.setAttribute('onclick', "showSessionDetail('" + escHtml(sessionKey).replace(/'/g, "\\'") + "')");
+    row.setAttribute('onclick', onclick);
     row.innerHTML =
-      '<td><span class="session-key" title="' + escHtml(sessionKey) + '">' + escHtml(shortKey) + '</span></td>' +
+      '<td><span class="session-key" title="' + escHtml(label) + '">' + escHtml(shortLabel) + '</span></td>' +
       '<td><span class="level-tag level-S1">S1</span></td>' +
       '<td colspan="9" style="color:var(--text-tertiary);font-style:italic"><span class="detecting-spinner" style="margin-right:6px"></span>' + t('sd.detecting') + '</td>';
     var empty = tbody.querySelector('.empty-state');
@@ -2172,7 +2361,7 @@ function startActivityStream() {
   _activityStream.addEventListener('activity', function(e) {
     try {
       var data = JSON.parse(e.data);
-      if (data.phase === 'start' && data.sessionKey) ensureSessionRow(data.sessionKey);
+      if (data.sessionKey && (data.phase === 'start' || data.phase === 'generating' || data.phase === 'token_update')) ensureSessionRow(data.sessionKey, data.loopId);
     } catch(ex) {}
     if (_activityDebounce) clearTimeout(_activityDebounce);
     _activityDebounce = setTimeout(function() {
@@ -2600,8 +2789,12 @@ async function runRouterTest(routerId) {
 
 async function savePrivacyRouter() {
   try {
+    var privacyEnabled = document.getElementById('cfg-privacy-enabled').checked;
     var payload = {
       privacy: {
+        routers: {
+          privacy: { enabled: privacyEnabled },
+        },
         checkpoints: {
           onUserMessage: _checkpoints.um.length ? _checkpoints.um : undefined,
           onToolCallProposed: _checkpoints.tcp.length ? _checkpoints.tcp : undefined,
@@ -2672,11 +2865,11 @@ function loadTokenSaverConfig() {
   var tierNames = ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'];
   for (var i = 0; i < tierNames.length; i++) {
     var tn = tierNames[i];
-    var t = tiers[tn] || {};
+    var tierCfg = tiers[tn] || {};
     var pEl = document.getElementById('cfg-ts-tier-' + tn + '-provider');
     var mEl = document.getElementById('cfg-ts-tier-' + tn + '-model');
-    if (pEl) pEl.value = t.provider || '';
-    if (mEl) mEl.value = t.model || '';
+    if (pEl) pEl.value = tierCfg.provider || '';
+    if (mEl) mEl.value = tierCfg.model || '';
   }
   var cacheEl = document.getElementById('cfg-ts-cachettl');
   if (cacheEl) cacheEl.value = opts.cacheTtlMs || '';
@@ -2722,7 +2915,7 @@ async function saveTokenSaverConfig() {
 
     var payload = {
       privacy: {
-        routers: Object.assign({}, _routers),
+        routers: { 'token-saver': routerEntry },
         pipeline: pipelineUpdate,
       },
     };
@@ -2733,7 +2926,7 @@ async function saveTokenSaverConfig() {
     });
     var result = await res.json();
     if (result.ok) {
-      showToast(t('cfg.saved'));
+      showToast(t('co.saved'));
       updateAvailableRouters();
     } else {
       showToast(t('common.save_failed') + (result.error || 'unknown'), true);
@@ -2967,10 +3160,22 @@ function removeCustomRouter(id) {
   delete _tags['cr-kw-s3-' + id];
   delete _tags['cr-pat-s2-' + id];
   delete _tags['cr-pat-s3-' + id];
+  // Clean up pipeline arrays so deleted router doesn't linger in execution order
+  ['pipe-um', 'pipe-tcp', 'pipe-tce'].forEach(function(pk) {
+    var idx = _tags[pk].indexOf(id);
+    if (idx !== -1) _tags[pk].splice(idx, 1);
+  });
 
-  // Save the removal to config
+  // Save the removal to config (include cleaned pipeline so server is in sync)
   var currentRouters = Object.assign({}, _routers);
-  var payload = { privacy: { routers: currentRouters } };
+  var payload = { privacy: {
+    routers: currentRouters,
+    pipeline: {
+      onUserMessage: _tags['pipe-um'].length ? _tags['pipe-um'] : undefined,
+      onToolCallProposed: _tags['pipe-tcp'].length ? _tags['pipe-tcp'] : undefined,
+      onToolCallExecuted: _tags['pipe-tce'].length ? _tags['pipe-tce'] : undefined,
+    },
+  } };
   fetch(BASE + '/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2979,6 +3184,7 @@ function removeCustomRouter(id) {
     if (result.ok) {
       showToast('"' + id + t('cr.deleted'));
       renderCustomRouterCards();
+      updateAvailableRouters();
     } else {
       showToast(t('common.save_failed') + (result.error || 'unknown'), true);
     }
@@ -3034,6 +3240,14 @@ refreshAll();
 loadConfig();
 loadPrompts();
 setInterval(refreshAll, 10000);
+window.addEventListener('resize', function() {
+  var tl = document.getElementById('session-timeline');
+  if (tl && tl.style.maxHeight) {
+    var rect = tl.getBoundingClientRect();
+    var available = window.innerHeight - rect.top - 24;
+    tl.style.maxHeight = Math.max(200, available) + 'px';
+  }
+});
 if (LANG !== 'en') setLang(LANG);
 </script>
 </body>
