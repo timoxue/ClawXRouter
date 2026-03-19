@@ -13,6 +13,8 @@
  */
 
 import type { ProxyHandle } from "./privacy-proxy.js";
+import { registerModelTarget, type OriginalProviderTarget } from "./privacy-proxy.js";
+import { resolveDefaultBaseUrl } from "./utils.js";
 
 let activeProxy: ProxyHandle | null = null;
 
@@ -33,24 +35,35 @@ export const guardClawPrivacyProvider = {
 // ---------------------------------------------------------------------------
 
 /**
- * Mirror all model definitions from every configured provider.
+ * Mirror all model definitions from every configured provider and
+ * build the model→target map for proxy routing.
  */
 export function mirrorAllProviderModels(
-  config: { models?: { providers?: Record<string, { models?: unknown }> } },
+  config: { models?: { providers?: Record<string, { models?: unknown; baseUrl?: string; apiKey?: string; api?: string }> } },
 ): unknown[] {
   const seen = new Set<string>();
   const mirrored: unknown[] = [];
   const providers = config.models?.providers ?? {};
 
-  for (const providerConfig of Object.values(providers)) {
-    if (!providerConfig.models) continue;
-    const models = providerConfig.models;
+  for (const [provName, provCfg] of Object.entries(providers)) {
+    if (provName === "guardclaw-privacy") continue;
+    if (!provCfg.models) continue;
+
+    const target: OriginalProviderTarget = {
+      baseUrl: provCfg.baseUrl ?? resolveDefaultBaseUrl(provName, provCfg.api),
+      apiKey: provCfg.apiKey ?? "",
+      provider: provName,
+      api: provCfg.api,
+    };
+
+    const models = provCfg.models;
     if (Array.isArray(models)) {
       for (const m of models) {
         const id = (m as Record<string, unknown>)?.id as string | undefined;
         if (id && !seen.has(id)) {
           seen.add(id);
           mirrored.push(m);
+          registerModelTarget(id, target);
         }
       }
     } else if (typeof models === "object" && models !== null) {
@@ -58,6 +71,7 @@ export function mirrorAllProviderModels(
         if (!seen.has(modelId)) {
           seen.add(modelId);
           mirrored.push({ id: modelId, ...(typeof modelDef === "object" && modelDef !== null ? modelDef as Record<string, unknown> : {}) });
+          registerModelTarget(modelId, target);
         }
       }
     }
@@ -180,7 +194,17 @@ export function ensureModelMirrored(
     privacyModels.push(source);
   }
 
-  // Always propagate reasoning → thinking default (idempotent)
+  // Register model→provider target for proxy routing (idempotent)
+  const provCfg = providers[originalProvider];
+  if (provCfg) {
+    registerModelTarget(modelId, {
+      baseUrl: (provCfg as Record<string, unknown>).baseUrl as string ?? resolveDefaultBaseUrl(originalProvider, (provCfg as Record<string, unknown>).api as string | undefined),
+      apiKey: (provCfg as Record<string, unknown>).apiKey as string ?? "",
+      provider: originalProvider,
+      api: (provCfg as Record<string, unknown>).api as string | undefined,
+    });
+  }
+
   if (source.reasoning === true) {
     propagateThinkingForModel(config, modelId);
   }

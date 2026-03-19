@@ -331,7 +331,6 @@ export function clearSessionState(sessionKey: string): void {
   activeLocalRouting.delete(sessionKey);
   pendingDetections.delete(sessionKey);
   lastInputEstimates.delete(sessionKey);
-  clearToolResultCache(sessionKey);
   const loopId = currentLoopIds.get(sessionKey);
   if (loopId) loopMetas.delete(loopId);
   currentLoopIds.delete(sessionKey);
@@ -345,6 +344,7 @@ export function clearAllSessionStates(): void {
   loopMetas.clear();
   currentLoopIds.clear();
   loopCounter = 0;
+  clearToolResultCache();
 }
 
 /**
@@ -435,41 +435,40 @@ export function isActiveLocalRouting(sessionKey: string): boolean {
 }
 
 // ── Tool result desensitization cache ────────────────────────────────────
-// Defense-in-depth for the privacy proxy.  The primary desensitization
-// mechanism is in-place mutation of the content array elements (shared
-// references with pi-agent-core's currentContext.messages).  This cache
-// provides a fallback for the rare case where the reference chain is
-// broken (e.g. tool result truncation creates a new content array).
-// Cleaned up automatically when the session ends (clearSessionState).
+// Provides LLM-desensitized content to the privacy proxy.  The proxy is
+// the primary defense layer (HTTP-level PII stripping); this cache feeds
+// it semantically desensitized text that regex alone cannot produce.
+//
+// Global (not per-session): the proxy resolves targets via model-keyed
+// map, and the fingerprint (length + first 200 chars) is collision-safe
+// for single-user CLI scenarios.  Entries are pruned periodically.
 
-const toolResultDesensitizationCache = new Map<string, Map<string, string>>();
+const toolResultDesensitizationCache = new Map<string, string>();
+const MAX_CACHE_ENTRIES = 500;
 
 function contentFingerprint(content: string): string {
   return `${content.length}:${content.slice(0, 200)}`;
 }
 
 export function stashDesensitizedToolResult(
-  sessionKey: string,
   originalContent: string,
   desensitized: string,
 ): void {
-  let map = toolResultDesensitizationCache.get(sessionKey);
-  if (!map) {
-    map = new Map();
-    toolResultDesensitizationCache.set(sessionKey, map);
+  if (toolResultDesensitizationCache.size >= MAX_CACHE_ENTRIES) {
+    const firstKey = toolResultDesensitizationCache.keys().next().value;
+    if (firstKey !== undefined) toolResultDesensitizationCache.delete(firstKey);
   }
-  map.set(contentFingerprint(originalContent), desensitized);
+  toolResultDesensitizationCache.set(contentFingerprint(originalContent), desensitized);
 }
 
 export function lookupDesensitizedToolResult(
-  sessionKey: string,
   content: string,
 ): string | undefined {
-  return toolResultDesensitizationCache.get(sessionKey)?.get(contentFingerprint(content));
+  return toolResultDesensitizationCache.get(contentFingerprint(content));
 }
 
-function clearToolResultCache(sessionKey: string): void {
-  toolResultDesensitizationCache.delete(sessionKey);
+function clearToolResultCache(): void {
+  toolResultDesensitizationCache.clear();
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

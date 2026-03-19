@@ -1,18 +1,23 @@
 /**
  * GuardClaw Privacy Proxy
  *
- * Lightweight HTTP reverse proxy that intercepts S2 requests and strips PII
- * markers before forwarding to the original cloud provider.
+ * Lightweight HTTP reverse proxy through which ALL cloud-bound LLM traffic
+ * flows (S1 + S2).  Provides defense-in-depth PII protection at the HTTP
+ * layer, tool schema cleaning, and transparent provider routing.
  *
  * Supports multiple provider API formats:
  *   - OpenAI-compatible (messages + tools)
  *   - Google/Gemini (contents + functionDeclarations)
  *   - Anthropic (messages with x-api-key auth)
  *
+ * Routing: model-keyed target map resolves the upstream provider from the
+ * `model` field in the request body.  Deterministic — no per-request
+ * session header needed.
+ *
  * Flow:
  *   openclaw agent → guardclaw-privacy provider → localhost:PROXY_PORT
- *     → strip PII markers → clean tool schemas → forward to original provider
- *     → passthrough response (including SSE)
+ *     → strip PII markers → clean tool schemas → PII redaction
+ *     → resolve upstream via model → forward → passthrough response (SSE)
  */
 
 import * as http from "node:http";
@@ -25,7 +30,7 @@ import { lookupDesensitizedToolResult } from "./session-state.js";
 export const GUARDCLAW_S2_OPEN = "<guardclaw-s2>";
 export const GUARDCLAW_S2_CLOSE = "</guardclaw-s2>";
 
-// ── Original provider target (stashed by hooks) ──
+// ── Original provider target ──
 
 export type OriginalProviderTarget = {
   baseUrl: string;
@@ -35,41 +40,21 @@ export type OriginalProviderTarget = {
   streaming?: boolean;
 };
 
-type StashedTarget = { target: OriginalProviderTarget; ts: number };
-const PROVIDER_STASH_TTL_MS = 120_000; // 2 minutes
-const originalProviderTargets = new Map<string, StashedTarget>();
+// ── Model-keyed target map ──
+// Deterministic routing: model ID → upstream provider target.
+// Built at init time (mirrorAllProviderModels) and updated JIT
+// (ensureModelMirrored).  No per-request header injection needed.
 
-export function stashOriginalProvider(key: string, target: OriginalProviderTarget): void {
-  originalProviderTargets.set(key, { target, ts: Date.now() });
+const modelProviderTargets = new Map<string, OriginalProviderTarget>();
+
+export function registerModelTarget(modelId: string, target: OriginalProviderTarget): void {
+  modelProviderTargets.set(modelId, target);
 }
 
-export function getStashedProvider(key: string): OriginalProviderTarget | undefined {
-  const entry = originalProviderTargets.get(key);
-  if (!entry) return undefined;
-  if (Date.now() - entry.ts > PROVIDER_STASH_TTL_MS) {
-    originalProviderTargets.delete(key);
-    return undefined;
-  }
-  return entry.target;
+export function getModelTarget(modelId: string): OriginalProviderTarget | undefined {
+  return modelProviderTargets.get(modelId);
 }
 
-function cleanupStaleProviderTargets(): void {
-  const now = Date.now();
-  for (const [k, v] of originalProviderTargets) {
-    if (now - v.ts > PROVIDER_STASH_TTL_MS) originalProviderTargets.delete(k);
-  }
-}
-
-const _providerCleanupInterval = setInterval(cleanupStaleProviderTargets, 60_000);
-if (typeof _providerCleanupInterval === "object" && "unref" in _providerCleanupInterval) {
-  (_providerCleanupInterval as NodeJS.Timeout).unref();
-}
-
-/**
- * Fallback: read from a global default set during plugin registration.
- * Used when no per-session target is stashed (e.g., the session key
- * wasn't passed through).
- */
 let defaultProviderTarget: OriginalProviderTarget | null = null;
 
 export function setDefaultProviderTarget(target: OriginalProviderTarget): void {
@@ -300,11 +285,9 @@ export function resolveAuthHeaders(target: OriginalProviderTarget): Record<strin
 
 // ── Resolve original provider target ──
 
-function resolveTarget(
-  sessionHeader: string | undefined,
-): OriginalProviderTarget | null {
-  if (sessionHeader) {
-    const t = getStashedProvider(sessionHeader);
+function resolveTarget(modelId: string | undefined): OriginalProviderTarget | null {
+  if (modelId) {
+    const t = modelProviderTargets.get(modelId);
     if (t) return t;
   }
   return defaultProviderTarget;
@@ -504,22 +487,15 @@ export async function startPrivacyProxy(
         log.info("[GuardClaw Proxy] Cleaned unsupported keywords from tool schemas");
       }
 
-      // Resolve session key early — needed by both Step 2b (cache lookup)
-      // and Step 3 (target resolution).
-      const sessionKey = req.headers["x-guardclaw-session"] as string | undefined;
-
-      // Step 2b: Defense-in-depth — run PII redaction on non-system messages.
+      // Step 2b: Defense-in-depth — PII redaction on all non-system messages.
       //
       // Two layers:
-      //   (a) Cached LLM desensitization: tool_result_persist already ran full
-      //       LLM-based desensitization and stashed the result.  For tool result
-      //       messages we look up this cache first — it covers semantic PII that
-      //       regex cannot catch (names, addresses, health info, etc.).
+      //   (a) Cached LLM desensitization: tool_result_persist stashed a
+      //       semantically desensitized version (covers names, addresses, etc.)
       //   (b) Rule-based regex redaction: catches structured PII patterns
       //       (phone, email, SSN, etc.) as a universal fallback.
       //
-      // System messages are excluded: they contain legitimate security
-      // instructions that contextual redaction rules would corrupt.
+      // System messages are excluded to avoid corrupting security instructions.
       const redactionOpts = getLiveConfig().redaction;
       const allMessages = (parsed.messages ?? parsed.contents ?? []) as Array<Record<string, unknown>>;
       for (const msg of allMessages) {
@@ -527,45 +503,43 @@ export async function startPrivacyProxy(
         if (role === "system") continue;
 
         // (a) Try cached LLM-desensitized version from tool_result_persist
-        if (sessionKey) {
-          if (typeof msg.content === "string") {
-            const cached = lookupDesensitizedToolResult(sessionKey, msg.content);
-            if (cached) {
-              msg.content = cached;
-              log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result");
-              continue;
-            }
-          } else if (Array.isArray(msg.content)) {
-            let cacheHit = false;
-            for (const part of msg.content as Array<Record<string, unknown>>) {
-              if (part && typeof part.text === "string") {
-                const cached = lookupDesensitizedToolResult(sessionKey, part.text);
-                if (cached) {
-                  part.text = cached;
-                  cacheHit = true;
-                }
+        if (typeof msg.content === "string") {
+          const cached = lookupDesensitizedToolResult(msg.content);
+          if (cached) {
+            msg.content = cached;
+            log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result");
+            continue;
+          }
+        } else if (Array.isArray(msg.content)) {
+          let cacheHit = false;
+          for (const part of msg.content as Array<Record<string, unknown>>) {
+            if (part && typeof part.text === "string") {
+              const cached = lookupDesensitizedToolResult(part.text);
+              if (cached) {
+                part.text = cached;
+                cacheHit = true;
               }
-            }
-            if (cacheHit) {
-              log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result (array content)");
-              continue;
             }
           }
-          if (Array.isArray(msg.parts)) {
-            let cacheHit = false;
-            for (const part of msg.parts as Array<Record<string, unknown>>) {
-              if (part && typeof part.text === "string") {
-                const cached = lookupDesensitizedToolResult(sessionKey, part.text);
-                if (cached) {
-                  part.text = cached;
-                  cacheHit = true;
-                }
+          if (cacheHit) {
+            log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result (array content)");
+            continue;
+          }
+        }
+        if (Array.isArray(msg.parts)) {
+          let cacheHit = false;
+          for (const part of msg.parts as Array<Record<string, unknown>>) {
+            if (part && typeof part.text === "string") {
+              const cached = lookupDesensitizedToolResult(part.text);
+              if (cached) {
+                part.text = cached;
+                cacheHit = true;
               }
             }
-            if (cacheHit) {
-              log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result (Google parts)");
-              continue;
-            }
+          }
+          if (cacheHit) {
+            log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result (Google parts)");
+            continue;
           }
         }
 
@@ -587,7 +561,6 @@ export async function startPrivacyProxy(
             }
           }
         }
-        // Google format: contents[].parts[].text
         if (Array.isArray(msg.parts)) {
           for (const part of msg.parts as Array<Record<string, unknown>>) {
             if (part && typeof part.text === "string") {
@@ -601,8 +574,9 @@ export async function startPrivacyProxy(
         }
       }
 
-      // Step 3: Resolve the original provider to forward to
-      const target = resolveTarget(sessionKey);
+      // Step 3: Resolve the upstream provider via model-keyed target map
+      const requestModel = parsed.model as string | undefined;
+      const target = resolveTarget(requestModel);
 
       if (!target) {
         log.error("[GuardClaw Proxy] No original provider target found");
@@ -625,12 +599,16 @@ export async function startPrivacyProxy(
         ...resolveAuthHeaders(target),
       };
 
-      // Cap max_tokens to avoid upstream rejections
-      const MAX_COMPLETION_TOKENS = 16384;
-      for (const key of ["max_tokens", "max_completion_tokens"] as const) {
-        if (parsed[key] != null && (parsed[key] as number) > MAX_COMPLETION_TOKENS) {
-          log.info(`[GuardClaw Proxy] Capped ${key} ${parsed[key]} → ${MAX_COMPLETION_TOKENS}`);
-          parsed[key] = MAX_COMPLETION_TOKENS;
+      // Cap max_tokens for S2 traffic to avoid upstream rejections on
+      // desensitized (shorter) content.  S1 traffic passes through uncapped.
+      const hasS2Markers = hadOpenAiMarkers || hadGoogleMarkers;
+      if (hasS2Markers) {
+        const MAX_COMPLETION_TOKENS = 16384;
+        for (const key of ["max_tokens", "max_completion_tokens"] as const) {
+          if (parsed[key] != null && (parsed[key] as number) > MAX_COMPLETION_TOKENS) {
+            log.info(`[GuardClaw Proxy] Capped ${key} ${parsed[key]} → ${MAX_COMPLETION_TOKENS}`);
+            parsed[key] = MAX_COMPLETION_TOKENS;
+          }
         }
       }
 

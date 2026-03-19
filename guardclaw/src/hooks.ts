@@ -5,12 +5,19 @@
  * Uses the RouterPipeline to dispatch to multiple composable routers
  * (built-in "privacy" + any user-defined custom routers).
  *
+ * ALL cloud-bound LLM traffic (S1 + S2) routes through the guardclaw-privacy
+ * proxy.  The proxy is the primary defense layer (HTTP-level PII stripping,
+ * tool schema cleaning, regex redaction).  Hooks feed the proxy with
+ * semantically desensitized content via stashDesensitizedToolResult and
+ * provide the persisted transcript with clean versions via replaceMessageText.
+ *
  * Architecture:
  *   before_model_resolve  → pipeline.run("onUserMessage") → RouterDecision
+ *                           → ALL S1/S2 → providerOverride: "guardclaw-privacy"
+ *                           → S3 → local model (never touches proxy)
  *   before_prompt_build   → reads stashed decision → inject prompt/markers
  *   before_tool_call      → pipeline + memory_get path redirect (dual-track)
- *   tool_result_persist   → PII detection + redaction/desensitization + memory_search
- *                           result filtering + memory dual-write sync
+ *   tool_result_persist   → PII detection + stash for proxy cache + transcript
  *   before_message_write  → sanitize transcript based on stashed decision
  *   after_compaction      → full memory sync (FULL → clean)
  *   before_reset          → full memory sync before session clear
@@ -57,11 +64,10 @@ import {
   setLoopRouting,
 } from "./session-state.js";
 import { detectByRules } from "./rules.js";
-import { isProtectedMemoryPath, redactSensitiveInfo, extractPathsFromParams, resolveDefaultBaseUrl } from "./utils.js";
+import { isProtectedMemoryPath, redactSensitiveInfo, extractPathsFromParams } from "./utils.js";
 import {
   GUARDCLAW_S2_OPEN,
   GUARDCLAW_S2_CLOSE,
-  stashOriginalProvider,
 } from "./privacy-proxy.js";
 import { getGlobalPipeline } from "./router-pipeline.js";
 import { getGlobalCollector, lookupPricing } from "./token-stats.js";
@@ -120,6 +126,19 @@ function isToolAllowlisted(toolName: string): boolean {
   return allowlist.includes(toolName);
 }
 
+/**
+ * Resolve a usable session key from the hook context.
+ *
+ * OpenClaw passes `ctx.sessionKey` when the session was resolved from a
+ * channel sender (--to / Telegram / Discord …).  But when the caller only
+ * supplies `--session-id` (e.g. the `openclaw agent` CLI), sessionKey can
+ * be `undefined`.  Fall back to `sessionId` so GuardClaw detection still
+ * runs in that scenario.
+ */
+function resolveHookSessionKey(ctx: { sessionKey?: string; sessionId?: string }): string {
+  return ctx.sessionKey || ctx.sessionId || "";
+}
+
 // Workspace dir cache — set from first hook that has PluginHookAgentContext
 let _cachedWorkspaceDir: string | undefined;
 
@@ -140,7 +159,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   api.on("before_model_resolve", async (event, ctx) => {
     try {
       const { prompt } = event;
-      const sessionKey = ctx.sessionKey ?? "";
+      const sessionKey = resolveHookSessionKey(ctx);
       if (!sessionKey || !prompt) return;
 
       clearActiveLocalRouting(sessionKey);
@@ -162,8 +181,9 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       if (ctx.workspaceDir) _cachedWorkspaceDir = ctx.workspaceDir;
 
-      const msgStr = String(prompt);
-      if (shouldSkipMessage(msgStr)) return;
+      const rawMsg = String(prompt);
+      if (shouldSkipMessage(rawMsg)) return;
+      const msgStr = stripTimestampPrefix(rawMsg);
 
       // ── S3 fast path: rule-based pre-check ──────────────────────────
       // Rules are synchronous and deterministic. When they detect S3 we
@@ -201,11 +221,15 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return;
       }
 
+      const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
+      const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
+      const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
+
       const decision = await pipeline.run(
         "onUserMessage",
         {
           checkpoint: "onUserMessage",
-          message: prompt,
+          message: msgStr,
           sessionKey,
           agentId: ctx.agentId,
         },
@@ -229,8 +253,27 @@ export function registerHooks(api: OpenClawPluginApi): void {
           decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined, decision.reason);
       }
 
-      if (decision.level === "S1" && decision.action === "passthrough") {
-        return;
+      // S1: ALL S1 traffic routes through proxy for defense-in-depth
+      // (schema cleaning, regex PII scan). Token-saver may redirect to a
+      // different model — we honour the model choice but still proxy.
+      if (decision.level === "S1") {
+        const targetModel = decision.target?.model;
+        const targetOriginalProvider = decision.target?.provider !== "guardclaw-privacy"
+          ? decision.target?.provider : undefined;
+        const originalProv = targetOriginalProvider
+          ?? (targetModel ? resolveOriginalProvider(api.config as Record<string, unknown>, targetModel, defaultProvider) : defaultProvider);
+        if (targetModel) {
+          ensureModelMirrored(
+            api.config as Record<string, unknown>,
+            targetModel,
+            originalProv,
+            () => { try { return api.runtime.config.loadConfig(); } catch { return undefined; } },
+          );
+        }
+        return {
+          providerOverride: "guardclaw-privacy",
+          ...(targetModel ? { modelOverride: targetModel } : {}),
+        };
       }
 
       // S3 from LLM detector (rules didn't catch it above): route to local
@@ -306,34 +349,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
         }
       }
 
-      // S2-proxy path
+      // S2-proxy: route through privacy proxy (model-keyed map handles upstream)
       if (decision.level === "S2" && decision.target?.provider === "guardclaw-privacy") {
         markSessionAsPrivate(sessionKey, "S2");
-        const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
-        const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
-        const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
-
-        // Resolve the REAL provider for the selected model — token-saver may
-        // have picked a model from a different provider than the default.
-        // Prefer originalProvider set by the pipeline merge (exact), fall back
-        // to resolveOriginalProvider (model-list scan) for older decisions.
         const targetModel = decision.target.model;
         const actualProvider = decision.target.originalProvider
           ?? (targetModel ? resolveOriginalProvider(api.config as Record<string, unknown>, targetModel, defaultProvider) : defaultProvider);
-
-        const providerConfig = api.config.models?.providers?.[actualProvider];
-        if (providerConfig) {
-          const pc = providerConfig as Record<string, unknown>;
-          const providerApi = (pc.api as string) ?? undefined;
-          stashOriginalProvider(sessionKey, {
-            baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(actualProvider, providerApi),
-            apiKey: (pc.apiKey as string) ?? "",
-            provider: actualProvider,
-            api: providerApi,
-          });
-        }
-
-        // JIT: register the model in guardclaw-privacy if not already mirrored
         if (targetModel) {
           ensureModelMirrored(
             api.config as Record<string, unknown>,
@@ -342,9 +363,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
             () => { try { return api.runtime.config.loadConfig(); } catch { return undefined; } },
           );
         }
-
-        const modelInfo = targetModel ? ` (model=${targetModel})` : "";
-        api.logger.info(`[GuardClaw] S2 — routing through privacy proxy${modelInfo} [${decision.routerId}]`);
+        api.logger.info(`[GuardClaw] S2 — routing through privacy proxy${targetModel ? ` (model=${targetModel})` : ""} [${decision.routerId}]`);
         return {
           providerOverride: "guardclaw-privacy",
           ...(targetModel ? { modelOverride: targetModel } : {}),
@@ -421,27 +440,9 @@ export function registerHooks(api: OpenClawPluginApi): void {
             };
           }
 
-          // S2-proxy: route through privacy proxy to strip any residual PII
-          const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
-          const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
-          const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
-
           const transformModel = decision.target?.model;
           const transformActualProvider = decision.target?.originalProvider
             ?? (transformModel ? resolveOriginalProvider(api.config as Record<string, unknown>, transformModel, defaultProvider) : defaultProvider);
-
-          const providerConfig = api.config.models?.providers?.[transformActualProvider];
-          if (providerConfig) {
-            const pc = providerConfig as Record<string, unknown>;
-            const providerApi = (pc.api as string) ?? undefined;
-            stashOriginalProvider(sessionKey, {
-              baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(transformActualProvider, providerApi),
-              apiKey: (pc.apiKey as string) ?? "",
-              provider: transformActualProvider,
-              api: providerApi,
-            });
-          }
-
           if (transformModel) {
             ensureModelMirrored(
               api.config as Record<string, unknown>,
@@ -450,7 +451,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
               () => { try { return api.runtime.config.loadConfig(); } catch { return undefined; } },
             );
           }
-
           const transformModelInfo = transformModel ? ` (model=${transformModel})` : "";
           api.logger.info(`[GuardClaw] S2 TRANSFORM — routing through privacy proxy${transformModelInfo} [${decision.routerId}]`);
           return {
@@ -459,14 +459,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
           };
         }
 
-        // S1 + transform: no sensitive data, let original provider handle it
-        return;
+        // S1 + transform: route through proxy for defense-in-depth
+        return { providerOverride: "guardclaw-privacy" };
       }
 
-      // Default: no override — let the original provider handle the request
-      // so provider-specific sanitization (Google turn ordering, tool schema
-      // cleaning, transcript policy) in openclaw core still triggers correctly.
-      return;
+      // Default: route through proxy for defense-in-depth
+      return { providerOverride: "guardclaw-privacy" };
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in before_model_resolve hook: ${String(err)}`);
     }
@@ -478,7 +476,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("before_prompt_build", async (_event, ctx) => {
     try {
-      const sessionKey = ctx.sessionKey ?? "";
+      const sessionKey = resolveHookSessionKey(ctx);
       if (!sessionKey) return;
 
       const pending = getPendingDetection(sessionKey);
@@ -544,7 +542,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   api.on("before_tool_call", async (event, ctx) => {
     try {
       const { toolName, params } = event;
-      const sessionKey = ctx.sessionKey ?? "";
+      const sessionKey = resolveHookSessionKey(ctx);
       if (!toolName) return;
 
       const typedParams = params as Record<string, unknown>;
@@ -656,7 +654,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("tool_result_persist", (event, ctx) => {
     try {
-      const sessionKey = ctx.sessionKey ?? "";
+      const sessionKey = resolveHookSessionKey(ctx);
       if (!sessionKey) return;
 
       const msg = event.message;
@@ -806,8 +804,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       if (wasRedacted) {
         if (!detectedSensitive) markSessionAsPrivate(sessionKey, "S2");
-        mutateContentTextInPlace(msg, redacted);
-        stashDesensitizedToolResult(sessionKey, textContent, redacted);
+        stashDesensitizedToolResult(textContent, redacted);
         api.logger.info(`[GuardClaw] PII-redacted tool result for transcript (tool=${ctx.toolName ?? "unknown"})`);
         const modified = replaceMessageText(msg, redacted);
         if (modified) return { message: modified };
@@ -871,8 +868,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
           // context and the persisted transcript.
           if (llmResult.level === "S3") {
             const s3Redacted = wasRedacted ? redacted : redactSensitiveInfo(textContent, getLiveConfig().redaction);
-            mutateContentTextInPlace(msg, s3Redacted);
-            stashDesensitizedToolResult(sessionKey, textContent, s3Redacted);
+            stashDesensitizedToolResult(textContent, s3Redacted);
             const modified = replaceMessageText(msg, s3Redacted);
             if (modified) return { message: modified };
           }
@@ -882,8 +878,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
           // to regex redaction so PII doesn't leak to the cloud unmodified.
           const s2Content = llmDesensitized ?? redactSensitiveInfo(textContent, getLiveConfig().redaction);
           if (s2Content !== textContent) {
-            mutateContentTextInPlace(msg, s2Content);
-            stashDesensitizedToolResult(sessionKey, textContent, s2Content);
+            stashDesensitizedToolResult(textContent, s2Content);
             const modified = replaceMessageText(msg, s2Content);
             if (modified) return { message: modified };
           }
@@ -899,7 +894,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("before_message_write", (event, ctx) => {
     try {
-      const sessionKey = ctx.sessionKey ?? "";
+      const sessionKey = resolveHookSessionKey(ctx);
       if (!sessionKey) return;
 
       const msg = event.message;
@@ -1004,7 +999,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("session_end", async (event, ctx) => {
     try {
-      const sessionKey = event.sessionKey ?? ctx.sessionKey;
+      const sessionKey = event.sessionKey ?? resolveHookSessionKey(ctx);
       if (!sessionKey) return;
 
       const wasPrivate = isSessionMarkedPrivate(sessionKey);
@@ -1043,7 +1038,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("llm_output", async (event, ctx) => {
     try {
-      const sessionKey = ctx.sessionKey ?? event.sessionId ?? "";
+      const sessionKey = resolveHookSessionKey(ctx) || event.sessionId || "";
       api.logger.info(`[GuardClaw] llm_output fired: session=${sessionKey} model=${event.model} usage=${JSON.stringify(event.usage)}`);
       const collector = getGlobalCollector();
       if (!collector) return;
@@ -1074,8 +1069,34 @@ export function registerHooks(api: OpenClawPluginApi): void {
   // =========================================================================
   api.on("llm_input", async (event, ctx) => {
     try {
-      const sessionKey = ctx.sessionKey ?? event.sessionId ?? "";
+      const sessionKey = resolveHookSessionKey(ctx) || event.sessionId || "";
       const routeLevel = getSessionRouteLevel(sessionKey);
+
+      // ── DIAGNOSTIC: dump actual message content going to the LLM ──
+      if (Array.isArray(event.historyMessages)) {
+        for (let i = 0; i < event.historyMessages.length; i++) {
+          const m = event.historyMessages[i] as Record<string, unknown> | undefined;
+          if (!m) continue;
+          const role = m.role as string | undefined;
+          if (role === "toolResult" || role === "tool") {
+            const raw = typeof m.content === "string"
+              ? m.content
+              : Array.isArray(m.content)
+                ? (m.content as Array<Record<string, unknown>>)
+                    .filter((p) => p.type === "text")
+                    .map((p) => p.text as string)
+                    .join("")
+                : JSON.stringify(m.content);
+            const first500 = raw.slice(0, 500);
+            const hasPII = /何涛|张伟|李强|王芳|刘洋|陈明|林峰|赵磊|周杰|吴敏|孙浩|马丽/.test(raw);
+            const hasRedacted = raw.includes("[REDACTED:");
+            api.logger.warn(
+              `[GuardClaw][DIAG-LLM-INPUT] msg[${i}] role=${role} hasPII=${hasPII} hasRedacted=${hasRedacted} len=${raw.length} provider=${event.provider} model=${event.model} sample="${first500}"`,
+            );
+          }
+        }
+      }
+
       if (routeLevel === "S3") return;
 
       const estimateTokens = (s: string | undefined) => Math.ceil((s?.length ?? 0) / 4);
@@ -1129,7 +1150,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
       const pipeline = getGlobalPipeline();
       if (!pipeline) return;
 
-      const sessionKey = ctx.sessionKey ?? "";
+      const sessionKey = resolveHookSessionKey(ctx);
       const decision = await pipeline.run(
         "onUserMessage",
         { checkpoint: "onUserMessage", message: content, sessionKey },
@@ -1141,7 +1162,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
         return { cancel: true };
       }
       if (decision.level === "S2") {
-        const desenResult = await desensitizeWithLocalModel(content, privacyConfig, ctx.sessionKey);
+        const desenResult = await desensitizeWithLocalModel(content, privacyConfig, resolveHookSessionKey(ctx) || undefined);
         if (desenResult.failed) {
           api.logger.warn("[GuardClaw] S2 desensitization failed — cancelling outbound message to prevent PII leak");
           return { cancel: true };
@@ -1159,7 +1180,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
   api.on("before_agent_start", async (event, ctx) => {
     try {
       const { prompt } = event;
-      const sessionKey = ctx.sessionKey ?? "";
+      const sessionKey = resolveHookSessionKey(ctx);
       if (!sessionKey.includes(":subagent:") || !prompt?.trim()) return;
 
       const privacyConfig = getLiveConfig();
@@ -1214,26 +1235,13 @@ export function registerHooks(api: OpenClawPluginApi): void {
           };
         }
 
-        const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
-        const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
-        const subDefaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
         const subTargetModel = decision.target?.model;
-        const subActualProvider = decision.target?.originalProvider
-          ?? (subTargetModel ? resolveOriginalProvider(api.config as Record<string, unknown>, subTargetModel, subDefaultProvider) : subDefaultProvider);
-
-        const providerConfig = api.config.models?.providers?.[subActualProvider];
-        if (providerConfig) {
-          const pc = providerConfig as Record<string, unknown>;
-          const providerApi = (pc.api as string) ?? undefined;
-          stashOriginalProvider(sessionKey, {
-            baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(subActualProvider, providerApi),
-            apiKey: (pc.apiKey as string) ?? "",
-            provider: subActualProvider,
-            api: providerApi,
-          });
-        }
-
         if (subTargetModel) {
+          const subDefaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
+          const subPrimaryModel = (subDefaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
+          const subDefaultProvider = (subDefaults?.provider as string) || subPrimaryModel.split("/")[0] || "openai";
+          const subActualProvider = decision.target?.originalProvider
+            ?? resolveOriginalProvider(api.config as Record<string, unknown>, subTargetModel, subDefaultProvider);
           ensureModelMirrored(
             api.config as Record<string, unknown>,
             subTargetModel,
@@ -1271,45 +1279,18 @@ export function registerHooks(api: OpenClawPluginApi): void {
 // Helpers
 // ==========================================================================
 
-/**
- * Mutate the text inside a message's content array in-place.
- *
- * pi-agent-core's agent loop and OpenClaw's session guard share the same
- * content array/element references (shallow copy via object spread preserves
- * nested references).  By mutating the text property of content parts
- * directly, the desensitized value propagates to the in-memory context
- * that the LLM sees on the CURRENT turn — not just the persisted transcript.
- *
- * This is the primary desensitization mechanism for tool results in the
- * S2-proxy flow.  The proxy stash serves as defense-in-depth fallback
- * for the rare case where truncation breaks the reference chain.
- */
-function mutateContentTextInPlace(msg: unknown, newText: string): void {
-  if (!msg || typeof msg !== "object") return;
-  const m = msg as Record<string, unknown>;
-  if (typeof m.content === "string") {
-    m.content = newText;
-    return;
-  }
-  if (Array.isArray(m.content)) {
-    let replaced = false;
-    for (const part of m.content as Array<Record<string, unknown>>) {
-      if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
-        if (!replaced) {
-          part.text = newText;
-          replaced = true;
-        } else {
-          part.text = "";
-        }
-      }
-    }
-  }
-}
-
 function shouldSkipMessage(msg: string): boolean {
   if (msg.includes("[REDACTED:") || msg.startsWith("[SYSTEM]")) return true;
-  if (/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(msg)) return true;
+  // OpenClaw prepends timestamps like "[Thu 2026-03-19 20:19 GMT+8] ..." to user
+  // messages. Only skip if the ENTIRE message is a bare timestamp (no real content).
+  const stripped = msg.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}[^\]]*\]\s*/, "");
+  if (stripped.length === 0) return true;
   return false;
+}
+
+/** Strip OpenClaw's timestamp prefix from a user message, if present. */
+function stripTimestampPrefix(msg: string): string {
+  return msg.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}[^\]]*\]\s*/, "");
 }
 
 /**

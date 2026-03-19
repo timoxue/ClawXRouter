@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { guardClawConfigSchema, defaultPrivacyConfig } from "./src/config-schema.js";
 import { registerHooks } from "./src/hooks.js";
 import { guardClawPrivacyProvider, setActiveProxy, mirrorAllProviderModels, collectTierModelIds, ensureModelMirrored } from "./src/provider.js";
-import { startPrivacyProxy, setDefaultProviderTarget } from "./src/privacy-proxy.js";
+import { startPrivacyProxy, setDefaultProviderTarget, registerModelTarget } from "./src/privacy-proxy.js";
 import { RouterPipeline, setGlobalPipeline } from "./src/router-pipeline.js";
 import { privacyRouter } from "./src/routers/privacy.js";
 import { tokenSaverRouter } from "./src/routers/token-saver.js";
@@ -159,10 +159,8 @@ const plugin = {
     const mirroredIds = new Set(mirroredModels.map((m) => (m as Record<string, unknown>).id));
     for (const { provider: tierProv, modelId: tierModel } of tierModels) {
       if (mirroredIds.has(tierModel)) continue;
-      // Look up the model in its provider; if not found, create a fallback
-      // entry with properties from that provider's first model so that
-      // contextWindow / maxTokens / reasoning match the direct route.
-      const tierProvModels = (models.providers?.[tierProv] as Record<string, unknown> | undefined)?.models;
+      const tierProvConfig = models.providers?.[tierProv] as Record<string, unknown> | undefined;
+      const tierProvModels = tierProvConfig?.models;
       let entry: Record<string, unknown> | undefined;
       if (Array.isArray(tierProvModels)) {
         const found = tierProvModels.find((m: unknown) => (m as Record<string, unknown>).id === tierModel);
@@ -181,6 +179,14 @@ const plugin = {
       }
       mirroredModels.push(entry);
       mirroredIds.add(tierModel);
+      if (tierProvConfig) {
+        registerModelTarget(tierModel, {
+          baseUrl: (tierProvConfig.baseUrl as string) ?? resolveDefaultBaseUrl(tierProv, tierProvConfig.api as string | undefined),
+          apiKey: (tierProvConfig.apiKey as string) ?? "",
+          provider: tierProv,
+          api: tierProvConfig.api as string | undefined,
+        });
+      }
     }
 
     const privacyProviderEntry = {
