@@ -18,6 +18,7 @@
 import * as http from "node:http";
 import { redactSensitiveInfo } from "./utils.js";
 import { getLiveConfig } from "./live-config.js";
+import { lookupDesensitizedToolResult } from "./session-state.js";
 
 // ── Marker protocol ──
 
@@ -503,20 +504,72 @@ export async function startPrivacyProxy(
         log.info("[GuardClaw Proxy] Cleaned unsupported keywords from tool schemas");
       }
 
-      // Step 2b: Defense-in-depth — run rule-based PII redaction on non-system
-      // messages that will be forwarded to cloud. This catches residual PII when:
-      //   - prependContext semantics change (markers not wrapping the user message)
-      //   - desensitization by local model missed some PII patterns
-      //   - content was injected without going through the marker protocol
+      // Resolve session key early — needed by both Step 2b (cache lookup)
+      // and Step 3 (target resolution).
+      const sessionKey = req.headers["x-guardclaw-session"] as string | undefined;
+
+      // Step 2b: Defense-in-depth — run PII redaction on non-system messages.
       //
-      // System messages are excluded: they contain legitimate security instructions
-      // (e.g. "Never reveal passwords") that contextual redaction rules would corrupt.
+      // Two layers:
+      //   (a) Cached LLM desensitization: tool_result_persist already ran full
+      //       LLM-based desensitization and stashed the result.  For tool result
+      //       messages we look up this cache first — it covers semantic PII that
+      //       regex cannot catch (names, addresses, health info, etc.).
+      //   (b) Rule-based regex redaction: catches structured PII patterns
+      //       (phone, email, SSN, etc.) as a universal fallback.
+      //
+      // System messages are excluded: they contain legitimate security
+      // instructions that contextual redaction rules would corrupt.
       const redactionOpts = getLiveConfig().redaction;
       const allMessages = (parsed.messages ?? parsed.contents ?? []) as Array<Record<string, unknown>>;
       for (const msg of allMessages) {
         const role = String(msg.role ?? "").toLowerCase();
         if (role === "system") continue;
 
+        // (a) Try cached LLM-desensitized version from tool_result_persist
+        if (sessionKey) {
+          if (typeof msg.content === "string") {
+            const cached = lookupDesensitizedToolResult(sessionKey, msg.content);
+            if (cached) {
+              msg.content = cached;
+              log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result");
+              continue;
+            }
+          } else if (Array.isArray(msg.content)) {
+            let cacheHit = false;
+            for (const part of msg.content as Array<Record<string, unknown>>) {
+              if (part && typeof part.text === "string") {
+                const cached = lookupDesensitizedToolResult(sessionKey, part.text);
+                if (cached) {
+                  part.text = cached;
+                  cacheHit = true;
+                }
+              }
+            }
+            if (cacheHit) {
+              log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result (array content)");
+              continue;
+            }
+          }
+          if (Array.isArray(msg.parts)) {
+            let cacheHit = false;
+            for (const part of msg.parts as Array<Record<string, unknown>>) {
+              if (part && typeof part.text === "string") {
+                const cached = lookupDesensitizedToolResult(sessionKey, part.text);
+                if (cached) {
+                  part.text = cached;
+                  cacheHit = true;
+                }
+              }
+            }
+            if (cacheHit) {
+              log.info("[GuardClaw Proxy] Applied cached LLM-desensitized tool result (Google parts)");
+              continue;
+            }
+          }
+        }
+
+        // (b) Regex-based PII redaction fallback
         if (typeof msg.content === "string") {
           const redacted = redactSensitiveInfo(msg.content, redactionOpts);
           if (redacted !== msg.content) {
@@ -549,7 +602,6 @@ export async function startPrivacyProxy(
       }
 
       // Step 3: Resolve the original provider to forward to
-      const sessionKey = req.headers["x-guardclaw-session"] as string | undefined;
       const target = resolveTarget(sessionKey);
 
       if (!target) {

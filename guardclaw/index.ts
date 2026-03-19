@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { guardClawConfigSchema, defaultPrivacyConfig } from "./src/config-schema.js";
 import { registerHooks } from "./src/hooks.js";
-import { guardClawPrivacyProvider, setActiveProxy, mirrorAllProviderModels } from "./src/provider.js";
+import { guardClawPrivacyProvider, setActiveProxy, mirrorAllProviderModels, collectTierModelIds, ensureModelMirrored } from "./src/provider.js";
 import { startPrivacyProxy, setDefaultProviderTarget } from "./src/privacy-proxy.js";
 import { RouterPipeline, setGlobalPipeline } from "./src/router-pipeline.js";
 import { privacyRouter } from "./src/routers/privacy.js";
@@ -148,21 +148,57 @@ const plugin = {
     // For Anthropic-native, we match the API so the SDK sends the right format.
     const proxyApi = resolveProxyApi(originalApi);
 
+    // Phase 1a: mirror all models explicitly listed in provider configs
+    const mirroredModels = mirrorAllProviderModels(
+      api.config as { models?: { providers?: Record<string, { models?: unknown }> } },
+    );
+
+    // Phase 1b: also pre-register models referenced by router tier configs
+    // (e.g. token-saver tiers) that may not appear in any provider's models list
+    const tierModels = collectTierModelIds(resolvedPluginConfig);
+    const mirroredIds = new Set(mirroredModels.map((m) => (m as Record<string, unknown>).id));
+    for (const { provider: tierProv, modelId: tierModel } of tierModels) {
+      if (mirroredIds.has(tierModel)) continue;
+      // Look up the model in its provider; if not found, create a fallback
+      // entry with properties from that provider's first model so that
+      // contextWindow / maxTokens / reasoning match the direct route.
+      const tierProvModels = (models.providers?.[tierProv] as Record<string, unknown> | undefined)?.models;
+      let entry: Record<string, unknown> | undefined;
+      if (Array.isArray(tierProvModels)) {
+        const found = tierProvModels.find((m: unknown) => (m as Record<string, unknown>).id === tierModel);
+        if (found) entry = { ...(found as Record<string, unknown>) };
+      }
+      if (!entry) {
+        const firstModel = Array.isArray(tierProvModels) && tierProvModels.length > 0
+          ? tierProvModels[0] as Record<string, unknown>
+          : null;
+        entry = {
+          id: tierModel,
+          name: tierModel,
+          ...(firstModel?.contextWindow != null ? { contextWindow: firstModel.contextWindow } : {}),
+          ...(firstModel?.maxTokens != null ? { maxTokens: firstModel.maxTokens } : {}),
+        };
+      }
+      mirroredModels.push(entry);
+      mirroredIds.add(tierModel);
+    }
+
     const privacyProviderEntry = {
       baseUrl: `http://127.0.0.1:${proxyPort}/v1`,
       api: proxyApi,
       apiKey: "guardclaw-proxy-handles-auth",
-      models: mirrorAllProviderModels(api.config as { models?: { providers?: Record<string, { models?: unknown }> } }),
+      models: mirroredModels,
     };
     models.providers["guardclaw-privacy"] = privacyProviderEntry;
 
-    // The gateway's runtimeConfigSnapshot (returned by loadConfig()) is a
-    // structuredClone of the config passed to plugins.  Modifications to
-    // api.config therefore don't propagate to it.  Patch the snapshot so
+    // Patch the runtime config snapshot (structuredClone of api.config) so
     // that model resolution inside the embedded agent runner can find the
     // guardclaw-privacy virtual provider.
+    const runtimeLoadConfig = (): Record<string, unknown> | undefined => {
+      try { return api.runtime.config.loadConfig(); } catch { return undefined; }
+    };
     try {
-      const runtimeCfg = api.runtime.config.loadConfig();
+      const runtimeCfg = runtimeLoadConfig();
       if (runtimeCfg && runtimeCfg !== api.config) {
         if (!runtimeCfg.models) {
           (runtimeCfg as Record<string, unknown>).models = { providers: {} };
@@ -175,54 +211,21 @@ const plugin = {
       // Non-fatal: runtime config patching is best-effort
     }
 
-    // Propagate thinking-level defaults for reasoning models mirrored into
-    // guardclaw-privacy.  The runtime model catalog may not include the
-    // virtual-provider entries, so `resolveThinkingDefault` falls through to
-    // "off" — causing thinking-model output to be stripped.  Injecting a
-    // per-model `params.thinking` entry fixes the lookup.
-    const mirroredModels = privacyProviderEntry.models as Array<Record<string, unknown>>;
-    if (!agentDefaults) {
-      const agts = (api.config as Record<string, unknown>).agents as Record<string, unknown>;
-      if (!agts.defaults) agts.defaults = {};
-    }
-    const ad = (api.config as Record<string, unknown>).agents as Record<string, unknown>;
-    const defs = ad.defaults as Record<string, unknown>;
-    if (!defs.models) defs.models = {};
-    const modelsOverridesRef = defs.models as Record<string, Record<string, unknown>>;
-    for (const m of mirroredModels) {
+    // Propagate thinking + streaming defaults for all mirrored models.
+    // Uses ensureModelMirrored's internal propagateThinkingForModel for
+    // reasoning models; streaming propagation is handled separately below.
+    for (const m of mirroredModels as Array<Record<string, unknown>>) {
       if (m.reasoning === true && typeof m.id === "string") {
-        const proxyModelKey = `guardclaw-privacy/${m.id}`;
-        const existing = modelsOverridesRef[proxyModelKey] ?? {};
-        if (!existing.params || !(existing.params as Record<string, unknown>).thinking) {
-          modelsOverridesRef[proxyModelKey] = {
-            ...existing,
-            params: { ...(existing.params as Record<string, unknown> ?? {}), thinking: "low" },
-          };
-        }
+        ensureModelMirrored(
+          api.config as Record<string, unknown>,
+          m.id as string,
+          defaultProvider,
+          runtimeLoadConfig,
+        );
       }
     }
-    // Also patch runtimeConfig thinking defaults
-    try {
-      const runtimeCfg2 = api.runtime.config.loadConfig();
-      if (runtimeCfg2) {
-        const rtAgts = (runtimeCfg2 as Record<string, unknown>).agents as Record<string, unknown> | undefined;
-        const rtDefs = (rtAgts?.defaults ?? {}) as Record<string, unknown>;
-        if (!rtDefs.models) rtDefs.models = {};
-        const rtMO = rtDefs.models as Record<string, Record<string, unknown>>;
-        for (const m of mirroredModels) {
-          if (m.reasoning === true && typeof m.id === "string") {
-            const pk = `guardclaw-privacy/${m.id}`;
-            const ex = rtMO[pk] ?? {};
-            if (!ex.params || !(ex.params as Record<string, unknown>).thinking) {
-              rtMO[pk] = { ...ex, params: { ...(ex.params as Record<string, unknown> ?? {}), thinking: "low" } };
-            }
-          }
-        }
-      }
-    } catch { /* best-effort */ }
 
-    // Propagate streaming=false to guardclaw-privacy models so the agent
-    // SDK uses non-streaming HTTP calls through the proxy.
+    // Propagate streaming=false for models that have it set in agent defaults
     const existingModelsOverrides = (agentDefaults?.models as Record<string, Record<string, unknown>> | undefined) ?? {};
     for (const [key, override] of Object.entries(existingModelsOverrides)) {
       if (override?.streaming === false) {
@@ -233,9 +236,8 @@ const plugin = {
         }
       }
     }
-    // Also patch runtimeConfig's agent defaults
     try {
-      const runtimeCfg = api.runtime.config.loadConfig();
+      const runtimeCfg = runtimeLoadConfig();
       if (runtimeCfg) {
         const rtAgents = (runtimeCfg as Record<string, unknown>).agents as Record<string, unknown> | undefined;
         const rtDefaults = rtAgents?.defaults as Record<string, unknown> | undefined;

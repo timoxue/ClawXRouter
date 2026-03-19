@@ -158,7 +158,14 @@ export type RouterAction = "passthrough" | "redirect" | "transform" | "block";
 export type RouterDecision = {
   level: SensitivityLevel;
   action?: RouterAction;
-  target?: { provider: string; model: string };
+  target?: {
+    provider: string;
+    model: string;
+    /** Set by pipeline merge when the winning provider (guardclaw-privacy) differs
+     *  from the router that originally selected the model (e.g. token-saver → yeysai).
+     *  Used by hooks to stash the correct provider endpoint for the proxy. */
+    originalProvider?: string;
+  };
   /** When action is "transform", the transformed prompt content */
   transformedContent?: string;
   reason?: string;

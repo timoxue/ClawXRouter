@@ -349,9 +349,14 @@ function mergeDecisionsWeighted(items: WeightedDecision[]): RouterDecision {
         i.decision.target?.model,
     );
     if (modelHint) {
+      const hintTarget = modelHint.decision.target!;
       winner = {
         ...winner,
-        target: { ...winner.target, model: modelHint.decision.target!.model },
+        target: {
+          ...winner.target,
+          model: hintTarget.model,
+          originalProvider: hintTarget.provider !== "guardclaw-privacy" ? hintTarget.provider : undefined,
+        },
         reason: [winner.reason, modelHint.decision.reason].filter(Boolean).join("; "),
       };
     }

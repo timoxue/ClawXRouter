@@ -53,6 +53,7 @@ import {
   getSessionRouteLevel,
   startNewLoop,
   getCurrentLoopId,
+  stashDesensitizedToolResult,
 } from "./session-state.js";
 import { detectByRules } from "./rules.js";
 import { isProtectedMemoryPath, redactSensitiveInfo, extractPathsFromParams, resolveDefaultBaseUrl } from "./utils.js";
@@ -64,6 +65,7 @@ import {
 import { getGlobalPipeline } from "./router-pipeline.js";
 import { getGlobalCollector, lookupPricing } from "./token-stats.js";
 import { getLiveConfig } from "./live-config.js";
+import { ensureModelMirrored, resolveOriginalProvider } from "./provider.js";
 
 function getPipelineConfig(): Record<string, unknown> {
   return { privacy: getLiveConfig() };
@@ -302,23 +304,42 @@ export function registerHooks(api: OpenClawPluginApi): void {
         const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
         const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
         const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
-        const providerConfig = api.config.models?.providers?.[defaultProvider];
+
+        // Resolve the REAL provider for the selected model — token-saver may
+        // have picked a model from a different provider than the default.
+        // Prefer originalProvider set by the pipeline merge (exact), fall back
+        // to resolveOriginalProvider (model-list scan) for older decisions.
+        const targetModel = decision.target.model;
+        const actualProvider = decision.target.originalProvider
+          ?? (targetModel ? resolveOriginalProvider(api.config as Record<string, unknown>, targetModel, defaultProvider) : defaultProvider);
+
+        const providerConfig = api.config.models?.providers?.[actualProvider];
         if (providerConfig) {
           const pc = providerConfig as Record<string, unknown>;
           const providerApi = (pc.api as string) ?? undefined;
-          const stashTarget = {
-            baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(defaultProvider, providerApi),
+          stashOriginalProvider(sessionKey, {
+            baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(actualProvider, providerApi),
             apiKey: (pc.apiKey as string) ?? "",
-            provider: defaultProvider,
+            provider: actualProvider,
             api: providerApi,
-          };
-          stashOriginalProvider(sessionKey, stashTarget);
+          });
         }
-        const modelInfo = decision.target.model ? ` (model=${decision.target.model})` : "";
+
+        // JIT: register the model in guardclaw-privacy if not already mirrored
+        if (targetModel) {
+          ensureModelMirrored(
+            api.config as Record<string, unknown>,
+            targetModel,
+            actualProvider,
+            () => { try { return api.runtime.config.loadConfig(); } catch { return undefined; } },
+          );
+        }
+
+        const modelInfo = targetModel ? ` (model=${targetModel})` : "";
         api.logger.info(`[GuardClaw] S2 — routing through privacy proxy${modelInfo} [${decision.routerId}]`);
         return {
           providerOverride: "guardclaw-privacy",
-          ...(decision.target.model ? { modelOverride: decision.target.model } : {}),
+          ...(targetModel ? { modelOverride: targetModel } : {}),
         };
       }
 
@@ -396,19 +417,38 @@ export function registerHooks(api: OpenClawPluginApi): void {
           const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
           const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
           const defaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
-          const providerConfig = api.config.models?.providers?.[defaultProvider];
+
+          const transformModel = decision.target?.model;
+          const transformActualProvider = decision.target?.originalProvider
+            ?? (transformModel ? resolveOriginalProvider(api.config as Record<string, unknown>, transformModel, defaultProvider) : defaultProvider);
+
+          const providerConfig = api.config.models?.providers?.[transformActualProvider];
           if (providerConfig) {
             const pc = providerConfig as Record<string, unknown>;
             const providerApi = (pc.api as string) ?? undefined;
             stashOriginalProvider(sessionKey, {
-              baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(defaultProvider, providerApi),
+              baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(transformActualProvider, providerApi),
               apiKey: (pc.apiKey as string) ?? "",
-              provider: defaultProvider,
+              provider: transformActualProvider,
               api: providerApi,
             });
           }
-          api.logger.info(`[GuardClaw] S2 TRANSFORM — routing through privacy proxy [${decision.routerId}]`);
-          return { providerOverride: "guardclaw-privacy" };
+
+          if (transformModel) {
+            ensureModelMirrored(
+              api.config as Record<string, unknown>,
+              transformModel,
+              transformActualProvider,
+              () => { try { return api.runtime.config.loadConfig(); } catch { return undefined; } },
+            );
+          }
+
+          const transformModelInfo = transformModel ? ` (model=${transformModel})` : "";
+          api.logger.info(`[GuardClaw] S2 TRANSFORM — routing through privacy proxy${transformModelInfo} [${decision.routerId}]`);
+          return {
+            providerOverride: "guardclaw-privacy",
+            ...(transformModel ? { modelOverride: transformModel } : {}),
+          };
         }
 
         // S1 + transform: no sensitive data, let original provider handle it
@@ -751,6 +791,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       if (wasRedacted) {
         if (!detectedSensitive) markSessionAsPrivate(sessionKey, "S2");
+        mutateContentTextInPlace(msg, redacted);
+        stashDesensitizedToolResult(sessionKey, textContent, redacted);
         api.logger.info(`[GuardClaw] PII-redacted tool result for transcript (tool=${ctx.toolName ?? "unknown"})`);
         const modified = replaceMessageText(msg, redacted);
         if (modified) return { message: modified };
@@ -814,6 +856,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
           // context and the persisted transcript.
           if (llmResult.level === "S3") {
             const s3Redacted = wasRedacted ? redacted : redactSensitiveInfo(textContent, getLiveConfig().redaction);
+            mutateContentTextInPlace(msg, s3Redacted);
+            stashDesensitizedToolResult(sessionKey, textContent, s3Redacted);
             const modified = replaceMessageText(msg, s3Redacted);
             if (modified) return { message: modified };
           }
@@ -823,6 +867,8 @@ export function registerHooks(api: OpenClawPluginApi): void {
           // to regex redaction so PII doesn't leak to the cloud unmodified.
           const s2Content = llmDesensitized ?? redactSensitiveInfo(textContent, getLiveConfig().redaction);
           if (s2Content !== textContent) {
+            mutateContentTextInPlace(msg, s2Content);
+            stashDesensitizedToolResult(sessionKey, textContent, s2Content);
             const modified = replaceMessageText(msg, s2Content);
             if (modified) return { message: modified };
           }
@@ -1133,8 +1179,53 @@ export function registerHooks(api: OpenClawPluginApi): void {
           api.logger.warn(`[GuardClaw] Subagent S2 desensitization failed — routing to local ${provider}/${model}`);
           return { providerOverride: provider, modelOverride: model };
         }
-        api.logger.info("[GuardClaw] Subagent S2 — prompt desensitized before forwarding");
-        return { prompt: desenResult.desensitized };
+
+        markSessionAsPrivate(sessionKey, "S2");
+        const s2Policy = privacyCfg.s2Policy ?? "proxy";
+
+        if (s2Policy === "local") {
+          const guardCfg = getGuardAgentConfig(privacyCfg);
+          const defaultProvider = privacyCfg.localModel?.provider ?? "ollama";
+          api.logger.info(`[GuardClaw] Subagent S2 — routing to local ${guardCfg?.provider ?? defaultProvider}`);
+          return {
+            providerOverride: guardCfg?.provider ?? defaultProvider,
+            modelOverride: guardCfg?.modelName ?? privacyCfg.localModel?.model ?? "openbmb/minicpm4.1",
+          };
+        }
+
+        const defaults = api.config.agents?.defaults as Record<string, unknown> | undefined;
+        const primaryModel = (defaults?.model as Record<string, unknown> | undefined)?.primary as string ?? "";
+        const subDefaultProvider = (defaults?.provider as string) || primaryModel.split("/")[0] || "openai";
+        const subTargetModel = decision.target?.model;
+        const subActualProvider = decision.target?.originalProvider
+          ?? (subTargetModel ? resolveOriginalProvider(api.config as Record<string, unknown>, subTargetModel, subDefaultProvider) : subDefaultProvider);
+
+        const providerConfig = api.config.models?.providers?.[subActualProvider];
+        if (providerConfig) {
+          const pc = providerConfig as Record<string, unknown>;
+          const providerApi = (pc.api as string) ?? undefined;
+          stashOriginalProvider(sessionKey, {
+            baseUrl: (pc.baseUrl as string) ?? resolveDefaultBaseUrl(subActualProvider, providerApi),
+            apiKey: (pc.apiKey as string) ?? "",
+            provider: subActualProvider,
+            api: providerApi,
+          });
+        }
+
+        if (subTargetModel) {
+          ensureModelMirrored(
+            api.config as Record<string, unknown>,
+            subTargetModel,
+            subActualProvider,
+            () => { try { return api.runtime.config.loadConfig(); } catch { return undefined; } },
+          );
+        }
+
+        api.logger.info("[GuardClaw] Subagent S2 — routing through privacy proxy");
+        return {
+          prependContext: `${GUARDCLAW_S2_OPEN}\n${desenResult.desensitized}\n${GUARDCLAW_S2_CLOSE}`,
+          providerOverride: "guardclaw-privacy",
+        };
       }
     } catch (err) {
       api.logger.error(`[GuardClaw] Error in before_agent_start hook: ${String(err)}`);
@@ -1158,6 +1249,41 @@ export function registerHooks(api: OpenClawPluginApi): void {
 // ==========================================================================
 // Helpers
 // ==========================================================================
+
+/**
+ * Mutate the text inside a message's content array in-place.
+ *
+ * pi-agent-core's agent loop and OpenClaw's session guard share the same
+ * content array/element references (shallow copy via object spread preserves
+ * nested references).  By mutating the text property of content parts
+ * directly, the desensitized value propagates to the in-memory context
+ * that the LLM sees on the CURRENT turn — not just the persisted transcript.
+ *
+ * This is the primary desensitization mechanism for tool results in the
+ * S2-proxy flow.  The proxy stash serves as defense-in-depth fallback
+ * for the rare case where truncation breaks the reference chain.
+ */
+function mutateContentTextInPlace(msg: unknown, newText: string): void {
+  if (!msg || typeof msg !== "object") return;
+  const m = msg as Record<string, unknown>;
+  if (typeof m.content === "string") {
+    m.content = newText;
+    return;
+  }
+  if (Array.isArray(m.content)) {
+    let replaced = false;
+    for (const part of m.content as Array<Record<string, unknown>>) {
+      if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
+        if (!replaced) {
+          part.text = newText;
+          replaced = true;
+        } else {
+          part.text = "";
+        }
+      }
+    }
+  }
+}
 
 function shouldSkipMessage(msg: string): boolean {
   if (msg.includes("[REDACTED:") || msg.startsWith("[SYSTEM]")) return true;

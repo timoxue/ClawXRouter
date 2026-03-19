@@ -2,12 +2,14 @@
  * GuardClaw Privacy Provider
  *
  * Registers "guardclaw-privacy" as an OpenClaw provider that routes through
- * the local privacy proxy. Inspired by ClawRouter's blockrunProvider pattern.
+ * the local privacy proxy.
  *
- * The provider mirrors all models from the user's configured providers so that
- * `before_model_resolve` can switch providerOverride to "guardclaw-privacy"
- * without changing the model — the proxy transparently forwards to the
- * original provider after stripping PII markers.
+ * Model registration strategy (two-phase):
+ *   Phase 1 (init): mirrorAllProviderModels snapshots all explicitly configured
+ *     models + collectTierModelIds scans router tier configs for additional refs.
+ *   Phase 2 (runtime): ensureModelMirrored is called JIT before each S2-proxy
+ *     return to catch any model the pipeline selected that wasn't in the init
+ *     snapshot (e.g. dynamic models, tier models not in provider lists).
  */
 
 import type { ProxyHandle } from "./privacy-proxy.js";
@@ -18,14 +20,6 @@ export function setActiveProxy(proxy: ProxyHandle): void {
   activeProxy = proxy;
 }
 
-/**
- * Provider plugin definition for the privacy proxy.
- *
- * Follows the same structure as ClawRouter's blockrunProvider:
- *   - id / label / aliases
- *   - auth: [] (proxy handles auth transparently)
- *   - models: dynamically mirrored from the user's real providers
- */
 export const guardClawPrivacyProvider = {
   id: "guardclaw-privacy",
   label: "GuardClaw Privacy Proxy",
@@ -34,12 +28,12 @@ export const guardClawPrivacyProvider = {
   auth: [] as never[],
 };
 
+// ---------------------------------------------------------------------------
+// Phase 1: Init-time model collection
+// ---------------------------------------------------------------------------
+
 /**
  * Mirror all model definitions from every configured provider.
- *
- * This allows `providerOverride: "guardclaw-privacy"` to work with any model
- * the user has configured (openai/gpt-4o, anthropic/claude-sonnet, etc.)
- * without needing to know which provider owns the model at registration time.
  */
 export function mirrorAllProviderModels(
   config: { models?: { providers?: Record<string, { models?: unknown }> } },
@@ -70,4 +64,195 @@ export function mirrorAllProviderModels(
   }
 
   return mirrored;
+}
+
+/**
+ * Scan router tier configs for model IDs that may not be in any provider's
+ * explicit model list.  Returns { provider, modelId } pairs.
+ */
+export function collectTierModelIds(
+  pluginConfig: Record<string, unknown>,
+): Array<{ provider: string; modelId: string }> {
+  const privacy = (pluginConfig?.privacy ?? {}) as Record<string, unknown>;
+  const routers = (privacy.routers ?? {}) as Record<
+    string,
+    { options?: { tiers?: Record<string, { provider?: string; model?: string }> } }
+  >;
+  const result: Array<{ provider: string; modelId: string }> = [];
+
+  for (const reg of Object.values(routers)) {
+    const tiers = reg.options?.tiers;
+    if (!tiers) continue;
+    for (const tier of Object.values(tiers)) {
+      if (tier.provider && tier.model) {
+        result.push({ provider: tier.provider, modelId: tier.model });
+      }
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: JIT (runtime) model registration
+// ---------------------------------------------------------------------------
+
+type ProviderCfg = Record<string, unknown> & {
+  models?: Array<Record<string, unknown>>;
+};
+
+/**
+ * Look up a model definition across all configured providers (excluding
+ * guardclaw-privacy).  Returns the full model object if found, null otherwise.
+ */
+function findModelInProviders(
+  providers: Record<string, ProviderCfg>,
+  modelId: string,
+  preferProvider?: string,
+): Record<string, unknown> | null {
+  const order = preferProvider
+    ? [preferProvider, ...Object.keys(providers).filter((p) => p !== preferProvider && p !== "guardclaw-privacy")]
+    : Object.keys(providers).filter((p) => p !== "guardclaw-privacy");
+
+  for (const provName of order) {
+    const provModels = providers[provName]?.models;
+    if (!Array.isArray(provModels)) continue;
+    const found = provModels.find((m) => (m as Record<string, unknown>).id === modelId);
+    if (found) return { ...(found as Record<string, unknown>) };
+  }
+  return null;
+}
+
+/**
+ * Build a minimal model entry that matches OpenClaw's resolveModelWithRegistry
+ * fallback for the given provider.  This ensures contextWindow / maxTokens /
+ * reasoning align with what the model would get if routed directly.
+ */
+function buildFallbackModelEntry(
+  providers: Record<string, ProviderCfg>,
+  modelId: string,
+  originalProvider: string,
+): Record<string, unknown> {
+  const origModels = providers[originalProvider]?.models;
+  const firstModel =
+    Array.isArray(origModels) && origModels.length > 0
+      ? (origModels[0] as Record<string, unknown>)
+      : null;
+  return {
+    id: modelId,
+    name: modelId,
+    ...(firstModel?.contextWindow != null ? { contextWindow: firstModel.contextWindow } : {}),
+    ...(firstModel?.maxTokens != null ? { maxTokens: firstModel.maxTokens } : {}),
+  };
+}
+
+/**
+ * Ensure `modelId` is registered under the guardclaw-privacy provider.
+ *
+ * Called at decision time (JIT) so that models selected by token-saver or
+ * other routers — which may not have been in the init snapshot — are available
+ * with correct properties before OpenClaw's resolveModel runs.
+ *
+ * Also propagates reasoning/thinking defaults into agents.defaults.models so
+ * thinking-model output isn't stripped.
+ */
+export function ensureModelMirrored(
+  config: Record<string, unknown>,
+  modelId: string,
+  originalProvider: string,
+  runtimeLoadConfig?: () => Record<string, unknown> | undefined,
+): void {
+  const providers = (config as Record<string, unknown> & { models?: { providers?: Record<string, ProviderCfg> } })
+    .models?.providers;
+  if (!providers?.["guardclaw-privacy"]) return;
+
+  const privacyModels = providers["guardclaw-privacy"].models;
+  if (!Array.isArray(privacyModels)) return;
+
+  const alreadyMirrored = privacyModels.some((m) => (m as Record<string, unknown>).id === modelId);
+
+  let source: Record<string, unknown>;
+  if (alreadyMirrored) {
+    source = privacyModels.find((m) => (m as Record<string, unknown>).id === modelId) as Record<string, unknown>;
+  } else {
+    source =
+      findModelInProviders(providers, modelId, originalProvider) ??
+      buildFallbackModelEntry(providers, modelId, originalProvider);
+    privacyModels.push(source);
+  }
+
+  // Always propagate reasoning → thinking default (idempotent)
+  if (source.reasoning === true) {
+    propagateThinkingForModel(config, modelId);
+  }
+
+  // Patch the runtime config snapshot (structuredClone of api.config)
+  if (runtimeLoadConfig) {
+    try {
+      const rtCfg = runtimeLoadConfig();
+      if (rtCfg) {
+        if (!alreadyMirrored) {
+          const rtProviders = (rtCfg as Record<string, unknown> & { models?: { providers?: Record<string, ProviderCfg> } })
+            .models?.providers;
+          const rtModels = rtProviders?.["guardclaw-privacy"]?.models;
+          if (Array.isArray(rtModels) && !rtModels.some((m) => (m as Record<string, unknown>).id === modelId)) {
+            rtModels.push(source);
+          }
+        }
+        if (source.reasoning === true) {
+          propagateThinkingForModel(rtCfg, modelId);
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+}
+
+/**
+ * Set `params.thinking: "low"` for a guardclaw-privacy model so the agent SDK
+ * enables thinking mode for reasoning models routed through the proxy.
+ */
+function propagateThinkingForModel(
+  config: Record<string, unknown>,
+  modelId: string,
+): void {
+  const agents = (config as Record<string, unknown> & { agents?: Record<string, unknown> }).agents;
+  const defaults = agents?.defaults as Record<string, unknown> | undefined;
+  if (!defaults) return;
+  if (!defaults.models) defaults.models = {};
+  const modelsOverrides = defaults.models as Record<string, Record<string, unknown>>;
+  const proxyKey = `guardclaw-privacy/${modelId}`;
+  const existing = modelsOverrides[proxyKey] ?? {};
+  if (!existing.params || !(existing.params as Record<string, unknown>).thinking) {
+    modelsOverrides[proxyKey] = {
+      ...existing,
+      params: { ...(existing.params as Record<string, unknown> ?? {}), thinking: "low" },
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for hooks.ts: resolve original provider for a model
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a model ID selected by the pipeline (e.g. from token-saver), find
+ * which real provider owns it.  Returns the provider name, or the supplied
+ * fallback if no explicit match is found.
+ */
+export function resolveOriginalProvider(
+  config: Record<string, unknown>,
+  modelId: string,
+  fallbackProvider: string,
+): string {
+  const providers = (config as Record<string, unknown> & { models?: { providers?: Record<string, ProviderCfg> } })
+    .models?.providers ?? {};
+
+  for (const [provName, provCfg] of Object.entries(providers)) {
+    if (provName === "guardclaw-privacy") continue;
+    const provModels = provCfg.models;
+    if (!Array.isArray(provModels)) continue;
+    if (provModels.some((m) => (m as Record<string, unknown>).id === modelId)) {
+      return provName;
+    }
+  }
+  return fallbackProvider;
 }

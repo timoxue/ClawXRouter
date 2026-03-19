@@ -285,6 +285,7 @@ export function clearSessionState(sessionKey: string): void {
   activeLocalRouting.delete(sessionKey);
   pendingDetections.delete(sessionKey);
   lastInputEstimates.delete(sessionKey);
+  clearToolResultCache(sessionKey);
   const loopId = currentLoopIds.get(sessionKey);
   if (loopId) loopMetas.delete(loopId);
   currentLoopIds.delete(sessionKey);
@@ -375,6 +376,44 @@ export function clearActiveLocalRouting(sessionKey: string): void {
 
 export function isActiveLocalRouting(sessionKey: string): boolean {
   return activeLocalRouting.has(sessionKey);
+}
+
+// ── Tool result desensitization cache ────────────────────────────────────
+// Defense-in-depth for the privacy proxy.  The primary desensitization
+// mechanism is in-place mutation of the content array elements (shared
+// references with pi-agent-core's currentContext.messages).  This cache
+// provides a fallback for the rare case where the reference chain is
+// broken (e.g. tool result truncation creates a new content array).
+// Cleaned up automatically when the session ends (clearSessionState).
+
+const toolResultDesensitizationCache = new Map<string, Map<string, string>>();
+
+function contentFingerprint(content: string): string {
+  return `${content.length}:${content.slice(0, 200)}`;
+}
+
+export function stashDesensitizedToolResult(
+  sessionKey: string,
+  originalContent: string,
+  desensitized: string,
+): void {
+  let map = toolResultDesensitizationCache.get(sessionKey);
+  if (!map) {
+    map = new Map();
+    toolResultDesensitizationCache.set(sessionKey, map);
+  }
+  map.set(contentFingerprint(originalContent), desensitized);
+}
+
+export function lookupDesensitizedToolResult(
+  sessionKey: string,
+  content: string,
+): string | undefined {
+  return toolResultDesensitizationCache.get(sessionKey)?.get(contentFingerprint(content));
+}
+
+function clearToolResultCache(sessionKey: string): void {
+  toolResultDesensitizationCache.delete(sessionKey);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
