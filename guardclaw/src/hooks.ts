@@ -54,6 +54,7 @@ import {
   startNewLoop,
   getCurrentLoopId,
   stashDesensitizedToolResult,
+  setLoopRouting,
 } from "./session-state.js";
 import { detectByRules } from "./rules.js";
 import { isProtectedMemoryPath, redactSensitiveInfo, extractPathsFromParams, resolveDefaultBaseUrl } from "./utils.js";
@@ -214,11 +215,18 @@ export function registerHooks(api: OpenClawPluginApi): void {
       recordDetection(sessionKey, decision.level, "onUserMessage", decision.reason,
         decision.routerId, decision.action, decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined);
       setSessionRouteLevel(sessionKey, decision.level);
+
+      if (decision.routerId === "token-saver" && decision.reason?.startsWith("tier=")) {
+        const tier = decision.reason.split("=")[1];
+        setLoopRouting(sessionKey, tier,
+          decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined,
+          decision.action ?? "passthrough");
+      }
       api.logger.info(`[GuardClaw] ROUTE: session=${sessionKey} level=${decision.level} action=${decision.action} target=${JSON.stringify(decision.target)} reason=${decision.reason}`);
 
       if (decision.action !== "block") {
         notifyGenerating(sessionKey, "onUserMessage", decision.level, decision.routerId, decision.action,
-          decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined);
+          decision.target ? `${decision.target.provider}/${decision.target.model}` : undefined, decision.reason);
       }
 
       if (decision.level === "S1" && decision.action === "passthrough") {
@@ -541,7 +549,10 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
       const typedParams = params as Record<string, unknown>;
       const privacyConfig = getLiveConfig();
-      if (!privacyConfig.enabled) return;
+      if (!privacyConfig.enabled || !privacyConfig.routers?.privacy?.enabled) {
+        recordDetection(sessionKey, "S1", "onToolCallProposed", `tool: ${toolName}`);
+        return;
+      }
       const baseDir = privacyConfig.session?.baseDir ?? "~/.openclaw";
 
       // File-access guard for cloud models only — local models (Guard Agent
@@ -712,6 +723,10 @@ export function registerHooks(api: OpenClawPluginApi): void {
       // This sync hook is the single handler for tool result privacy:
       // it is the only hook that can modify the persisted transcript.
       const privacyConfig = getLiveConfig();
+      if (!privacyConfig.enabled || !privacyConfig.routers?.privacy?.enabled) {
+        recordDetection(sessionKey, "S1", "onToolCallExecuted", `result: ${ctx.toolName ?? "unknown"}`);
+        return;
+      }
 
       // Snapshot the turn-level privacy state BEFORE detection runs.
       // markSessionAsPrivate() updates currentTurnLevel immediately, so
@@ -1041,6 +1056,12 @@ export function registerHooks(api: OpenClawPluginApi): void {
         loopId: getCurrentLoopId(sessionKey),
       });
       if (sessionKey) {
+        const u = event.usage ?? {};
+        const inputTok = u.inputTokens ?? u.prompt_tokens ?? 0;
+        const outputTok = u.outputTokens ?? u.completion_tokens ?? 0;
+        const cacheTok = u.cacheReadTokens ?? u.cache_read_input_tokens ?? 0;
+        const summary = `${event.model ?? "unknown"} — in:${inputTok} out:${outputTok}` + (cacheTok ? ` cache:${cacheTok}` : "");
+        recordDetection(sessionKey, "S1", "onLlmOutput" as any, summary);
         notifyLlmComplete(sessionKey, "onUserMessage");
       }
     } catch (err) {

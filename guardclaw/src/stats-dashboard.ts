@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getGlobalCollector, onTokenUpdate } from "./token-stats.js";
 import { getLiveConfig, updateLiveConfig } from "./live-config.js";
-import { getAllSessionStates, getSessionState, getLastInputEstimate, onDetection } from "./session-state.js";
+import { getAllSessionStates, getSessionState, getLastInputEstimate, onDetection, getLoopMeta, clearAllSessionStates } from "./session-state.js";
 import { loadPrompt, readPromptFromDisk, writePrompt } from "./prompt-loader.js";
 import { DEFAULT_JUDGE_PROMPT } from "./routers/token-saver.js";
 import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "./local-model.js";
@@ -124,7 +124,18 @@ export async function statsHttpHandler(
   if (req.method === "GET" && sub === "/api/sessions") {
     const collector = getGlobalCollector();
     if (!collector) { json(res, { error: "not initialized" }, 503); return true; }
-    json(res, collector.getSessionStats());
+    const sessions = collector.getSessionStats().map((s: any) => {
+      if (s.loopId) {
+        const meta = getLoopMeta(s.loopId);
+        if (meta) {
+          s.routingTier = meta.routingTier;
+          s.routedModel = meta.routedModel;
+          s.routerAction = meta.routerAction;
+        }
+      }
+      return s;
+    });
+    json(res, sessions);
     return true;
   }
 
@@ -132,6 +143,7 @@ export async function statsHttpHandler(
     const collector = getGlobalCollector();
     if (!collector) { json(res, { error: "not initialized" }, 503); return true; }
     await collector.reset();
+    clearAllSessionStates();
     json(res, { ok: true });
     return true;
   }
@@ -197,7 +209,22 @@ export async function statsHttpHandler(
       const allSessions = collector.getSessionStats();
       const sessStats = allSessions.find((s: any) => s.loopId === filterLoopId && s.sessionKey === key);
       if (sessStats) {
+        const meta = getLoopMeta(filterLoopId);
+        if (meta) { (sessStats as any).routingTier = meta.routingTier; (sessStats as any).routedModel = meta.routedModel; (sessStats as any).routerAction = meta.routerAction; }
         try { res.write(`event: token_update\ndata: ${JSON.stringify(sessStats)}\n\n`); } catch { /* */ }
+      }
+    }
+    if (filterLoopId) {
+      const loopMeta = getLoopMeta(filterLoopId);
+      if (loopMeta?.routingTier) {
+        const routingEvt = {
+          sessionKey: key, timestamp: Date.now(), level: "S1" as const,
+          checkpoint: "onUserMessage", phase: "generating",
+          routerId: "token-saver", action: loopMeta.routerAction ?? "redirect",
+          target: loopMeta.routedModel, reason: `tier=${loopMeta.routingTier}`,
+          loopId: filterLoopId,
+        };
+        try { res.write(`event: generating\ndata: ${JSON.stringify(routingEvt)}\n\n`); } catch { /* */ }
       }
     }
     const lastEstimate = getLastInputEstimate(key);
@@ -225,7 +252,12 @@ export async function statsHttpHandler(
     const unsubToken = onTokenUpdate((evt) => {
       if (evt.sessionKey !== key) return;
       if (filterLoopId && evt.loopId !== filterLoopId) return;
-      try { res.write(`event: token_update\ndata: ${JSON.stringify(evt.stats)}\n\n`); } catch { /* connection may be closed */ }
+      const payload = { ...evt.stats } as any;
+      if (evt.loopId) {
+        const m = getLoopMeta(evt.loopId);
+        if (m) { payload.routingTier = m.routingTier; payload.routedModel = m.routedModel; payload.routerAction = m.routerAction; }
+      }
+      try { res.write(`event: token_update\ndata: ${JSON.stringify(payload)}\n\n`); } catch { /* connection may be closed */ }
     });
     req.on("close", () => { unsubDetection(); unsubToken(); });
     return true;
@@ -242,10 +274,11 @@ export async function statsHttpHandler(
     (res as any).flushHeaders?.();
     res.write(`event: ping\ndata: {}\n\n`);
     const unsub = onDetection((evt) => {
-      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, loopId: evt.loopId, phase: evt.phase ?? "complete" })}\n\n`); } catch { /* ignore */ }
+      const meta = evt.loopId ? getLoopMeta(evt.loopId) : undefined;
+      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, loopId: evt.loopId, userMessagePreview: meta?.userMessagePreview, phase: evt.phase ?? "complete" })}\n\n`); } catch { /* ignore */ }
     });
     const unsubTok = onTokenUpdate((evt) => {
-      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, loopId: evt.loopId, phase: "token_update" })}\n\n`); } catch { /* ignore */ }
+      try { res.write(`event: activity\ndata: ${JSON.stringify({ sessionKey: evt.sessionKey, loopId: evt.loopId, userMessagePreview: evt.stats?.userMessagePreview, phase: "token_update" })}\n\n`); } catch { /* ignore */ }
     });
     req.on("close", () => { unsub(); unsubTok(); });
     return true;
@@ -771,8 +804,8 @@ function dashboardHtml(): string {
 <div id="sessions-panel" class="panel">
   <div id="session-list">
     <table class="data-table">
-      <thead><tr><th data-i18n="sessions.message">Message</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.cloud">Cloud</th><th data-i18n="sessions.local">Local</th><th data-i18n="sessions.redacted">Redacted</th><th>Router</th><th>Task</th><th data-i18n="sessions.total">Total</th><th data-i18n="sessions.cost">Cost</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.time">Time</th></tr></thead>
-      <tbody id="sessions-body"><tr><td colspan="11" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
+      <thead><tr><th data-i18n="sessions.message">Message</th><th data-i18n="sessions.level">Level</th><th data-i18n="sessions.input">Input</th><th data-i18n="sessions.output">Output</th><th data-i18n="sessions.cache">Cache</th><th data-i18n="sessions.cloud_cost">Cloud Model Cost</th><th data-i18n="sessions.requests">Requests</th><th data-i18n="sessions.time">Time</th></tr></thead>
+      <tbody id="sessions-body"><tr><td colspan="8" class="empty-state" data-i18n="sessions.empty">No session data yet</td></tr></tbody>
     </table>
   </div>
   <div id="session-detail" style="display:none">
@@ -1303,13 +1336,19 @@ var T = {
   'table.by_source':{en:'By Source (Router vs Task)',zh:'按来源（路由开销 vs 任务执行）'},
   'table.source':{en:'Source',zh:'来源'},
   'sessions.session':{en:'Session',zh:'会话'},
+  'sessions.message':{en:'Message',zh:'消息'},
   'sessions.level':{en:'Level',zh:'等级'},
   'sessions.cloud':{en:'Cloud',zh:'云端'},
+  'sessions.input':{en:'Input',zh:'输入'},
+  'sessions.output':{en:'Output',zh:'输出'},
+  'sessions.cache':{en:'Cache',zh:'缓存'},
+  'sessions.cloud_cost':{en:'Cloud Model Cost',zh:'云端模型费用'},
   'sessions.local':{en:'Local',zh:'本地'},
   'sessions.redacted':{en:'Redacted',zh:'脱敏'},
   'sessions.cost':{en:'Cost',zh:'费用'},
   'sessions.total':{en:'Total',zh:'总计'},
   'sessions.requests':{en:'Requests',zh:'请求数'},
+  'sessions.time':{en:'Time',zh:'时间'},
   'sessions.last_active':{en:'Last Active',zh:'最近活跃'},
   'sessions.empty':{en:'No session data yet',zh:'暂无会话数据'},
   'sd.back':{en:'Back to Sessions',zh:'返回会话列表'},
@@ -1321,10 +1360,12 @@ var T = {
   'sd.checkpoint.onUserMessage':{en:'User Message',zh:'用户消息'},
   'sd.checkpoint.onToolCallProposed':{en:'Tool Call',zh:'工具调用'},
   'sd.checkpoint.onToolCallExecuted':{en:'Tool Result',zh:'工具结果'},
+  'sd.checkpoint.onLlmOutput':{en:'LLM Output',zh:'模型输出'},
   'sd.router':{en:'Router',zh:'路由'},
   'sd.target':{en:'Target',zh:'目标'},
   'sd.reason':{en:'Reason',zh:'原因'},
   'sd.highest_level':{en:'Highest Level',zh:'最高等级'},
+  'sd.routing':{en:'Routing',zh:'路由决策'},
   'sd.total_steps':{en:'Steps',zh:'步数'},
   'sd.total_tokens':{en:'Tokens',zh:'Tokens'},
   'sd.requests':{en:'Requests',zh:'请求数'},
@@ -1845,6 +1886,11 @@ async function resetStats() {
     var r = await fetch(BASE + '/reset', { method: 'POST' });
     var body = await r.json();
     if (body.error) throw new Error(body.error);
+    _sessionsList = [];
+    _timelineDetections = [];
+    _pendingLoops.clear();
+    _sessionsResetFlag = true;
+    hideSessionDetail();
     showToast(t('overview.reset_ok'));
     refreshStats();
     refreshSessions();
@@ -1897,16 +1943,21 @@ function totalReqsForSession(s) {
   return s.cloud.requestCount + s.proxy.requestCount;
 }
 
+var _sessionsResetFlag = false;
+
 async function refreshSessions() {
   try {
     var sessions = await fetch(BASE + '/sessions').then(function(r) { return r.json(); });
     var tbody = document.getElementById('sessions-body');
     if (!sessions || !sessions.length) {
-      if (_sessionsList.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="empty-state">' + t('sessions.empty') + '</td></tr>';
+      if (_sessionsResetFlag || _sessionsList.length === 0) {
+        _sessionsList = [];
+        _sessionsResetFlag = false;
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">' + t('sessions.empty') + '</td></tr>';
       }
       return;
     }
+    _sessionsResetFlag = false;
     var apiKeys = {};
     for (var i = 0; i < sessions.length; i++) {
       var k = sessions[i].loopId ? (sessions[i].sessionKey + '::' + sessions[i].loopId) : sessions[i].sessionKey;
@@ -1917,29 +1968,51 @@ async function refreshSessions() {
       if (!apiKeys[ek]) sessions.push(_sessionsList[j]);
     }
     _sessionsList = sessions;
+    var loadingCell = '<span class="detecting-spinner" style="margin-right:4px"></span>';
     tbody.innerHTML = sessions.map(function(s) {
       var label = s.userMessagePreview || s.sessionKey;
       var shortLabel = label.length > 40 ? label.slice(0, 40) + '...' : label;
-      var bs = s.bySource || {};
-      var routerTokens = (bs.router || {}).totalTokens || 0;
-      var taskTokens = (bs.task || {}).totalTokens || 0;
-      var sessCost = (s.cloud.estimatedCost || 0) + (s.proxy.estimatedCost || 0);
       var lid = s.loopId || '';
       var onclick = "showSessionDetail('" + escHtml(s.sessionKey).replace(/'/g, "\\\\'") + "','" + escHtml(lid).replace(/'/g, "\\\\'") + "')";
+      var loopKey = s.loopId ? (s.sessionKey + '::' + s.loopId) : s.sessionKey;
+      var isPending = _pendingLoops.has(loopKey);
+      var inputTok = s.cloud ? s.cloud.inputTokens || 0 : 0;
+      var outputTok = s.cloud ? s.cloud.outputTokens || 0 : 0;
+      var cacheTok = s.cloud ? s.cloud.cacheReadTokens || 0 : 0;
+      var cloudCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
+      if (isPending) {
+        return '<tr onclick="' + onclick + '">' +
+          '<td><span class="session-key" title="' + escHtml(label) + '">' + escHtml(shortLabel) + '</span></td>' +
+          '<td><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></td>' +
+          '<td colspan="5" style="color:var(--text-tertiary);font-style:italic">' + loadingCell + t('sd.generating') + '</td>' +
+          '<td>' + fmtTime(s.firstSeenAt) + '</td>' +
+          '</tr>';
+      }
       return '<tr onclick="' + onclick + '">' +
         '<td><span class="session-key" title="' + escHtml(label) + '">' + escHtml(shortLabel) + '</span></td>' +
         '<td><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></td>' +
-        '<td>' + fmt(s.cloud.totalTokens) + '</td>' +
-        '<td>' + fmt(s.local.totalTokens) + '</td>' +
-        '<td>' + fmt(s.proxy.totalTokens) + '</td>' +
-        '<td>' + fmt(routerTokens) + '</td>' +
-        '<td>' + fmt(taskTokens) + '</td>' +
-        '<td>' + fmt(totalForSession(s)) + '</td>' +
-        '<td>' + fmtCost(sessCost) + '</td>' +
+        '<td>' + fmt(inputTok) + '</td>' +
+        '<td>' + fmt(outputTok) + '</td>' +
+        '<td>' + fmt(cacheTok) + '</td>' +
+        '<td>' + fmtCost(cloudCost) + '</td>' +
         '<td>' + totalReqsForSession(s) + '</td>' +
         '<td>' + fmtTime(s.firstSeenAt) + '</td>' +
         '</tr>';
     }).join('');
+    if (_activeSessionKey) {
+      var activeS = null;
+      for (var ai = 0; ai < _sessionsList.length; ai++) {
+        var as = _sessionsList[ai];
+        if (_activeLoopId) {
+          if (as.sessionKey === _activeSessionKey && as.loopId === _activeLoopId) { activeS = as; break; }
+        } else {
+          if (as.sessionKey === _activeSessionKey) { activeS = as; break; }
+        }
+      }
+      if (activeS) {
+        renderSessionHeader(activeS.userMessagePreview || activeS.sessionKey);
+      }
+    }
   } catch (e) { /* non-critical */ }
 }
 
@@ -1950,6 +2023,7 @@ var _sessionEventSource = null;
 var _sessionPollTimer = null;
 var _timelineDetections = [];
 var _sessionsList = [];
+var _pendingLoops = new Set();
 var _levelRank = { S1: 1, S2: 2, S3: 3 };
 var _sessionHighest = 'S1';
 
@@ -1968,6 +2042,7 @@ function checkpointIcon(cp) {
   if (cp === 'onUserMessage') return '\\u{1F4AC}';
   if (cp === 'onToolCallProposed') return '\\u{1F527}';
   if (cp === 'onToolCallExecuted') return '\\u{1F4CB}';
+  if (cp === 'onLlmOutput') return '\\u{2728}';
   return '\\u{25CF}';
 }
 
@@ -1981,11 +2056,9 @@ function buildTimelineItemHtml(d, idx) {
   var targetHtml = d.target ? '<span class="timeline-target">' + escHtml(d.target) + '</span>' : '';
   var routerHtml = d.routerId ? '<span class="timeline-router">' + escHtml(d.routerId) + '</span>' : '';
 
-  var tierBadge = '';
+  var isTokenSaver = d.routerId === 'token-saver';
   var reasonText = d.reason || '';
-  if (d.routerId === 'token-saver' && reasonText.indexOf('tier=') === 0) {
-    var tier = reasonText.split('=')[1];
-    tierBadge = '<span class="tier-badge tier-' + escHtml(tier) + '">\u26A1 ' + escHtml(tier) + '</span>';
+  if (isTokenSaver && reasonText.indexOf('tier=') === 0) {
     reasonText = '';
   }
   var reasonHtml = reasonText ? '<div class="timeline-reason">' + escHtml(reasonText) + '</div>' : '';
@@ -1997,13 +2070,13 @@ function buildTimelineItemHtml(d, idx) {
         '<span class="timeline-time">' + fmtTime(d.timestamp) + '</span>' +
         '<span class="level-tag level-' + d.level + '">' + d.level + '</span>' +
         '<span class="checkpoint-tag">' + checkpointIcon(d.checkpoint) + ' ' + checkpointLabel(d.checkpoint) + '</span>' +
-        tierBadge +
       '</div>' +
+      (isTokenSaver ? '' :
       '<div class="timeline-meta">' +
         routerHtml +
         (d.action ? '<span class="action-tag ' + actionClass + '">' + escHtml(d.action) + '</span>' : '') +
         targetHtml +
-      '</div>' +
+      '</div>') +
       reasonHtml +
     '</div>' +
   '</div>';
@@ -2108,16 +2181,31 @@ function renderSessionHeader(label) {
       if (si.sessionKey === _activeSessionKey) { s = si; break; }
     }
   }
-  var totalTokens = s ? totalForSession(s) : 0;
+  var level = (s && s.highestLevel) ? s.highestLevel : 'S1';
+  var tierHtml = '';
+  if (s && s.routingTier) {
+    tierHtml = '<div class="sd-stat" id="sd-stat-tier-wrap"><div class="sd-stat-value" id="sd-stat-tier">' +
+      '<span class="tier-badge tier-' + escHtml(s.routingTier) + '">\u26A1 ' + escHtml(s.routingTier) + '</span>' +
+      (s.routedModel ? '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">\u2192 ' + escHtml(s.routedModel) + '</div>' : '') +
+      '</div><div class="sd-stat-label">' + t('sd.routing') + '</div></div>';
+  }
+  var loopKey = _activeLoopId ? (_activeSessionKey + '::' + _activeLoopId) : _activeSessionKey;
+  var isPending = _pendingLoops.has(loopKey);
+  var loadingHtml = '<span class="detecting-spinner" style="width:12px;height:12px"></span>';
+  var inputTok = s && s.cloud ? s.cloud.inputTokens || 0 : 0;
+  var outputTok = s && s.cloud ? s.cloud.outputTokens || 0 : 0;
+  var cacheTok = s && s.cloud ? s.cloud.cacheReadTokens || 0 : 0;
   var totalReqs = s ? totalReqsForSession(s) : 0;
   var totalCost = s ? ((s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0)) : 0;
-  var level = (s && s.highestLevel) ? s.highestLevel : 'S1';
   hdr.innerHTML =
     '<div class="sd-key">' + escHtml(label) + '</div>' +
     '<div class="sd-stat" id="sd-stat-level"><div class="sd-stat-value"><span class="level-tag level-' + level + '">' + level + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div></div>' +
-    '<div class="sd-stat" id="sd-stat-tokens-wrap"><div class="sd-stat-value" id="sd-stat-tokens">' + fmt(totalTokens) + '</div><div class="sd-stat-label">' + t('sd.total_tokens') + '</div></div>' +
-    '<div class="sd-stat" id="sd-stat-cost-wrap"><div class="sd-stat-value" id="sd-stat-cost">' + fmtCost(totalCost) + '</div><div class="sd-stat-label">Cost</div></div>' +
-    '<div class="sd-stat" id="sd-stat-reqs-wrap"><div class="sd-stat-value" id="sd-stat-reqs">' + totalReqs + '</div><div class="sd-stat-label">' + t('sd.requests') + '</div></div>' +
+    tierHtml +
+    '<div class="sd-stat" id="sd-stat-input-wrap"><div class="sd-stat-value" id="sd-stat-input">' + (isPending ? loadingHtml : fmt(inputTok)) + '</div><div class="sd-stat-label">' + t('sessions.input') + '</div></div>' +
+    '<div class="sd-stat" id="sd-stat-output-wrap"><div class="sd-stat-value" id="sd-stat-output">' + (isPending ? loadingHtml : fmt(outputTok)) + '</div><div class="sd-stat-label">' + t('sessions.output') + '</div></div>' +
+    '<div class="sd-stat" id="sd-stat-cache-wrap"><div class="sd-stat-value" id="sd-stat-cache">' + (isPending ? loadingHtml : fmt(cacheTok)) + '</div><div class="sd-stat-label">' + t('sessions.cache') + '</div></div>' +
+    '<div class="sd-stat" id="sd-stat-cost-wrap"><div class="sd-stat-value" id="sd-stat-cost">' + (isPending ? loadingHtml : fmtCost(totalCost)) + '</div><div class="sd-stat-label">' + t('sessions.cloud_cost') + '</div></div>' +
+    '<div class="sd-stat" id="sd-stat-reqs-wrap"><div class="sd-stat-value" id="sd-stat-reqs">' + (isPending ? loadingHtml : totalReqs) + '</div><div class="sd-stat-label">' + t('sd.requests') + '</div></div>' +
     '<div class="sd-stat" id="sd-stat-status-wrap" style="display:none"><div class="sd-stat-value" id="sd-stat-status"></div></div>';
 }
 
@@ -2199,15 +2287,39 @@ function showSessionDetail(sessionKey, loopId) {
     if (_activeSessionKey !== sessionKey) return;
     var d = JSON.parse(e.data);
     addGeneratingIndicator(d.checkpoint);
+    if (d.routerId === 'token-saver' && d.action && !document.getElementById('sd-stat-tier-wrap')) {
+      var tier = '';
+      if (d.target) {
+        var parts = (d.target || '').split('/');
+        var model = parts.length > 1 ? parts.slice(1).join('/') : d.target;
+      }
+      var reason = d.reason || '';
+      if (reason.indexOf('tier=') === 0) tier = reason.split('=')[1];
+      if (!tier) tier = d.action.toUpperCase();
+      var tierEl = document.createElement('div');
+      tierEl.className = 'sd-stat';
+      tierEl.id = 'sd-stat-tier-wrap';
+      tierEl.innerHTML = '<div class="sd-stat-value" id="sd-stat-tier">' +
+        '<span class="tier-badge tier-' + escHtml(tier) + '">\u26A1 ' + escHtml(tier) + '</span>' +
+        (d.target ? '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">\u2192 ' + escHtml(d.target) + '</div>' : '') +
+        '</div><div class="sd-stat-label">' + t('sd.routing') + '</div>';
+      var levelWrap = document.getElementById('sd-stat-level');
+      if (levelWrap) levelWrap.parentNode.insertBefore(tierEl, levelWrap.nextSibling);
+    }
   });
 
   es.addEventListener('llm_complete', function(e) {
     if (_activeSessionKey !== sessionKey) return;
+    var lk = loopId ? (sessionKey + '::' + loopId) : sessionKey;
+    _pendingLoops.delete(lk);
     resolveGeneratingIndicator();
+    renderSessionHeader(existingSession ? (existingSession.userMessagePreview || sessionKey) : sessionKey);
   });
 
   es.addEventListener('input_estimate', function(e) {
     if (_activeSessionKey !== sessionKey) return;
+    var lk = _activeLoopId ? (_activeSessionKey + '::' + _activeLoopId) : _activeSessionKey;
+    if (_pendingLoops.has(lk)) return;
     var d = JSON.parse(e.data);
     var costEl = document.getElementById('sd-stat-cost');
     if (costEl) {
@@ -2219,7 +2331,7 @@ function showSessionDetail(sessionKey, loopId) {
         if (cw) { cw.classList.remove('flash'); void cw.offsetWidth; cw.classList.add('flash'); }
       }
     }
-    var tokEl = document.getElementById('sd-stat-tokens');
+    var tokEl = document.getElementById('sd-stat-input');
     if (tokEl) {
       var curTok = parseFloat(tokEl.dataset.val || '0');
       if (d.estimatedInputTokens > curTok) {
@@ -2234,8 +2346,9 @@ function showSessionDetail(sessionKey, loopId) {
   es.addEventListener('token_update', function(e) {
     if (_activeSessionKey !== sessionKey) return;
     var s = JSON.parse(e.data);
-    var totalTokens = (s.cloud ? s.cloud.totalTokens : 0) + (s.proxy ? s.proxy.totalTokens : 0);
-    var totalReqs = (s.cloud ? s.cloud.requestCount : 0) + (s.proxy ? s.proxy.requestCount : 0);
+    var inputTok = s.cloud ? s.cloud.inputTokens || 0 : 0;
+    var outputTok = s.cloud ? s.cloud.outputTokens || 0 : 0;
+    var cacheTok = s.cloud ? s.cloud.cacheReadTokens || 0 : 0;
     var totalCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
     function setStatMonotonic(id, val, formatter) {
       var el = document.getElementById(id);
@@ -2249,7 +2362,9 @@ function showSessionDetail(sessionKey, loopId) {
       var w = el.parentElement;
       if (w) { w.classList.remove('flash'); void w.offsetWidth; w.classList.add('flash'); }
     }
-    setStatMonotonic('sd-stat-tokens', totalTokens, fmt);
+    setStatMonotonic('sd-stat-input', inputTok, fmt);
+    setStatMonotonic('sd-stat-output', outputTok, fmt);
+    setStatMonotonic('sd-stat-cache', cacheTok, fmt);
     setStatMonotonic('sd-stat-cost', totalCost, fmtCost);
     var reqEl = document.getElementById('sd-stat-reqs');
     if (reqEl) {
@@ -2265,6 +2380,17 @@ function showSessionDetail(sessionKey, loopId) {
       _sessionHighest = s.highestLevel;
       var lEl = document.getElementById('sd-stat-level');
       if (lEl) lEl.innerHTML = '<div class="sd-stat-value"><span class="level-tag level-' + s.highestLevel + '">' + s.highestLevel + '</span></div><div class="sd-stat-label">' + t('sd.highest_level') + '</div>';
+    }
+    if (s.routingTier && !document.getElementById('sd-stat-tier-wrap')) {
+      var tierEl = document.createElement('div');
+      tierEl.className = 'sd-stat';
+      tierEl.id = 'sd-stat-tier-wrap';
+      tierEl.innerHTML = '<div class="sd-stat-value" id="sd-stat-tier">' +
+        '<span class="tier-badge tier-' + escHtml(s.routingTier) + '">\u26A1 ' + escHtml(s.routingTier) + '</span>' +
+        (s.routedModel ? '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">\u2192 ' + escHtml(s.routedModel) + '</div>' : '') +
+        '</div><div class="sd-stat-label">' + t('sd.routing') + '</div>';
+      var levelWrap = document.getElementById('sd-stat-level');
+      if (levelWrap) levelWrap.parentNode.insertBefore(tierEl, levelWrap.nextSibling);
     }
   });
 
@@ -2286,11 +2412,17 @@ function showSessionDetail(sessionKey, loopId) {
         }
       }
       if (!s) return;
-      var totalTokens = (s.cloud ? s.cloud.totalTokens : 0) + (s.proxy ? s.proxy.totalTokens : 0);
-      var totalReqs = (s.cloud ? s.cloud.requestCount : 0) + (s.proxy ? s.proxy.requestCount : 0);
+      var inputTok = s.cloud ? s.cloud.inputTokens || 0 : 0;
+      var outputTok = s.cloud ? s.cloud.outputTokens || 0 : 0;
+      var cacheTok = s.cloud ? s.cloud.cacheReadTokens || 0 : 0;
       var totalCost = (s.cloud ? s.cloud.estimatedCost || 0 : 0) + (s.proxy ? s.proxy.estimatedCost || 0 : 0);
-      var el2t = document.getElementById('sd-stat-tokens');
-      if (el2t && totalTokens >= parseFloat(el2t.dataset.val || '0')) { el2t.textContent = fmt(totalTokens); el2t.dataset.val = String(totalTokens); }
+      var totalReqs = (s.cloud ? s.cloud.requestCount : 0) + (s.proxy ? s.proxy.requestCount : 0);
+      var elI = document.getElementById('sd-stat-input');
+      if (elI && inputTok >= parseFloat(elI.dataset.val || '0')) { elI.textContent = fmt(inputTok); elI.dataset.val = String(inputTok); }
+      var elO = document.getElementById('sd-stat-output');
+      if (elO && outputTok >= parseFloat(elO.dataset.val || '0')) { elO.textContent = fmt(outputTok); elO.dataset.val = String(outputTok); }
+      var elCa = document.getElementById('sd-stat-cache');
+      if (elCa && cacheTok >= parseFloat(elCa.dataset.val || '0')) { elCa.textContent = fmt(cacheTok); elCa.dataset.val = String(cacheTok); }
       var el2c = document.getElementById('sd-stat-cost');
       if (el2c && totalCost >= parseFloat(el2c.dataset.val || '0')) { el2c.textContent = fmtCost(totalCost); el2c.dataset.val = String(totalCost); }
       var el2r = document.getElementById('sd-stat-reqs');
@@ -2318,7 +2450,7 @@ function hideSessionDetail() {
 // ── Global activity stream for session list live updates ──
 var _activityStream = null;
 var _activityDebounce = null;
-function ensureSessionRow(sessionKey, loopId) {
+function ensureSessionRow(sessionKey, loopId, msgPreview) {
   var matchKey = loopId ? (sessionKey + '::' + loopId) : sessionKey;
   var found = false;
   for (var i = 0; i < _sessionsList.length; i++) {
@@ -2326,9 +2458,11 @@ function ensureSessionRow(sessionKey, loopId) {
     if (ek === matchKey) { found = true; break; }
   }
   if (found) return;
+  _pendingLoops.add(matchKey);
   var placeholder = {
     sessionKey: sessionKey,
     loopId: loopId || undefined,
+    userMessagePreview: msgPreview || undefined,
     highestLevel: 'S1',
     cloud: { totalTokens: 0, requestCount: 0, estimatedCost: 0 },
     local: { totalTokens: 0, requestCount: 0 },
@@ -2340,7 +2474,7 @@ function ensureSessionRow(sessionKey, loopId) {
   _sessionsList.unshift(placeholder);
   var tbody = document.getElementById('sessions-body');
   if (tbody) {
-    var label = sessionKey;
+    var label = msgPreview || sessionKey;
     var shortLabel = label.length > 40 ? label.slice(0, 40) + '...' : label;
     var lid = loopId || '';
     var onclick = "showSessionDetail('" + escHtml(sessionKey).replace(/'/g, "\\'") + "','" + escHtml(lid).replace(/'/g, "\\'") + "')";
@@ -2349,7 +2483,7 @@ function ensureSessionRow(sessionKey, loopId) {
     row.innerHTML =
       '<td><span class="session-key" title="' + escHtml(label) + '">' + escHtml(shortLabel) + '</span></td>' +
       '<td><span class="level-tag level-S1">S1</span></td>' +
-      '<td colspan="9" style="color:var(--text-tertiary);font-style:italic"><span class="detecting-spinner" style="margin-right:6px"></span>' + t('sd.detecting') + '</td>';
+      '<td colspan="6" style="color:var(--text-tertiary);font-style:italic"><span class="detecting-spinner" style="margin-right:6px"></span>' + t('sd.detecting') + '</td>';
     var empty = tbody.querySelector('.empty-state');
     if (empty) empty.parentNode.remove();
     tbody.insertBefore(row, tbody.firstChild);
@@ -2361,7 +2495,16 @@ function startActivityStream() {
   _activityStream.addEventListener('activity', function(e) {
     try {
       var data = JSON.parse(e.data);
-      if (data.sessionKey && (data.phase === 'start' || data.phase === 'generating' || data.phase === 'token_update')) ensureSessionRow(data.sessionKey, data.loopId);
+      if (data.sessionKey && (data.phase === 'start' || data.phase === 'generating' || data.phase === 'token_update')) {
+        ensureSessionRow(data.sessionKey, data.loopId, data.userMessagePreview);
+      }
+      if (data.phase === 'llm_complete' && data.sessionKey) {
+        var doneKey = data.loopId ? (data.sessionKey + '::' + data.loopId) : data.sessionKey;
+        _pendingLoops.delete(doneKey);
+        refreshSessions();
+        refreshDetections();
+        return;
+      }
     } catch(ex) {}
     if (_activityDebounce) clearTimeout(_activityDebounce);
     _activityDebounce = setTimeout(function() {

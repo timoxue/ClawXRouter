@@ -238,6 +238,9 @@ export type LoopMeta = {
   userMessagePreview: string;
   startedAt: number;
   highestLevel: SensitivityLevel;
+  routingTier?: string;
+  routedModel?: string;
+  routerAction?: string;
 };
 
 export function levelToNumeric(level: SensitivityLevel): SensitivityLevelNumeric {
