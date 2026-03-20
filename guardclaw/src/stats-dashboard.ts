@@ -606,7 +606,9 @@ function dashboardHtml(): string {
   .tier-SIMPLE{background:rgba(34,197,94,.1);color:#16a34a}
   .tier-MEDIUM{background:rgba(59,130,246,.1);color:#2563eb}
   .tier-COMPLEX{background:rgba(245,158,11,.1);color:#d97706}
+  .tier-RESEARCH{background:rgba(6,182,212,.1);color:#0891b2}
   .tier-REASONING{background:rgba(168,85,247,.1);color:#9333ea}
+  .tier-badge:not(.tier-SIMPLE):not(.tier-MEDIUM):not(.tier-COMPLEX):not(.tier-RESEARCH):not(.tier-REASONING){background:rgba(107,114,128,.1);color:#6b7280}
 
   #sessions-panel .data-table tbody tr{cursor:pointer;transition:background .15s}
   #sessions-panel .data-table tbody tr:hover{background:rgba(37,99,235,.04)}
@@ -680,8 +682,9 @@ function dashboardHtml(): string {
   .test-result-value{color:var(--text-primary);font-weight:600}
   .test-loading{color:var(--text-secondary);font-size:13px;padding:14px 0}
 
-  .tier-grid{display:grid;grid-template-columns:120px 1fr 1fr;gap:10px;align-items:center}
+  .tier-grid{display:grid;grid-template-columns:110px 1fr 1fr 1.5fr;gap:10px;align-items:center}
   .tier-grid .tier-label{font-size:12px;color:var(--text-secondary);font-weight:600}
+  .btn-sm{padding:4px 12px;font-size:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-input);cursor:pointer;color:var(--text-primary)}
   .tier-grid input{padding:9px 14px;background:var(--bg-input);border:1px solid transparent;border-radius:var(--radius-sm);color:var(--text-primary);font-size:12px;outline:none;transition:all .15s}
   .tier-grid input:hover{background:#eaecf1}
   .tier-grid input:focus{background:#fff;box-shadow:0 0 0 3px rgba(37,99,235,.15)}
@@ -1086,14 +1089,16 @@ function dashboardHtml(): string {
       <!-- Judge Model -->
       <div class="subsection">
         <h4 data-i18n-html="co.tier">Complexity Level &rarr; Model</h4>
-        <div class="tier-grid">
+        <div class="tier-grid" id="ts-tier-grid">
           <div class="tier-grid-header" data-i18n="co.complexity">Complexity</div>
           <div class="tier-grid-header" data-i18n="co.provider">Provider</div>
           <div class="tier-grid-header" data-i18n="co.model">Model</div>
-          <div class="tier-label">SIMPLE</div><input id="cfg-ts-tier-SIMPLE-provider" placeholder="openai"><input id="cfg-ts-tier-SIMPLE-model" placeholder="gpt-4o-mini">
-          <div class="tier-label">MEDIUM</div><input id="cfg-ts-tier-MEDIUM-provider" placeholder="openai"><input id="cfg-ts-tier-MEDIUM-model" placeholder="gpt-4o">
-          <div class="tier-label">COMPLEX</div><input id="cfg-ts-tier-COMPLEX-provider" placeholder="anthropic"><input id="cfg-ts-tier-COMPLEX-model" placeholder="claude-sonnet-4.6">
-          <div class="tier-label">REASONING</div><input id="cfg-ts-tier-REASONING-provider" placeholder="openai"><input id="cfg-ts-tier-REASONING-model" placeholder="o4-mini">
+          <div class="tier-grid-header">Description</div>
+          <!-- rows populated dynamically by loadTokenSaverConfig -->
+        </div>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn btn-sm" onclick="addTierRow()" data-i18n="co.add_tier">+ Add Tier</button>
+          <button class="btn btn-sm" onclick="removeTierRow()" style="color:var(--danger)" data-i18n="co.remove_tier">&minus; Remove Last</button>
         </div>
       </div>
 
@@ -3000,20 +3005,55 @@ async function savePipelineOrder() {
 
 // ── Token-Saver Config ──
 
+var _tierRowCount = 0;
+
+function _renderTierRow(name, provider, model, desc) {
+  var idx = _tierRowCount++;
+  return '<input class="ts-tier-name" data-idx="' + idx + '" value="' + escHtml(name) + '" placeholder="TIER_NAME" style="text-transform:uppercase;font-weight:600">' +
+    '<input class="ts-tier-provider" data-idx="' + idx + '" value="' + escHtml(provider) + '" placeholder="provider">' +
+    '<input class="ts-tier-model" data-idx="' + idx + '" value="' + escHtml(model) + '" placeholder="model">' +
+    '<input class="ts-tier-desc" data-idx="' + idx + '" value="' + escHtml(desc) + '" placeholder="description (optional)" style="font-size:11px">';
+}
+
+function addTierRow(name, provider, model, desc) {
+  var grid = document.getElementById('ts-tier-grid');
+  if (!grid) return;
+  var html = _renderTierRow(name || '', provider || '', model || '', desc || '');
+  grid.insertAdjacentHTML('beforeend', html);
+}
+
+function removeTierRow() {
+  var grid = document.getElementById('ts-tier-grid');
+  if (!grid || _tierRowCount <= 0) return;
+  _tierRowCount--;
+  for (var i = 0; i < 4; i++) {
+    var last = grid.lastElementChild;
+    if (last && !last.classList.contains('tier-grid-header')) grid.removeChild(last);
+  }
+}
+
 function loadTokenSaverConfig() {
   var tsReg = _routers['token-saver'] || {};
   var opts = tsReg.options || {};
   var tiers = opts.tiers || {};
   document.getElementById('cfg-ts-enabled').checked = tsReg.enabled === true;
-  var tierNames = ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'];
+
+  var grid = document.getElementById('ts-tier-grid');
+  if (grid) {
+    var headers = grid.querySelectorAll('.tier-grid-header');
+    grid.innerHTML = '';
+    for (var h = 0; h < headers.length; h++) grid.appendChild(headers[h]);
+  }
+  _tierRowCount = 0;
+
+  var tierNames = Object.keys(tiers);
+  if (tierNames.length === 0) tierNames = ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'];
   for (var i = 0; i < tierNames.length; i++) {
     var tn = tierNames[i];
-    var tierCfg = tiers[tn] || {};
-    var pEl = document.getElementById('cfg-ts-tier-' + tn + '-provider');
-    var mEl = document.getElementById('cfg-ts-tier-' + tn + '-model');
-    if (pEl) pEl.value = tierCfg.provider || '';
-    if (mEl) mEl.value = tierCfg.model || '';
+    var cfg = tiers[tn] || {};
+    addTierRow(tn, cfg.provider || '', cfg.model || '', cfg.description || '');
   }
+
   var cacheEl = document.getElementById('cfg-ts-cachettl');
   if (cacheEl) cacheEl.value = opts.cacheTtlMs || '';
 }
@@ -3022,14 +3062,17 @@ async function saveTokenSaverConfig() {
   try {
     var enabled = document.getElementById('cfg-ts-enabled').checked;
     var tiers = {};
-    var tierNames = ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING'];
-    for (var i = 0; i < tierNames.length; i++) {
-      var tn = tierNames[i];
-      var provider = document.getElementById('cfg-ts-tier-' + tn + '-provider').value || '';
-      var model = document.getElementById('cfg-ts-tier-' + tn + '-model').value || '';
-      if (provider || model) {
-        tiers[tn] = { provider: provider, model: model };
-      }
+    var nameEls = document.querySelectorAll('.ts-tier-name');
+    for (var i = 0; i < nameEls.length; i++) {
+      var name = (nameEls[i].value || '').trim().toUpperCase();
+      if (!name) continue;
+      var idx = nameEls[i].getAttribute('data-idx');
+      var provider = (document.querySelector('.ts-tier-provider[data-idx="' + idx + '"]') || {}).value || '';
+      var model = (document.querySelector('.ts-tier-model[data-idx="' + idx + '"]') || {}).value || '';
+      var desc = (document.querySelector('.ts-tier-desc[data-idx="' + idx + '"]') || {}).value || '';
+      var entry = { provider: provider, model: model };
+      if (desc) entry.description = desc;
+      tiers[name] = entry;
     }
     var cacheTtl = document.getElementById('cfg-ts-cachettl').value;
     var options = {};

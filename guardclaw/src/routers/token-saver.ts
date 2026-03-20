@@ -1,8 +1,12 @@
 /**
  * Token-Saver Router — LLM-as-Judge Model Downgrade
  *
- * Uses a local LLM to classify task complexity into SIMPLE/MEDIUM/COMPLEX/REASONING
- * tiers, then routes to the cheapest model that can handle the tier.
+ * Uses a local LLM to classify task complexity into user-defined tiers,
+ * then routes to the cheapest model that can handle the tier.
+ *
+ * Tiers are fully configurable — users define any number of tiers in config,
+ * each with a provider/model mapping and an optional description used to
+ * auto-generate the judge prompt.
  *
  * Key design decisions:
  *   - LLM-as-judge instead of keyword rules: understands semantics, any language
@@ -20,7 +24,11 @@ import { getGlobalCollector } from "../token-stats.js";
 
 // ── Types ──
 
-type Tier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+type TierTarget = {
+  provider: string;
+  model: string;
+  description?: string;
+};
 
 type TokenSaverConfig = {
   enabled: boolean;
@@ -29,7 +37,9 @@ type TokenSaverConfig = {
   judgeProviderType: EdgeProviderType;
   judgeCustomModule?: string;
   judgeApiKey?: string;
-  tiers: Record<Tier, { provider: string; model: string }>;
+  tiers: Record<string, TierTarget>;
+  defaultTier?: string;
+  rules?: string[];
   cacheTtlMs: number;
 };
 
@@ -38,32 +48,49 @@ const DEFAULT_CONFIG: TokenSaverConfig = {
   judgeEndpoint: "http://localhost:11434",
   judgeModel: "openbmb/minicpm4.1",
   judgeProviderType: "openai-compatible",
-  tiers: {
-    SIMPLE: { provider: "openai", model: "gpt-4o-mini" },
-    MEDIUM: { provider: "openai", model: "gpt-4o" },
-    COMPLEX: { provider: "anthropic", model: "claude-sonnet-4.6" },
-    REASONING: { provider: "openai", model: "o4-mini" },
-  },
+  tiers: {},
   cacheTtlMs: 300_000,
 };
 
-const DEFAULT_JUDGE_PROMPT = `You are a task complexity classifier. Classify the user's task into exactly one tier.
+// ── Prompt generation ──
 
-SIMPLE = lookup, translation, formatting, yes/no, definition, greeting, simple file search, reading a single file, listing items
-MEDIUM = code generation, data analysis, moderate writing, single-file edits, summarization, debugging a specific function
-COMPLEX = system design, multi-file refactoring, architecture decisions, large code generation, project-wide changes
-REASONING = math proof, formal logic, step-by-step derivation, deep analysis with constraints, algorithm correctness proof
+function generateJudgePrompt(tiers: Record<string, TierTarget>, rules?: string[]): string {
+  const tierNames = Object.keys(tiers);
 
-Rules:
-- When unsure, pick the LOWER tier (save tokens).
-- Short prompts (< 20 words) with no technical depth → SIMPLE.
-- Presence of code fences alone does not mean COMPLEX — a short snippet for review is MEDIUM.
+  const tierDefs = tierNames
+    .map((name) => {
+      const desc = tiers[name].description;
+      return desc ? `${name} = ${desc}` : name;
+    })
+    .join("\n");
 
-Output ONLY a JSON object, nothing else: {"tier":"SIMPLE|MEDIUM|COMPLEX|REASONING"}`;
+  const defaultRules = [
+    "When unsure, pick the LOWER tier (save tokens).",
+    "Short prompts (< 20 words) with no technical depth → the lowest tier.",
+  ];
+  const allRules = [...defaultRules, ...(rules ?? [])];
+  const rulesBlock = allRules.map((r) => `- ${r}`).join("\n");
+
+  const tierList = tierNames.join("|");
+
+  return [
+    "You are a task complexity classifier. Classify the user's task into exactly one tier.",
+    "",
+    tierDefs,
+    "",
+    "Rules:",
+    rulesBlock,
+    "",
+    `CRITICAL: Output ONLY the raw JSON object. Do NOT wrap in markdown code blocks. Do NOT add any text before or after.`,
+    `{"tier":"${tierList}"}`,
+  ].join("\n");
+}
+
+const FALLBACK_JUDGE_PROMPT = `You are a task complexity classifier. Output ONLY a JSON object: {"tier":"MEDIUM"}`;
 
 // ── Cache ──
 
-type CacheEntry = { tier: Tier; ts: number };
+type CacheEntry = { tier: string; ts: number };
 const classificationCache = new Map<string, CacheEntry>();
 
 const CACHE_CLEANUP_INTERVAL_MS = 60_000;
@@ -90,23 +117,21 @@ function hashPrompt(prompt: string): string {
   return createHash("sha256").update(prompt).digest("hex").slice(0, 16);
 }
 
-const VALID_TIERS = new Set<Tier>(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
-
-function parseTier(response: string): Tier {
+function parseTier(response: string, validTiers: Set<string>, defaultTier: string): string {
   try {
     const cleaned = response.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-    const match = cleaned.match(/\{[\s\S]*?"tier"\s*:\s*"([A-Z]+)"[\s\S]*?\}/);
+    const match = cleaned.match(/\{[\s\S]*?"tier"\s*:\s*"([A-Za-z_]+)"[\s\S]*?\}/);
     if (match) {
-      const tier = match[1] as Tier;
-      if (VALID_TIERS.has(tier)) return tier;
+      const tier = match[1].toUpperCase();
+      if (validTiers.has(tier)) return tier;
     }
   } catch {
     // parse failure
   }
-  return "MEDIUM";
+  return defaultTier;
 }
 
-function buildDecision(tier: Tier, config: TokenSaverConfig): RouterDecision {
+function buildDecision(tier: string, config: TokenSaverConfig): RouterDecision {
   const target = config.tiers[tier];
   if (!target) {
     return { level: "S1", action: "passthrough", reason: `no model mapping for tier ${tier}` };
@@ -151,12 +176,15 @@ function resolveConfig(pluginConfig: Record<string, unknown>): TokenSaverConfig 
     judgeApiKey:
       (options.judgeApiKey as string) ??
       privacyLocalModel?.apiKey,
-    tiers: {
-      ...DEFAULT_CONFIG.tiers,
-      ...((options.tiers as Record<string, { provider: string; model: string }>) ?? {}),
-    },
+    tiers: (options.tiers as Record<string, TierTarget>) ?? {},
+    defaultTier: (options.defaultTier as string) ?? undefined,
+    rules: (options.rules as string[]) ?? undefined,
     cacheTtlMs: (options.cacheTtlMs as number) ?? DEFAULT_CONFIG.cacheTtlMs,
   };
+}
+
+function hasAnyDescription(tiers: Record<string, TierTarget>): boolean {
+  return Object.values(tiers).some((t) => t.description);
 }
 
 // ── Router ──
@@ -173,11 +201,14 @@ export const tokenSaverRouter: GuardClawRouter = {
       return { level: "S1", action: "passthrough" };
     }
 
-    // Subagent sessions skip token-saver entirely.
-    // No per-message judge calls — subagents use their own default model.
     const isSubagent = context.sessionKey?.includes(":subagent:") ?? false;
     if (isSubagent) {
       return { level: "S1", action: "passthrough", reason: "subagent — skipped" };
+    }
+
+    const tierNames = Object.keys(config.tiers);
+    if (tierNames.length === 0) {
+      return { level: "S1", action: "passthrough", reason: "no tiers configured" };
     }
 
     const prompt = context.message ?? "";
@@ -186,17 +217,31 @@ export const tokenSaverRouter: GuardClawRouter = {
     }
 
     startCacheCleanup();
+    const validTiers = new Set(tierNames);
+    const defaultTier = config.defaultTier && validTiers.has(config.defaultTier)
+      ? config.defaultTier
+      : tierNames[Math.floor(tierNames.length / 2)] ?? "MEDIUM";
 
-    // Check cache
     const cacheKey = hashPrompt(prompt);
     const cached = classificationCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < config.cacheTtlMs) {
-      return buildDecision(cached.tier, config);
+      if (validTiers.has(cached.tier)) {
+        return buildDecision(cached.tier, config);
+      }
     }
 
-    // Call LLM judge
     try {
-      const judgeSystemPrompt = loadPrompt("token-saver-judge", DEFAULT_JUDGE_PROMPT);
+      const promptFileContent = loadPrompt("token-saver-judge", "");
+      let judgeSystemPrompt: string;
+
+      if (promptFileContent) {
+        judgeSystemPrompt = promptFileContent;
+      } else if (hasAnyDescription(config.tiers)) {
+        judgeSystemPrompt = generateJudgePrompt(config.tiers, config.rules);
+      } else {
+        judgeSystemPrompt = FALLBACK_JUDGE_PROMPT;
+      }
+
       const result = await callChatCompletion(
         config.judgeEndpoint,
         config.judgeModel,
@@ -213,7 +258,6 @@ export const tokenSaverRouter: GuardClawRouter = {
         },
       );
 
-      // Record router overhead tokens
       if (result.usage) {
         const collector = getGlobalCollector();
         collector?.record({
@@ -225,7 +269,7 @@ export const tokenSaverRouter: GuardClawRouter = {
         });
       }
 
-      const tier = parseTier(result.text);
+      const tier = parseTier(result.text, validTiers, defaultTier);
       classificationCache.set(cacheKey, { tier, ts: Date.now() });
       return buildDecision(tier, config);
     } catch (err) {
@@ -237,5 +281,5 @@ export const tokenSaverRouter: GuardClawRouter = {
 
 // ── Exports for testing ──
 
-export { parseTier, hashPrompt, classificationCache, resolveConfig, DEFAULT_CONFIG, DEFAULT_JUDGE_PROMPT };
-export type { Tier, TokenSaverConfig };
+export { parseTier, hashPrompt, classificationCache, resolveConfig, generateJudgePrompt, DEFAULT_CONFIG, FALLBACK_JUDGE_PROMPT as DEFAULT_JUDGE_PROMPT };
+export type { TierTarget, TokenSaverConfig };
