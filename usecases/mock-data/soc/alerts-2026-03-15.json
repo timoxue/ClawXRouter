@@ -1,9 +1,0 @@
-[
-  {"timestamp":"2026-03-15T03:15:22Z","type":"DNS","src_ip":"10.1.5.42","src_host":"ws-dev-031","dst_ip":"185.234.72.11","query":"xkf7a2b.malware-c2.xyz","alert":"ET MALWARE Possible DGA Domain","severity":"high"},
-  {"timestamp":"2026-03-15T03:17:05Z","type":"SMB","src_ip":"10.1.5.42","src_host":"ws-dev-031","dst_ip":"10.1.2.15","dst_host":"file-srv-01","user":"CORP\\jzhang","alert":"SMB lateral movement attempt","severity":"critical"},
-  {"timestamp":"2026-03-15T03:22:11Z","type":"Process","src_host":"file-srv-01","user":"CORP\\jzhang","process":"powershell.exe","cmdline":"powershell -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA...","alert":"Encoded PowerShell execution","severity":"critical"},
-  {"timestamp":"2026-03-15T03:24:33Z","type":"Network","src_ip":"10.1.2.15","dst_ip":"45.33.32.156","dst_port":443,"bytes_out":52428800,"alert":"Large outbound data transfer","severity":"high"},
-  {"timestamp":"2026-03-15T08:30:00Z","type":"Auth","src_ip":"192.168.1.100","user":"admin","alert":"Failed login attempt (5th in 10min)","severity":"medium"},
-  {"timestamp":"2026-03-15T09:15:22Z","type":"IDS","src_ip":"203.0.113.50","dst_ip":"10.0.1.5","dst_host":"web-prod-01","alert":"SQL injection attempt detected","severity":"high"},
-  {"timestamp":"2026-03-15T10:00:00Z","type":"FW","src_ip":"10.1.3.88","dst_ip":"8.8.8.8","dst_port":53,"alert":"DNS over non-standard port","severity":"low"}
-]

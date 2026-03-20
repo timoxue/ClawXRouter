@@ -25,7 +25,7 @@ User Message
 │  ┌─────────────┐    ┌──────────────────┐    │
 │  │   Privacy    │    │   Token-Saver    │    │
 │  │   Router     │    │   Router         │    │
-│  │  (weight:90) │    │  (weight:50)     │    │
+│  │  (weight:90) │    │  (weight:40)     │    │
 │  │              │    │                  │    │
 │  │  Rule-based  │    │  LLM-as-Judge    │    │
 │  │  + LLM       │    │  classifies      │    │
@@ -85,46 +85,42 @@ When both routers have an opinion:
 
 ```
 Edgeclaw-router/
-├── guardclaw/                      # Core plugin (OpenClaw extension)
+├── clawxrouter/                    # Core plugin (OpenClaw extension)
+│   ├── index.ts                    # Plugin entry point (register lifecycle)
 │   ├── src/
 │   │   ├── router-pipeline.ts      # Composable routing pipeline
 │   │   ├── detector.ts             # Dual detection engine (rule + LLM)
 │   │   ├── rules.ts                # Rule-based keyword/regex detector
 │   │   ├── local-model.ts          # LLM-based sensitivity detector
+│   │   ├── config-schema.ts        # TypeBox config schema + defaults
 │   │   ├── routers/
 │   │   │   ├── privacy.ts          # S1/S2/S3 privacy router
-│   │   │   └── token-saver.ts      # LLM-as-Judge cost router
+│   │   │   ├── token-saver.ts      # LLM-as-Judge cost router
+│   │   │   └── configurable.ts     # Dashboard-created custom routers
 │   │   ├── privacy-proxy.ts        # Local HTTP proxy for S2 PII stripping
+│   │   ├── provider.ts             # Provider registration + model mirroring
 │   │   ├── guard-agent.ts          # Dedicated local agent for S3 tasks
 │   │   ├── hooks.ts                # OpenClaw hook integration
 │   │   ├── session-manager.ts      # Dual-track session history
+│   │   ├── session-state.ts        # Per-session detection state tracking
 │   │   ├── memory-isolation.ts     # MEMORY-FULL.md vs MEMORY.md
-│   │   ├── stats-dashboard.ts      # /plugins/guardclaw/stats web UI
-│   │   └── token-stats.ts          # Per-tier token usage tracking
+│   │   ├── live-config.ts          # Hot-reload config file watcher
+│   │   ├── prompt-loader.ts        # Prompt file loader (from prompts/)
+│   │   ├── stats-dashboard.ts      # /plugins/clawxrouter/stats web UI
+│   │   ├── token-stats.ts          # Per-tier token usage tracking
+│   │   ├── sync-detect.ts          # Synchronous LLM detection (worker)
+│   │   ├── sync-desensitize.ts     # Synchronous desensitization (worker)
+│   │   ├── llm-detect-worker.ts    # Worker thread for LLM detection
+│   │   ├── llm-desensitize-worker.ts # Worker thread for desensitization
+│   │   ├── types.ts                # Core type definitions
+│   │   ├── utils.ts                # Path normalization + helper utilities
+│   │   └── worker-loader.mjs       # Worker thread module hook
 │   ├── prompts/
 │   │   ├── detection-system.md     # Privacy detection prompt
 │   │   ├── guard-agent-system.md   # Guard Agent system prompt
 │   │   └── token-saver-judge.md    # Task complexity judge prompt
-│   ├── test/                       # Unit + integration + E2E tests
-│   ├── docs/
-│   │   └── GuardClaw-技术报告.md    # 1,500-line technical report
 │   ├── config.example.json         # Example configuration
 │   └── openclaw.plugin.json        # Plugin manifest
-│
-└── usecases/                       # Real-world use case documentation
-    ├── README.md                   # Use case index + test results
-    ├── code-review-token-masking.md
-    ├── family-chat-summary.md
-    ├── soc-alert-analysis.md
-    ├── research-assistant-pipeline.md
-    ├── systematic-literature-review.md
-    ├── patent-landscape-analysis.md
-    ├── compliance-audit.md
-    ├── credential-vault.md
-    ├── privacy-aware-data-analysis.md
-    ├── resume-optimizer.md
-    ├── mock-data/                  # Sample test data
-    └── test-results/               # Raw API response JSON
 ```
 
 ## Quick Start
@@ -138,14 +134,14 @@ Edgeclaw-router/
 ### 1. Install the Plugin
 
 ```bash
-# Copy the guardclaw directory into your OpenClaw extensions folder
-cp -r guardclaw/ ~/.openclaw/extensions/guardclaw/
-cd ~/.openclaw/extensions/guardclaw && npm install
+# Copy the clawxrouter directory into your OpenClaw extensions folder
+cp -r clawxrouter/ ~/.openclaw/extensions/clawxrouter/
+cd ~/.openclaw/extensions/clawxrouter && npm install
 ```
 
 ### 2. Configure
 
-Create `~/.openclaw/guardclaw.json`:
+Create `~/.openclaw/clawxrouter.json`:
 
 ```jsonc
 {
@@ -173,27 +169,28 @@ Create `~/.openclaw/guardclaw.json`:
       "enabled": true,
       "type": "openai-compatible",
       "provider": "ollama",
-      "model": "qwen2.5:7b",
+      "model": "openbmb/minicpm4.1",
       "endpoint": "http://localhost:11434"
     },
     "guardAgent": {
       "id": "guard",
       "workspace": "~/.openclaw/workspace-guard",
-      "model": "ollama/qwen2.5:7b"
-    }
-  },
-  "routers": {
-    "privacy": { "enabled": true, "type": "builtin", "weight": 90 },
-    "token-saver": {
-      "enabled": true,
-      "type": "builtin",
-      "options": {
-        "judgeModel": "gemini-2.5-flash",
-        "tiers": {
-          "SIMPLE":    { "provider": "your-provider", "model": "gemini-2.5-flash" },
-          "MEDIUM":    { "provider": "your-provider", "model": "gemini-2.5-pro" },
-          "COMPLEX":   { "provider": "your-provider", "model": "gemini-3.1-pro-preview" },
-          "REASONING": { "provider": "your-provider", "model": "claude-sonnet-4-5-20250929" }
+      "model": "ollama/openbmb/minicpm4.1"
+    },
+    "routers": {
+      "privacy": { "enabled": true, "type": "builtin", "weight": 90 },
+      "token-saver": {
+        "enabled": true,
+        "type": "builtin",
+        "weight": 40,
+        "options": {
+          "judgeModel": "gemini-2.5-flash",
+          "tiers": {
+            "SIMPLE":    { "provider": "your-provider", "model": "gemini-2.5-flash" },
+            "MEDIUM":    { "provider": "your-provider", "model": "gemini-2.5-pro" },
+            "COMPLEX":   { "provider": "your-provider", "model": "gemini-3.1-pro-preview" },
+            "REASONING": { "provider": "your-provider", "model": "claude-sonnet-4-5-20250929" }
+          }
         }
       }
     }
@@ -205,7 +202,7 @@ Create `~/.openclaw/guardclaw.json`:
 
 ```bash
 openclaw gateway
-# GuardClaw Ready! Dashboard → http://127.0.0.1:18789/plugins/guardclaw/stats
+# ClawXrouter Ready! Dashboard → http://127.0.0.1:18789/plugins/clawxrouter/stats
 ```
 
 ### 4. Test
@@ -253,34 +250,82 @@ All routing decisions are verified by Gateway `model overridden` logs (not just 
 | ID number + simple question | S2 | SIMPLE | **Privacy** (PII detected) |
 | Architecture comparison, no PII | S1 | REASONING | **Token-Saver** → `claude-sonnet-4.5` |
 
-Full test results with Gateway log excerpts: [`usecases/README.md`](usecases/README.md)
+## PinchBench Benchmark — Token-Saver 5-Tier Routing
 
-## Use Cases
+Using [PinchBench](https://pinchbench.com) (23-task OpenClaw agent benchmark), we evaluated the Token-Saver router's ability to match top-tier model performance at a fraction of the cost.
 
-### Privacy-Driven
+### Strategy: Plan C-v2 (minimax-m2.5 as default + selective routing)
 
-| Use Case | Description | Privacy Level |
-|----------|-------------|---------------|
-| [Code Security Review](usecases/code-review-token-masking.md) | Detect and mask hardcoded credentials before cloud review | S3 → Guard Agent |
-| [Family Chat Summary](usecases/family-chat-summary.md) | De-identify PII in chat logs, then summarize | S3 → Guard Agent |
-| [Credential Vault](usecases/credential-vault.md) | Keep all credentials local, cloud provides security advice only | S3 isolated |
-| [Privacy-Aware Data Analysis](usecases/privacy-aware-data-analysis.md) | Local SQL + de-identification, cloud analysis | S3 → S1 pipeline |
-| [Resume Optimizer](usecases/resume-optimizer.md) | Strip PII, optimize wording in cloud, restore locally | S3 → S1 → S3 |
+Default model is `minimax-m2.5` (cheap, strong all-rounder). Only 12 of 23 tasks are routed to specialized models where they demonstrably outperform m2.5 on the official leaderboard.
 
-### Cost-Optimization-Driven (Token-Saver)
+| Tier | Model | Tasks | Role |
+|------|-------|-------|------|
+| **SIMPLE** | `glm-4.5-air` | 3 | Text summarization, rewriting — cheapest model |
+| **MEDIUM** | `minimax-m2.5` | 11 | Default catch-all |
+| **COMPLEX** | `deepseek-v3.2` | 5 | Email triage/search, file ops, report comprehension |
+| **RESEARCH** | `glm-5` | 3 | Blog writing, multi-step workflows, daily digest |
+| **REASONING** | `kimi-k2.5` | 1 | PDF analysis |
 
-| Use Case | Pipeline Steps | SIMPLE % | Est. Savings |
-|----------|---------------|----------|-------------|
-| [Research Assistant](usecases/research-assistant-pipeline.md) | 11 steps | 45% | ~75% |
-| [Systematic Literature Review](usecases/systematic-literature-review.md) | 14 steps | 43% | ~80% |
-| [Patent Landscape Analysis](usecases/patent-landscape-analysis.md) | 12 steps | 50% | ~85-88% |
+### Results (Official PinchBench Scores)
 
-### Hybrid (Privacy + Token-Saver)
+Scores are taken from the official PinchBench leaderboard — **Best** = highest single-run score, **Avg** = mean across all runs for that model.
 
-| Use Case | Privacy Strategy | Token-Saver Strategy | Est. Savings |
-|----------|-----------------|---------------------|-------------|
-| [SOC Alert Analysis](usecases/soc-alert-analysis.md) | Internal IPs → S2 proxy | Alert parsing → SIMPLE | ~60-70% |
-| [Compliance Audit](usecases/compliance-audit.md) | Client PII → S2/S3 | Doc parsing → SIMPLE | ~80-85% |
+| Metric | Plan C-v2 (Routed) | All minimax-m2.5 | All Sonnet 4.6 |
+|--------|-------------------|------------------|----------------|
+| **Best Score** | **93.2%** | 88.8% | 86.9% |
+| **Avg Score** | **89.6%** | 84.6% | 79.2% |
+| **Cost (official API)** | **$2.36** | $2.32 | $5.63 |
+
+> **+4.3% Best / +5.0% Avg score over single-model baseline, for only $0.04 more.**
+> **58% cheaper than Sonnet 4.6 with 6.3% higher Best score.**
+
+### Per-Task Breakdown
+
+| Task | Tier | Model | Best | Avg | Cost |
+|------|------|-------|------|-----|------|
+| Sanity Check | SIMPLE | glm-4.5-air | 100% | 100% | $0.005 |
+| Calendar Event | MEDIUM | minimax-m2.5 | 100% | 100% | $0.044 |
+| Stock Research | MEDIUM | minimax-m2.5 | 100% | 100% | $0.064 |
+| Blog Writing | RESEARCH | glm-5 | 100% | 98% | $0.110 |
+| Weather Script | MEDIUM | minimax-m2.5 | 100% | 100% | $0.087 |
+| Doc Summarization | SIMPLE | glm-4.5-air | 100% | 94% | $0.016 |
+| Tech Conference | MEDIUM | minimax-m2.5 | 89% | 88% | $0.212 |
+| Email Drafting | MEDIUM | minimax-m2.5 | 100% | 99% | $0.040 |
+| Memory Retrieval | COMPLEX | deepseek-v3.2 | 80% | 80% | $0.013 |
+| File Structure | COMPLEX | deepseek-v3.2 | 100% | 100% | $0.010 |
+| API Workflow | RESEARCH | glm-5 | 89% | 84% | $0.270 |
+| Project Structure | MEDIUM | minimax-m2.5 | 100% | 100% | $0.080 |
+| Search & Replace | MEDIUM | minimax-m2.5 | 100% | 100% | $0.123 |
+| Image Generation | MEDIUM | minimax-m2.5 | 21% | 17% | $0.767 |
+| Humanize Blog | SIMPLE | glm-4.5-air | 96% | 94% | $0.016 |
+| Daily Summary | RESEARCH | glm-5 | 97% | 94% | $0.337 |
+| Email Triage | COMPLEX | deepseek-v3.2 | 96% | 96% | $0.020 |
+| Email Search | COMPLEX | deepseek-v3.2 | 100% | 100% | $0.027 |
+| Market Research | MEDIUM | minimax-m2.5 | 95% | 94% | — |
+| Spreadsheet | MEDIUM | minimax-m2.5 | 99% | 94% | — |
+| ELI5 PDF | REASONING | kimi-k2.5 | 88% | 82% | $0.052 |
+| Report Comprehension | COMPLEX | deepseek-v3.2 | 100% | 100% | $0.007 |
+| Second Brain | MEDIUM | minimax-m2.5 | 93% | 46% | $0.062 |
+
+### Cost by Model
+
+| Model | Tasks | Cost | % of Total |
+|-------|-------|------|-----------|
+| minimax-m2.5 | 11 | $1.48 | 62.6% |
+| glm-5 | 3 | $0.72 | 30.4% |
+| deepseek-v3.2 | 5 | $0.08 | 3.3% |
+| kimi-k2.5 | 1 | $0.05 | 2.2% |
+| glm-4.5-air | 3 | $0.04 | 1.6% |
+
+### Routing Accuracy
+
+Judge model (`gemini-2.5-flash`) correctly classified **22/23 tasks** (96%) to their intended tiers, validated by sending each task prompt directly to the judge and comparing against the expected tier assignment.
+
+### Methodology
+
+- **Scores**: Per-task scores from official PinchBench submissions on [pinchbench.com](https://pinchbench.com) — Best is the highest score across all official runs, Avg is the mean.
+- **Cost**: Calculated from actual token usage recorded during our benchmark run (1,729,532 input + 29,717 output tokens total), multiplied by each model's official API pricing.
+- **Routing**: LLM-as-Judge (`gemini-2.5-flash`) classifies task complexity using a tuned prompt with priority rules. Classification takes ~2s per message.
 
 ## Architecture
 
@@ -301,9 +346,9 @@ The pipeline runs registered routers in two phases:
 ### Custom Routers
 
 ```typescript
-import type { GuardClawRouter } from "./types.js";
+import type { ClawXrouterRouter } from "./types.js";
 
-const myRouter: GuardClawRouter = {
+const myRouter: ClawXrouterRouter = {
   id: "content-filter",
   async detect(context, config) {
     // Your logic here
@@ -347,39 +392,15 @@ Register via config:
 ## Development
 
 ```bash
-cd guardclaw
+cd clawxrouter
 
 # Install dependencies
 npm install
-
-# Run tests
-npm test
-
-# Run specific test suite
-npx vitest run test/router-pipeline.test.ts
-npx vitest run test/token-saver.test.ts
-npx vitest run test/rules.test.ts
 ```
-
-### Test Coverage
-
-| Suite | Description |
-|-------|-------------|
-| `detector.test.ts` | Dual detection engine (rule + LLM) |
-| `rules.test.ts` | Keyword and regex pattern matching |
-| `router-pipeline.test.ts` | Pipeline composition and decision merging |
-| `token-saver.test.ts` | LLM-as-Judge classification |
-| `privacy-proxy.test.ts` | PII stripping proxy |
-| `session-manager.test.ts` | Dual-track session isolation |
-| `integration.test.ts` | Cross-component integration |
-| `guardclaw-plugin-e2e.test.ts` | Full plugin lifecycle E2E |
 
 ## Documentation
 
-- **[Technical Report (1,500 lines)](guardclaw/docs/GuardClaw-技术报告.md)** — Complete architecture, API reference, security model, and customization guide
-- **[Dashboard Manual Test Guide](guardclaw/docs/Dashboard-手动测试文档.md)** — How to use the web dashboard at `/plugins/guardclaw/stats`
-- **[Use Case Index](usecases/README.md)** — 10 real-world use cases with verified test results
-- **[Example Config](guardclaw/config.example.json)** — Annotated configuration with examples for Ollama, vLLM, LM Studio, SGLang, and custom providers
+- **[Example Config](clawxrouter/config.example.json)** — Annotated configuration with examples for Ollama, vLLM, LM Studio, SGLang, and custom providers
 
 ## License
 
