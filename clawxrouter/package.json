@@ -1,9 +1,31 @@
 {
   "name": "@openclaw/clawxrouter",
   "version": "2026.3.9",
-  "private": true,
   "description": "Privacy-aware plugin with sensitivity detection, guard agent support, and built-in privacy proxy",
   "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "prompts/",
+    "config.example.json",
+    "openclaw.plugin.json"
+  ],
+  "keywords": [
+    "openclaw",
+    "privacy",
+    "router",
+    "guard-agent",
+    "clawxrouter"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/clawxrouter"
+  },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
     "synckit": "^0.11.12",

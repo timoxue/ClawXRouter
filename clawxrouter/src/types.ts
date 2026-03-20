@@ -156,7 +156,7 @@ export type RouterDecision = {
     provider: string;
     model: string;
     /** Set by pipeline merge when the winning provider (clawxrouter-privacy) differs
-     *  from the router that originally selected the model (e.g. token-saver → yeysai).
+     *  from the router that originally selected the model.
      *  Used by hooks to stash the correct provider endpoint for the proxy. */
     originalProvider?: string;
   };

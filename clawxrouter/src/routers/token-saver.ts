@@ -30,7 +30,13 @@ const DEFAULT_CONFIG: TokenSaverConfig = {
   judgeEndpoint: "http://localhost:11434",
   judgeModel: "openbmb/minicpm4.1",
   judgeProviderType: "openai-compatible",
-  tiers: {},
+  tiers: {
+    SIMPLE:    { provider: "zhipu",   model: "glm-4.5-air" },
+    MEDIUM:    { provider: "minimax", model: "minimax-m2.5" },
+    COMPLEX:   { provider: "deepseek", model: "deepseek-v3.2" },
+    RESEARCH:  { provider: "zhipu",   model: "glm-5" },
+    REASONING: { provider: "moonshot", model: "kimi-k2.5" },
+  },
   cacheTtlMs: 300_000,
 };
 

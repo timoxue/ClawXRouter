@@ -122,6 +122,24 @@
       "workspace": "~/.openclaw/workspace-guard",
       "model": "ollama/llama3.2:3b"
     },
+    "routers": {
+      "privacy": { "enabled": true, "type": "builtin", "weight": 90 },
+      "token-saver": {
+        "enabled": true,
+        "type": "builtin",
+        "weight": 40,
+        "options": {
+          "judgeModel": "openbmb/minicpm4.1",
+          "tiers": {
+            "SIMPLE":    { "provider": "zhipu",    "model": "glm-4.5-air" },
+            "MEDIUM":    { "provider": "minimax",  "model": "minimax-m2.5" },
+            "COMPLEX":   { "provider": "deepseek", "model": "deepseek-v3.2" },
+            "RESEARCH":  { "provider": "zhipu",    "model": "glm-5" },
+            "REASONING": { "provider": "moonshot", "model": "kimi-k2.5" }
+          }
+        }
+      }
+    },
     "localProviders": [],
     "session": {
       "isolateGuardHistory": true,
