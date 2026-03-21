@@ -614,9 +614,7 @@ export function registerHooks(api: OpenClawPluginApi): void {
 
   api.on("tool_result_persist", (event, ctx) => {
     try {
-      const sessionKey = resolveHookSessionKey(ctx);
-      if (!sessionKey) return;
-
+      const sessionKey = resolveHookSessionKey(ctx) || `anon-${Date.now()}`;
       const msg = event.message;
       if (!msg) return;
 

@@ -8,34 +8,52 @@
     "s2Policy": "proxy",
     "proxyPort": 8403,
     "checkpoints": {
-      "onUserMessage": ["ruleDetector"],
+      "onUserMessage": ["ruleDetector", "localModelDetector"],
       "onToolCallProposed": ["ruleDetector"],
       "onToolCallExecuted": ["ruleDetector"]
     },
     "rules": {
       "keywords": {
-        "S2": ["password", "api_key", "secret", "token", "credential", "auth_token"],
-        "S3": ["ssh", "id_rsa", "private_key", ".pem", ".key", ".env", "master_password"]
+        "S2": [
+          "password", "api_key", "secret", "token", "credential", "auth_token",
+          "salary", "地址", "电话", "手机号", "合同", "客户", "甲方", "乙方",
+          "交易", "金额", "internal", "intranet", "域控"
+        ],
+        "S3": [
+          "ssh", "id_rsa", "private_key", ".pem", ".key", ".env", "master_password",
+          "身份证", "银行卡", "社保", "病历", "诊断", "处方", "密码", "密钥",
+          "简历", "resume"
+        ]
       },
       "patterns": {
         "S2": [
           "\\b(?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.\\d{1,3}\\.\\d{1,3}\\b",
           "(?:mysql|postgres|mongodb|redis)://[^\\s]+",
-          "\\b(?:sk|key|token)-[A-Za-z0-9]{16,}\\b"
+          "\\b(?:sk|key|token)-[A-Za-z0-9]{16,}\\b",
+          "1[3-9]\\d{9}",
+          "(?i)ghp_[a-zA-Z0-9]{36}",
+          "(?i)xox[bsrap]-[a-zA-Z0-9-]+",
+          "(?i)(?:contract|agreement)[-_]?\\w{6,}",
+          "(?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*",
+          "(?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+",
+          "(?i)[a-z]+\\\\[a-z0-9._-]+"
         ],
         "S3": [
           "-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
-          "AKIA[0-9A-Z]{16}"
+          "AKIA[0-9A-Z]{16}",
+          "\\d{17}[0-9Xx]",
+          "\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}",
+          "(?i)(password|passwd|pwd)\\s*[=:]\\s*['\"][^'\"]{8,}"
         ]
       },
       "tools": {
         "S2": {
-          "tools": ["exec", "shell"],
+          "tools": ["execute_sql"],
           "paths": ["~/secrets", "~/private"]
         },
         "S3": {
-          "tools": ["system.run", "sudo"],
-          "paths": ["~/.ssh", "/etc", "~/.aws", "~/.config/credentials", "/root"]
+          "tools": ["sudo"],
+          "paths": ["~/.ssh", "~/.aws", "~/.config/credentials", "/root", "/credentials/"]
         }
       }
     },
@@ -47,10 +65,10 @@
         "enabled": true,
         "type": "openai-compatible",
         "provider": "ollama",
-        "model": "llama3.2:3b",
+        "model": "minicpm4.1",
         "endpoint": "http://localhost:11434"
       },
-      "guardAgent": { "model": "ollama/llama3.2:3b" }
+      "guardAgent": { "model": "ollama/minicpm4.1" }
     },
 
     "_example_ollama_native": {
@@ -58,10 +76,10 @@
         "enabled": true,
         "type": "ollama-native",
         "provider": "ollama",
-        "model": "qwen2.5:7b",
+        "model": "minicpm4.1",
         "endpoint": "http://localhost:11434"
       },
-      "guardAgent": { "model": "ollama/qwen2.5:7b" }
+      "guardAgent": { "model": "ollama/minicpm4.1" }
     },
 
     "_example_vllm": {
@@ -69,10 +87,10 @@
         "enabled": true,
         "type": "openai-compatible",
         "provider": "vllm",
-        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "model": "openbmb/MiniCPM4.1",
         "endpoint": "http://localhost:8000"
       },
-      "guardAgent": { "model": "vllm/Qwen/Qwen2.5-7B-Instruct" }
+      "guardAgent": { "model": "vllm/openbmb/MiniCPM4.1" }
     },
 
     "_example_lmstudio": {
@@ -80,10 +98,10 @@
         "enabled": true,
         "type": "openai-compatible",
         "provider": "lmstudio",
-        "model": "lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF",
+        "model": "openbmb/MiniCPM4.1-GGUF",
         "endpoint": "http://localhost:1234"
       },
-      "guardAgent": { "model": "lmstudio/lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF" }
+      "guardAgent": { "model": "lmstudio/openbmb/MiniCPM4.1-GGUF" }
     },
 
     "_example_sglang": {
@@ -91,10 +109,10 @@
         "enabled": true,
         "type": "openai-compatible",
         "provider": "sglang",
-        "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "model": "openbmb/MiniCPM4.1",
         "endpoint": "http://localhost:30000"
       },
-      "guardAgent": { "model": "sglang/meta-llama/Meta-Llama-3.1-8B-Instruct" }
+      "guardAgent": { "model": "sglang/openbmb/MiniCPM4.1" }
     },
 
     "_example_custom": {
@@ -111,32 +129,62 @@
     },
 
     "localModel": {
-      "enabled": false,
+      "enabled": true,
       "type": "openai-compatible",
       "provider": "ollama",
-      "model": "llama3.2:3b",
+      "model": "minicpm4.1",
       "endpoint": "http://localhost:11434"
     },
     "guardAgent": {
       "id": "guard",
       "workspace": "~/.openclaw/workspace-guard",
-      "model": "ollama/llama3.2:3b"
+      "model": "ollama/minicpm4.1"
     },
     "routers": {
       "privacy": { "enabled": true, "type": "builtin", "weight": 90 },
       "token-saver": {
         "enabled": true,
         "type": "builtin",
-        "weight": 40,
         "options": {
+          "judgeEndpoint": "https://openrouter.ai/api/v1",
           "judgeModel": "openbmb/minicpm4.1",
+          "judgeProviderType": "openai-compatible",
+          "defaultTier": "MEDIUM",
           "tiers": {
-            "SIMPLE":    { "provider": "zhipu",    "model": "glm-4.5-air" },
-            "MEDIUM":    { "provider": "minimax",  "model": "minimax-m2.5" },
-            "COMPLEX":   { "provider": "deepseek", "model": "deepseek-v3.2" },
-            "RESEARCH":  { "provider": "zhipu",    "model": "glm-5" },
-            "REASONING": { "provider": "moonshot", "model": "kimi-k2.5" }
-          }
+            "SIMPLE": {
+              "provider": "openrouter",
+              "model": "glm-4.5-air",
+              "description": "lookup, greeting, yes/no, factual questions with short answers, confirming readiness, reading a short file to answer ONE factual question"
+            },
+            "MEDIUM": {
+              "provider": "openrouter",
+              "model": "minimax-m2.5",
+              "description": "moderate writing (email, blog, letter), text rewriting or humanizing, using a skill on text, CSV/spreadsheet/Excel data analysis, search-and-replace across config files, summarizing a plain-text file"
+            },
+            "COMPLEX": {
+              "provider": "openrouter",
+              "model": "deepseek-v3.2",
+              "description": "code generation, file and project structure creation, multi-step workflows, email triage or classification across multiple messages, email search and summarization, competitive/market research, multi-file refactoring, creating calendar events or ICS files"
+            },
+            "RESEARCH": {
+              "provider": "openrouter",
+              "model": "glm-5",
+              "description": "tasks requiring web search or finding real-time information: stock prices, upcoming events or conferences, live market data, current news"
+            },
+            "REASONING": {
+              "provider": "openrouter",
+              "model": "kimi-k2.5",
+              "description": "reading a PDF or long document then summarizing or explaining it, answering questions about a PDF or report, math proof, formal logic, structured information extraction from lengthy documents"
+            }
+          },
+          "rules": [
+            "Writing a blog post, email, or letter from scratch → MEDIUM.",
+            "CSV/Excel data processing and summarization → MEDIUM.",
+            "Creating Python scripts, project structures, or ICS files → COMPLEX.",
+            "Reading multiple emails/files and classifying them → COMPLEX.",
+            "Searching the web for real-world data (stock, events) → RESEARCH.",
+            "Reading a PDF then summarizing or answering questions → REASONING."
+          ]
         }
       }
     },
@@ -146,6 +194,11 @@
       "baseDir": "~/.openclaw",
       "injectDualHistory": true,
       "historyLimit": 20
+    },
+    "pipeline": {
+      "onUserMessage": ["token-saver"],
+      "onToolCallProposed": [],
+      "onToolCallExecuted": []
     }
   }
 }
