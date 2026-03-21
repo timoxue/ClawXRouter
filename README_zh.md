@@ -112,11 +112,11 @@ openclaw gateway
 
 | 级别 | 描述 | 默认模型 |
 |------|------|------|
-| SIMPLE | 纯文本转换：摘要、改写、简单问答、打招呼 | `glm-4.5-air` |
-| MEDIUM | 标准 Agent 工作（默认）：写邮件、写脚本、数据分析、项目脚手架、调研 | `minimax-m2.5` |
-| COMPLEX | 结构化批量处理：批量邮件分拣、多文件/目录创建、从文档提取结构化数据 | `deepseek-v3.2` |
-| RESEARCH | 创造性综合：长文写作、多源整合工作流（阅读→编码→文档） | `glm-5` |
-| REASONING | 深度 PDF 分析：阅读理解并以简化语言解释 PDF 文档 | `kimi-k2.5` |
+| SIMPLE | 查询、打招呼、是/否判断、简短事实问答、确认就绪、读取短文件回答单个问题 | `glm-4.5-air` |
+| MEDIUM | 中等写作（邮件、博客、信件）、文本改写、技能应用、CSV/Excel 数据分析、配置文件批量替换、纯文本摘要 | `minimax-m2.5` |
+| COMPLEX | 代码生成、文件/项目结构创建、多步工作流、多邮件分类与摘要、竞品调研、多文件重构、日历事件创建 | `deepseek-v3.2` |
+| RESEARCH | 复杂代码生成、需要联网搜索或获取实时信息的任务：股价、会议活动、行情数据、时事新闻 | `glm-5` |
+| REASONING | 长文档后摘要或解释、回答复杂报告相关问题、数学证明、形式逻辑、从长文档提取结构化信息 | `kimi-k2.5` |
 
 ### 结果
 
@@ -146,8 +146,8 @@ openclaw gateway
    - 右列 **S3 — Confidential (Local Model Only)**：如 `ssh`、`private_key`、`.pem`
 2. 展开 **Advanced Configuration** → **Detection Rules (Regex & Tool Filters)**：
    - **Regex Patterns**：添加正则，如 `(?:mysql|postgres|mongodb)://[^\s]+`
-   - **Sensitive Tool Names**：如 `exec`、`shell`、`sudo`
-   - **Sensitive File Paths**：如 `~/secrets`、`~/.ssh`、`~/.aws`
+   - **Sensitive Tool Names**：如 `execute_sql`、`sudo`
+   - **Sensitive File Paths**：如 `~/secrets`、`~/private`、`~/.ssh`、`~/.aws`、`~/.config/credentials`
 3. 点击 **Save Privacy Router**
 
 #### 检测器组合
@@ -209,16 +209,34 @@ openclaw gateway
   "privacy": {
     "rules": {
       "keywords": {
-        "S2": ["password", "api_key", "token"],
-        "S3": ["ssh", "id_rsa", "private_key", ".pem"]
+        "S2": [
+          "password", "api_key", "secret", "token", "credential", "auth_token",
+          "salary", "地址", "电话", "手机号", "合同", "客户", "甲方", "乙方",
+          "交易", "金额", "internal", "intranet", "域控"
+        ],
+        "S3": [
+          "ssh", "id_rsa", "private_key", ".pem", ".key", ".env", "master_password",
+          "身份证", "银行卡", "社保", "病历", "诊断", "处方", "密码", "密钥",
+          "简历", "resume"
+        ]
       },
       "patterns": {
-        "S2": ["(?:mysql|postgres|mongodb)://[^\\s]+"],
-        "S3": ["-----BEGIN (?:RSA |EC )?PRIVATE KEY-----"]
+        "S2": [
+          "\\b(?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.\\d{1,3}\\.\\d{1,3}\\b",
+          "(?:mysql|postgres|mongodb|redis)://[^\\s]+",
+          "\\b(?:sk|key|token)-[A-Za-z0-9]{16,}\\b",
+          "1[3-9]\\d{9}"
+        ],
+        "S3": [
+          "-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+          "AKIA[0-9A-Z]{16}",
+          "\\d{17}[0-9Xx]",
+          "(?i)(password|passwd|pwd)\\s*[=:]\\s*['\"][^'\"]{8,}"
+        ]
       },
       "tools": {
-        "S2": { "tools": ["exec", "shell"], "paths": ["~/secrets"] },
-        "S3": { "tools": ["sudo"], "paths": ["~/.ssh", "~/.aws"] }
+        "S2": { "tools": ["execute_sql"], "paths": ["~/secrets", "~/private"] },
+        "S3": { "tools": ["sudo"], "paths": ["~/.ssh", "~/.aws", "~/.config/credentials", "/root", "/credentials/"] }
       }
     }
   }
@@ -252,6 +270,8 @@ openclaw gateway
   }
 }
 ```
+
+> 启用隐私路由后，可将 `"privacy"` 加入各阶段，如 `"onUserMessage": ["privacy", "token-saver"]`。
 
 #### 自定义路由器
 
