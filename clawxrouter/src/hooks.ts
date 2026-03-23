@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { PrivacyConfig } from "./types.js";

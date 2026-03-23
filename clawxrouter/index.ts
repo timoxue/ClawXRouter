@@ -1,4 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { clawXrouterConfigSchema, defaultPrivacyConfig } from "./src/config-schema.js";
@@ -73,11 +74,10 @@ function resolveProxyApi(originalApi: string): string {
   return originalApi;
 }
 
-const plugin = {
+export default definePluginEntry({
   id: "clawxrouter",
   name: "ClawXrouter",
   description: "Privacy-aware plugin with extensible router pipeline, guard agent, and built-in privacy proxy",
-  version: "2026.3.0",
   configSchema: clawXrouterConfigSchema,
 
   register(api: OpenClawPluginApi) {
@@ -395,6 +395,4 @@ const plugin = {
     api.logger.info(`${c}  ╚${bar}╝${r}`);
     api.logger.info("");
   },
-};
-
-export default plugin;
+});
