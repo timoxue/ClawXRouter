@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="../assets/clawxrouter-logo.png" alt="ClawXrouter Logo" width="25%">
+  <img src="../assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="25%">
 </div>
 
 <h3 align="center">
@@ -7,8 +7,8 @@
 </h3>
 
 <p align="center">
-  端云协同的 AI 智能体路由引擎<br>
-  <b>ClawXrouter</b>：让每条请求自动走最合适的路
+  端云协同的 AI 智能体路由插件<br>
+  <b>ClawXRouter</b>：让每条请求自动走最合适的路
 </p>
 
 <p align="center">
@@ -25,13 +25,13 @@
 
 **最新动态** 🔥
 
-- **[2026.03.20]** 🎉 ClawXrouter 正式开源，端云协同 AI 智能体路由
+- **[2026.03.25]** 🎉 ClawXRouter 正式开源，端云协同 AI 智能体路由
 
 ---
 
 ## 📑 目录
 
-- [💡 关于 ClawXrouter](#-关于-clawxrouter)
+- [💡 关于 ClawXRouter](#-关于-clawxrouter)
 - [🎬 Demo](#-demo)
 - [📦 快速开始](#-快速开始)
 - [📈 性价比路由：4折价格超越Sonnet！](#-性价比路由4折价格超越sonnet)
@@ -46,30 +46,30 @@
 
 ---
 
-## 💡 关于 ClawXrouter
+## 💡 关于 ClawXRouter
 
-ClawXrouter 是一个**端云协同的 AI 智能体路由插件**，由 [THUNLP（清华大学）](https://nlp.csai.tsinghua.edu.cn)、[中国人民大学](http://ai.ruc.edu.cn/)、[AI9Stars](https://github.com/AI9Stars)、[面壁智能（ModelBest）](https://modelbest.cn/en) 和 [OpenBMB](https://www.openbmb.cn/home) 联合开发，构建于 [OpenClaw](https://github.com/openclaw/openclaw) 之上。
+ClawXRouter 是一个**端云协同的 AI 智能体路由插件**，由 [THUNLP（清华大学）](https://nlp.csai.tsinghua.edu.cn)、[中国人民大学](http://ai.ruc.edu.cn/)、[AI9Stars](https://github.com/AI9Stars)、[面壁智能（ModelBest）](https://modelbest.cn/en) 和 [OpenBMB](https://www.openbmb.cn/home) 联合开发，构建于 [OpenClaw](https://github.com/openclaw/openclaw) 之上。
 
 AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落地过程中，当前的 Agent 使用模式暴露出三大突出问题：
 
-- **云侧"不敢用"**——用户的代码、文件、对话记录等敏感数据被直接上传至第三方模型服务，数据泄露风险难以接受
-- **云侧"用不起"**——大量简单任务也被昂贵的顶级模型处理，token 开销居高不下
-- **端侧"用不好"**——本地模型受限于算力与参数规模，面对复杂推理、多文件重构等高难度任务力不从心，单靠端侧无法满足实际需求
+- **云侧"不敢用"**——让 Agent 分析一份客户数据表，里面的姓名、手机号、身份证号随上下文一起发到了云端，一次数据分析客户隐私就到了第三方服务器上，数据泄露风险难以接受
+- **云侧"用不起"**——大量简单任务（如用 grep 查找一个函数调用的位置）也被昂贵的顶级模型处理，大部分 token 花在了便宜模型即可解决的简单任务上
+- **端侧"用不好"**——本地模型受限于算力与参数规模，面对复杂推理、多文件重构等高难度任务力不从心；简单的数据汇总、格式转换能用，涉及多维度交叉分析和异常检测就不够了，单靠端侧无法满足实际需求
 
 云侧不敢用、用不起，端侧用不好——**端云协同才是最优解**。端侧智能体就像用户的保健医生，熟悉用户的习惯、偏好与隐私数据，常见问题直接处置；云侧智能体就像门诊专家，专业能力突出但不应接触患者的完整隐私。有效的协作不是让两者互相替代，而是由保健医生整理好必要的病情信息，对接合适的专科专家协同诊治。而要让这套协同真正运转起来，关键在于一个核心问题：**每条请求该走哪条路？** 这正是路由机制要解决的问题。
 
-针对上述三大痛点，ClawXrouter 给出对应的解法：
+针对上述三大痛点，ClawXRouter 给出对应的解法：
 
-- **🔒 不敢用 → 三级隐私路由**：自动识别敏感数据，私密信息（S3）物理隔离在本地，由端侧模型离线处理，云侧完全不可见——从根本上消除泄露风险，让用户**放心用**
-- **💰 用不起 → 性价比感知路由**：端侧小模型做 LLM-as-Judge，按任务复杂度分为五级，路由到不同价位的云侧模型——省 58% 的钱，PinchBench 跑分还高 6.3%，让用户**用得起**
-- **🔗 用不好 → 智能脱敏转发**：对于涉及敏感信息的复杂任务，端侧模型能力不足时不必硬扛——自动脱敏后转发云侧（S2），既保护隐私又借助云端专业能力，让用户**用得好**
+- **🔒 不敢用 → 三级隐私路由**：自动识别敏感数据，私密信息（S3）物理隔离在本地，由端侧模型离线处理，云侧完全不可见——从根本上消除泄露风险，让用户**放心用**；code review 遇到 API Key，请求不出本机
+- **💰 用不起 → 性价比感知路由**：端侧小模型做 LLM-as-Judge，按任务复杂度分为五级，路由到不同价位的云侧模型——省 58% 的钱，PinchBench 跑分还高 6.3%，让用户**用得起**；grep 函数名走便宜模型，不必全用昂贵的顶流模型
+- **🔗 用不好 → 智能脱敏转发**：对于涉及敏感信息的复杂任务，端侧模型能力不足时不必硬扛——多文件复杂数据分析等场景，自动脱敏后转发云侧（S2），既保护隐私又借助云端专业能力，让用户**用得好**
 - **🎛️ 个性化 → 可组合管线与 Dashboard**：隐私路由与性价比路由在同一管线中通过权重与短路策略协同工作，配合可视化 Dashboard 支持规则自定义、配置即时生效与实时测试，让每位用户按自身需求灵活调整
 
 两套路由运行在同一可组合管线中：端侧双引擎（规则检测 ~0ms + 本地 LLM 语义检测 ~1-2s）实时判别每条请求的敏感度与复杂度，安全优先短路、性价比按需生效。开发者无需修改业务逻辑，即可实现**"公开数据上云、敏感数据脱敏、私密数据落地"**的无感端云协同。
 
 
 <div align="center">
-  <img src="../assets/clawxrouter-arch.png" alt="ClawXrouter Architecture" width="90%">
+  <img src="../assets/clawxrouter-arch.png" alt="ClawXRouter Architecture" width="90%">
 </div>
 
 ---
@@ -99,7 +99,7 @@ ollama serve
 
 ```bash
 openclaw gateway
-# ClawXrouter Ready! Dashboard → http://127.0.0.1:18789/plugins/clawxrouter/stats
+# ClawXRouter Ready! Dashboard → http://127.0.0.1:18789/plugins/clawxrouter/stats
 ```
 
 ---
@@ -112,11 +112,11 @@ openclaw gateway
 
 | 级别 | 描述 | 默认模型 |
 |------|------|------|
-| SIMPLE | 查询、打招呼、是/否判断、简短事实问答、确认就绪、读取短文件回答单个问题 | `glm-4.5-air` |
-| MEDIUM | 中等写作（邮件、博客、信件）、文本改写、技能应用、CSV/Excel 数据分析、配置文件批量替换、纯文本摘要 | `minimax-m2.5` |
-| COMPLEX | 代码生成、文件/项目结构创建、多步工作流、多邮件分类与摘要、竞品调研、多文件重构、日历事件创建 | `deepseek-v3.2` |
-| RESEARCH | 复杂代码生成、需要联网搜索或获取实时信息的任务：股价、会议活动、行情数据、时事新闻 | `glm-5` |
-| REASONING | 长文档后摘要或解释、回答复杂报告相关问题、数学证明、形式逻辑、从长文档提取结构化信息 | `kimi-k2.5` |
+| SIMPLE | 摘要、改写、简单问答、打招呼 | `glm-4.5-air` |
+| MEDIUM | 写邮件、写脚本、数据分析、项目脚手架 | `minimax-m2.5` |
+| COMPLEX | 批量邮件分拣、多文件创建、结构化数据提取 | `deepseek-v3.2` |
+| RESEARCH | 长文写作、多源整合工作流 | `glm-5` |
+| REASONING | 深度 PDF 分析、数学证明、实验设计 | `kimi-k2.5` |
 
 ### 结果
 
@@ -160,7 +160,7 @@ openclaw gateway
 |------|:-:|:-:|
 | User Message | ✅ | ✅ |
 | Before Tool Runs | ✅ | — |
-| After Tool Runs | ✅ | — |
+| After Tool Runs | ✅ | ✅ |
 
 点击 **Save Privacy Router** 保存。
 
@@ -212,7 +212,7 @@ openclaw gateway
         "S2": [
           "password", "api_key", "secret", "token", "credential", "auth_token",
           "salary", "地址", "电话", "手机号", "合同", "客户", "甲方", "乙方",
-          "交易", "金额", "internal", "intranet", "域控"
+          "交易", "金额", "intranet", "域控"
         ],
         "S3": [
           "ssh", "id_rsa", "private_key", ".pem", ".key", ".env", "master_password",
@@ -225,12 +225,19 @@ openclaw gateway
           "\\b(?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.\\d{1,3}\\.\\d{1,3}\\b",
           "(?:mysql|postgres|mongodb|redis)://[^\\s]+",
           "\\b(?:sk|key|token)-[A-Za-z0-9]{16,}\\b",
-          "1[3-9]\\d{9}"
+          "1[3-9]\\d{9}",
+          "(?i)ghp_[a-zA-Z0-9]{36}",
+          "(?i)xox[bsrap]-[a-zA-Z0-9-]+",
+          "(?i)(?:contract|agreement)[-_]?\\w{6,}",
+          "(?i)¥[\\d,]+\\.?\\d*|\\$[\\d,]+\\.?\\d*",
+          "(?i)[a-z]+-(?:srv|dc|db|web|app)-\\d+",
+          "(?i)[a-z]+\\\\[a-z0-9._-]+"
         ],
         "S3": [
           "-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
           "AKIA[0-9A-Z]{16}",
           "\\d{17}[0-9Xx]",
+          "\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}",
           "(?i)(password|passwd|pwd)\\s*[=:]\\s*['\"][^'\"]{8,}"
         ]
       },
@@ -251,7 +258,7 @@ openclaw gateway
     "checkpoints": {
       "onUserMessage": ["ruleDetector", "localModelDetector"],
       "onToolCallProposed": ["ruleDetector"],
-      "onToolCallExecuted": ["ruleDetector"]
+      "onToolCallExecuted": ["ruleDetector", "localModelDetector"]
     }
   }
 }
@@ -317,7 +324,6 @@ const myRouter: ClawXrouterRouter = {
 | ----------------------- | ----------------- |
 | `detection-system.md`   | S1/S2/S3 分类规则 |
 | `token-saver-judge.md`  | 任务复杂度分类    |
-| `pii-extraction.md`     | PII 提取引擎      |
 
 ### 🔌 支持的边缘 Provider
 
@@ -339,13 +345,13 @@ const myRouter: ClawXrouterRouter = {
 
 #### 三级灵敏度分类
 
-"不敢用"的核心顾虑是隐私数据上云。ClawXrouter 通过在 OpenClaw 执行流程中植入 Hook，自动将每一条用户消息、工具调用参数和 Agent 输出按敏感程度分为三级：
+"不敢用"的核心顾虑是即使在 code review 这种通用场景中，也可能不小心造成隐私数据上云。ClawXRouter 通过在 OpenClaw 执行流程中植入 Hook，自动将每一条用户消息、工具调用参数和 Agent 输出按敏感程度分为三级：
 
 | 等级   | 含义 | 转发策略       | 示例                   |
 | ------ | ---- | -------------- | ---------------------- |
 | **S1** | 安全 | 直接发云侧模型 | "HTTP 403 和 401 有什么区别？" |
-| **S2** | 敏感 | 脱敏后转发云侧 | 包含内网 IP 的 SOC 告警 |
-| **S3** | 私密 | 仅本地模型处理 | 包含硬编码凭证的源代码 |
+| **S2** | 敏感 | 脱敏后转发云侧 | 含内网 IP 的告警、含手机号的联系人 |
+| **S3** | 私密 | 仅本地模型处理 | SSH 私钥、硬编码密码、工资单 |
 
 #### 双检测引擎
 
@@ -422,15 +428,15 @@ agents/{id}/sessions/
 
 #### 为什么需要性价比感知路由？
 
-"用不起"的根源在于，典型工作流中大部分请求只是查文件、看代码、简单问答，却统一交给最贵的模型处理。ClawXrouter 的性价比感知路由用端侧小模型做 LLM-as-Judge，把请求按复杂度分为五级，路由到不同价位的云侧模型：
+"用不起"的根源在于，典型工作流中大部分请求只是查文件、看代码、简单问答，却统一交给最贵的模型处理。grep 一个函数调用也用 Claude，钱包受不了。ClawXRouter 的性价比感知路由用端侧小模型做 LLM-as-Judge，把请求按复杂度分为五级，路由到不同价位的云侧模型：
 
-| 复杂度        | 任务示例                         | 默认目标模型        |
-| ------------- | -------------------------------- | ------------------- |
-| **SIMPLE**    | 查询、翻译、格式化、打招呼       | `glm-4.5-air`       |
-| **MEDIUM**    | 代码生成、单文件编辑、邮件撰写   | `minimax-m2.5`      |
-| **COMPLEX**   | 系统设计、多文件重构、跨文档分析 | `deepseek-v3.2`     |
-| **RESEARCH**  | 博客写作、多步工作流、日报摘要   | `glm-5`             |
-| **REASONING** | 数学证明、形式逻辑、实验设计     | `kimi-k2.5`         |
+| 复杂度        | 任务示例                                           | 默认目标模型        |
+| ------------- | -------------------------------------------------- | ------------------- |
+| **SIMPLE**    | 摘要、改写、简单问答、打招呼                         | `glm-4.5-air`       |
+| **MEDIUM**    | 写邮件、写脚本、数据分析、项目脚手架                 | `minimax-m2.5`      |
+| **COMPLEX**   | 批量邮件分拣、多文件创建、结构化数据提取             | `deepseek-v3.2`     |
+| **RESEARCH**  | 长文写作、多源整合工作流                             | `glm-5`             |
+| **REASONING** | 深度 PDF 分析、数学证明、实验设计                    | `kimi-k2.5`         |
 
 
 
@@ -573,7 +579,7 @@ clawxrouter/
 
 ## 🤝 贡献指南
 
-云侧不敢用、用不起，端侧用不好——ClawXrouter 的答案是：不必二选一，让端侧和云侧各尽其能。隐私路由让用户敢用，性价比路由让用户用得起，智能脱敏让用户用得好。项目将持续开源迭代，欢迎开发者与行业伙伴参与贡献，共同构建安全高效的端云协同 Agent 生态！
+云侧不敢用、用不起，端侧用不好——ClawXRouter 的答案是：不必二选一，让端侧和云侧各尽其能。隐私路由让用户敢用，性价比路由让用户用得起，智能脱敏让用户用得好。项目将持续开源迭代，欢迎开发者与行业伙伴参与贡献，共同构建安全高效的端云协同 Agent 生态！
 
 贡献流程：**Fork 本仓库 → 提交 Issues → 创建 Pull Requests（PRs）**
 

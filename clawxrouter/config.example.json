@@ -10,14 +10,14 @@
     "checkpoints": {
       "onUserMessage": ["ruleDetector", "localModelDetector"],
       "onToolCallProposed": ["ruleDetector"],
-      "onToolCallExecuted": ["ruleDetector"]
+      "onToolCallExecuted": ["ruleDetector", "localModelDetector"]
     },
     "rules": {
       "keywords": {
         "S2": [
           "password", "api_key", "secret", "token", "credential", "auth_token",
           "salary", "地址", "电话", "手机号", "合同", "客户", "甲方", "乙方",
-          "交易", "金额", "internal", "intranet", "域控"
+          "交易", "金额", "intranet", "域控"
         ],
         "S3": [
           "ssh", "id_rsa", "private_key", ".pem", ".key", ".env", "master_password",
@@ -147,7 +147,7 @@
         "type": "builtin",
         "options": {
           "judgeEndpoint": "https://openrouter.ai/api/v1",
-          "judgeModel": "openbmb/minicpm4.1",
+          "judgeModel": "gemini-2.5-flash",
           "judgeProviderType": "openai-compatible",
           "defaultTier": "MEDIUM",
           "tiers": {
@@ -198,7 +198,7 @@
     "pipeline": {
       "onUserMessage": ["token-saver"],
       "onToolCallProposed": [],
-      "onToolCallExecuted": []
+      "onToolCallExecuted": ["privacy"]
     }
   }
 }
