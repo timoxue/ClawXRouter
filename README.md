@@ -187,7 +187,7 @@ Each router card has an embedded Prompt editing area:
 |--------|----------------|----------|
 | Privacy Router | `detection-system` | Displayed directly in the card |
 | Privacy Router | `pii-extraction` | Inside Advanced Configuration |
-| Cost-Optimizer | `token-saver-judge` | Inside Cost-Optimizer card |
+| Cost-Optimizer | `cost-optimizer-judge` | Inside Cost-Optimizer card |
 
 Edit the text area directly — **Save** takes effect immediately, **Reset** restores defaults.
 
@@ -270,7 +270,7 @@ Configuration file path: `~/.openclaw/clawxrouter.json` — content saved from t
 {
   "privacy": {
     "pipeline": {
-      "onUserMessage": ["privacy", "token-saver", "content-filter"],
+      "onUserMessage": ["privacy", "cost-optimizer", "content-filter"],
       "onToolCallProposed": ["privacy"],
       "onToolCallExecuted": ["privacy"]
     }
@@ -278,7 +278,7 @@ Configuration file path: `~/.openclaw/clawxrouter.json` — content saved from t
 }
 ```
 
-> After enabling privacy routing, you can add `"privacy"` to each phase, e.g., `"onUserMessage": ["privacy", "token-saver"]`.
+> After enabling privacy routing, you can add `"privacy"` to each phase, e.g., `"onUserMessage": ["privacy", "cost-optimizer"]`.
 
 #### Custom Routers
 
@@ -323,7 +323,7 @@ Modify the Markdown files under `clawxrouter/prompts/`:
 | File                    | Purpose              |
 | ----------------------- | -------------------- |
 | `detection-system.md`   | S1/S2/S3 classification rules |
-| `token-saver-judge.md`  | Task complexity classification |
+| `cost-optimizer-judge.md` | Task complexity classification |
 
 ### 🔌 Supported Edge Providers
 
@@ -503,7 +503,7 @@ User Message
 The pipeline merges decisions from multiple routers according to the following rules:
 
 1. **Highest security level wins**: S3 > S2 > S1
-2. **At the same level, highest weight wins**: privacy(90) > token-saver(40)
+2. **At the same level, highest weight wins**: privacy(90) > cost-optimizer(40)
 3. **`passthrough` (no opinion) yields to `redirect` (has opinion)**: When the privacy router says "no sensitive data" and the cost-aware router says "redirect to a cheaper model", the latter takes effect
 4. **Among multiple redirects, the stricter behavior takes priority**: block > redirect > transform > passthrough
 
@@ -550,7 +550,7 @@ clawxrouter/
 │   ├── config-schema.ts            # TypeBox config schema + defaults
 │   ├── routers/
 │   │   ├── privacy.ts              # Privacy router (three-level privacy routing)
-│   │   ├── token-saver.ts          # Cost-aware router (cost savings)
+│   │   ├── cost-optimizer.ts       # Cost-aware router (cost savings)
 │   │   └── configurable.ts         # Custom routers created from Dashboard
 │   ├── privacy-proxy.ts            # Local HTTP proxy for S2 PII redaction
 │   ├── provider.ts                 # Provider registration + model mirroring
@@ -574,7 +574,7 @@ clawxrouter/
 └── prompts/
     ├── detection-system.md         # Privacy detection prompt
     ├── guard-agent-system.md       # Guard Agent system prompt
-    └── token-saver-judge.md        # Task complexity judgment prompt
+    └── cost-optimizer-judge.md     # Task complexity judgment prompt
 ```
 
 ---
