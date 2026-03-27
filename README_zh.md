@@ -77,7 +77,7 @@ AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落�
 ## 🎬 Demo
 
 <div align="center">
-  <video src="assets/demo-zh.mov" width="70%" controls></video>
+  <video src="https://github.com/Kaguya-19/Edgeclaw-router/releases/download/demo-videos/demo-zh.mov" width="70%" controls></video>
 </div>
 
 ---

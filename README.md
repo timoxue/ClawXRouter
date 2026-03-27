@@ -77,7 +77,7 @@ Both routing systems run in the same composable pipeline: the edge-side dual eng
 ## 🎬 Demo
 
 <div align="center">
-  <video src="assets/demo-en.mov" width="70%" controls></video>
+  <video src="https://github.com/Kaguya-19/Edgeclaw-router/releases/download/demo-videos/demo-en.mov" width="70%" controls></video>
 </div>
 
 ---
