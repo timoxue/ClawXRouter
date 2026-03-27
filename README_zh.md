@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="../assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="25%">
+  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="25%">
 </div>
 
 <h3 align="center">
@@ -69,7 +69,7 @@ AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落�
 
 
 <div align="center">
-  <img src="../assets/clawxrouter-arch.png" alt="ClawXRouter Architecture" width="90%">
+  <img src="assets/clawxrouter-arch.png" alt="ClawXRouter Architecture" width="90%">
 </div>
 
 ---

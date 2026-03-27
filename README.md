@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="../assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="25%">
+  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="25%">
 </div>
 
 <h3 align="center">
@@ -69,7 +69,7 @@ Both routing systems run in the same composable pipeline: the edge-side dual eng
 
 
 <div align="center">
-  <img src="../assets/clawxrouter-arch.png" alt="ClawXRouter Architecture" width="90%">
+  <img src="assets/clawxrouter-arch.png" alt="ClawXRouter Architecture" width="90%">
 </div>
 
 ---
