@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="25%">
+  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="50%">
 </div>
 
 <h3 align="center">
