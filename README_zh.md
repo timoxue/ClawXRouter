@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="50%">
+  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="65%">
 </div>
 
 <h3 align="center">
@@ -77,7 +77,7 @@ AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落�
 ## 🎬 Demo
 
 <div align="center">
-  <video src="https://github.com/Kaguya-19/Edgeclaw-router/releases/download/demo-videos/demo-zh.mov" width="70%" controls></video>
+  <video src="https://github.com/user-attachments/assets/f545a793-1c40-4d42-af38-316343b23c5c" width="70%" controls></video>
 </div>
 
 ---

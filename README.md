@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="50%">
+  <img src="assets/clawxrouter-logo.png" alt="ClawXRouter Logo" width="65%">
 </div>
 
 <h3 align="center">
@@ -77,7 +77,7 @@ Both routing systems run in the same composable pipeline: the edge-side dual eng
 ## 🎬 Demo
 
 <div align="center">
-  <video src="https://github.com/Kaguya-19/Edgeclaw-router/releases/download/demo-videos/demo-en.mov" width="70%" controls></video>
+  <video src="https://github.com/user-attachments/assets/c07e4ed4-1065-4be4-bbf7-6e918623aeb2" width="70%" controls></video>
 </div>
 
 ---
