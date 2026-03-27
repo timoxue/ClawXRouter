@@ -77,7 +77,7 @@ Both routing systems run in the same composable pipeline: the edge-side dual eng
 ## 🎬 Demo
 
 <div align="center">
-  <a href=""><img src="" width="70%"></a>
+  <video src="assets/demo-en.mov" width="70%" controls></video>
 </div>
 
 ---
