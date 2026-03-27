@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/clawxrouter",
+  "name": "@openbmb/clawxrouter",
   "version": "2026.3.9",
   "description": "Privacy-aware plugin with sensitivity detection, guard agent support, and built-in privacy proxy",
   "type": "module",
@@ -24,7 +24,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/openclaw/clawxrouter"
+    "url": "https://github.com/OpenBMB/ClawXRouter"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
@@ -34,7 +34,10 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.22"
+    }
   },
   "devDependencies": {
     "vitest": "^4.1.0"

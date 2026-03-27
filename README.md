@@ -88,6 +88,11 @@ Both routing systems run in the same composable pipeline: the edge-side dual eng
 
 ```bash
 # Prerequisites: OpenClaw is already installed
+
+# Install from ClawHub (recommended)
+openclaw plugins install @openbmb/clawxrouter
+
+# Or install via npm
 npm install -g @openbmb/clawxrouter
 
 # (Optional) Install local inference backend
