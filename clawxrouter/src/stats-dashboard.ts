@@ -1,6 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { getGlobalCollector, onTokenUpdate } from "./token-stats.js";
 import { getLiveConfig, updateLiveConfig } from "./live-config.js";
 import { getAllSessionStates, getSessionState, getLastInputEstimate, onDetection, getLoopMeta, clearAllSessionStates } from "./session-state.js";
@@ -9,27 +7,7 @@ import { DEFAULT_JUDGE_PROMPT } from "./routers/token-saver.js";
 import { DEFAULT_DETECTION_SYSTEM_PROMPT, DEFAULT_PII_EXTRACTION_PROMPT } from "./local-model.js";
 import type { RouterPipeline } from "./router-pipeline.js";
 import { createConfigurableRouter } from "./routers/configurable.js";
-
-const CLAWXROUTER_CONFIG_PATH = join(
-  process.env.HOME ?? "/tmp",
-  ".openclaw",
-  "clawxrouter.json",
-);
-
-function saveClawXrouterConfig(privacy: Record<string, unknown>): void {
-  try {
-    const dir = join(process.env.HOME ?? "/tmp", ".openclaw");
-    mkdirSync(dir, { recursive: true });
-    let existing: Record<string, unknown> = {};
-    try {
-      existing = JSON.parse(readFileSync(CLAWXROUTER_CONFIG_PATH, "utf-8")) as Record<string, unknown>;
-    } catch { /* file may not exist yet */ }
-    const updated = { ...existing, privacy };
-    writeFileSync(CLAWXROUTER_CONFIG_PATH, JSON.stringify(updated, null, 2), "utf-8");
-  } catch {
-    // best-effort persistence
-  }
-}
+import { saveClawXrouterConfig } from "./dashboard-config-io.js";
 
 export type DashboardDeps = {
   pluginId: string;

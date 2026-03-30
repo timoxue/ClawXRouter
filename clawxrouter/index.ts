@@ -75,8 +75,8 @@ function resolveProxyApi(originalApi: string): string {
 }
 
 export default definePluginEntry({
-  id: "clawxrouter",
-  name: "ClawXrouter",
+  id: "ClawXRouter",
+  name: "ClawXRouter",
   description: "Privacy-aware plugin with extensible router pipeline, guard agent, and built-in privacy proxy",
   configSchema: clawXrouterConfigSchema,
 

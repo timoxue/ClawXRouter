@@ -89,11 +89,11 @@ AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落�
 ```bash
 # 前置条件：已安装 OpenClaw
 
-# 从 ClawHub 安装（推荐）
-openclaw plugins install @openbmb/clawxrouter
-
-# 或通过 npm 安装
+# 通过 npm 安装（推荐）
 npm install -g @openbmb/clawxrouter
+
+# 或从 ClawHub 安装
+openclaw plugins install clawhub:clawxrouter
 
 # （可选）安装本地推理后端
 ollama pull openbmb/minicpm4.1

@@ -1,7 +1,7 @@
 {
-  "id": "clawxrouter",
-  "name": "ClawXrouter",
-  "description": "Privacy-aware plugin with sensitivity detection, guard agent support, and built-in privacy proxy",
+  "id": "ClawXRouter",
+  "name": "ClawXRouter",
+  "description": "Edge-cloud collaborative routing plugin that keeps sensitive data local and routes tasks to cost-effective models — protects user privacy by classifying requests into three safety levels and redacting PII before any cloud forwarding",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
