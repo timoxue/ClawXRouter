@@ -450,7 +450,8 @@ export function stashDesensitizedToolResult(
     const firstKey = toolResultDesensitizationCache.keys().next().value;
     if (firstKey !== undefined) toolResultDesensitizationCache.delete(firstKey);
   }
-  toolResultDesensitizationCache.set(contentFingerprint(originalContent), desensitized);
+  const fp = contentFingerprint(originalContent);
+  toolResultDesensitizationCache.set(fp, desensitized);
 }
 
 export function lookupDesensitizedToolResult(

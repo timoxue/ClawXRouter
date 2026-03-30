@@ -113,97 +113,99 @@ async function callOpenAICompatible(
     headers["Authorization"] = `Bearer ${options.apiKey}`;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: options?.temperature ?? 0.1,
-      max_tokens: options?.maxTokens ?? 800,
-      stream: true,
-      ...(options?.stop ? { stop: options.stop } : {}),
-      ...(options?.frequencyPenalty != null ? { frequency_penalty: options.frequencyPenalty } : {}),
-    }),
-    signal: AbortSignal.timeout(CLAWXROUTER_FETCH_TIMEOUT_MS),
-  });
+  const doFetch = async (): Promise<ChatCompletionResult> => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: options?.temperature ?? 0.1,
+        max_tokens: options?.maxTokens ?? 800,
+        stream: true,
+        ...(options?.stop ? { stop: options.stop } : {}),
+        ...(options?.frequencyPenalty != null ? { frequency_penalty: options.frequencyPenalty } : {}),
+      }),
+      signal: AbortSignal.timeout(CLAWXROUTER_FETCH_TIMEOUT_MS),
+    });
 
-  if (!response.ok) {
-    let body = "";
-    try { body = (await response.text()).slice(0, 300); } catch { /* ignore */ }
-    throw new Error(`Chat completions API error: ${response.status} ${response.statusText}${body ? ` – ${body}` : ""} (url=${url})`);
-  }
+    if (!response.ok) {
+      let body = "";
+      try { body = (await response.text()).slice(0, 300); } catch { /* ignore */ }
+      throw new Error(`Chat completions API error: ${response.status} ${response.statusText}${body ? ` – ${body}` : ""} (url=${url})`);
+    }
 
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream") && response.body) {
-    return await consumeSSEStream(response.body);
-  }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("text/event-stream")) {
+      // Use response.text() instead of ReadableStream.getReader() —
+      // Worker threads (synckit) have unreliable ReadableStream consumption
+      // that sometimes yields empty content. Buffering the full body avoids this.
+      const raw = await response.text();
+      return parseSSEText(raw);
+    }
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
+    let text = data.choices?.[0]?.message?.content ?? "";
+    text = stripThinkingTags(text);
+    const usage: LlmUsageInfo | undefined = data.usage
+      ? {
+          input: data.usage.prompt_tokens ?? 0,
+          output: data.usage.completion_tokens ?? 0,
+          total: data.usage.total_tokens ?? (data.usage.prompt_tokens ?? 0) + (data.usage.completion_tokens ?? 0),
+        }
+      : undefined;
+    return { text, usage };
   };
-  let text = data.choices?.[0]?.message?.content ?? "";
-  text = stripThinkingTags(text);
 
-  const usage: LlmUsageInfo | undefined = data.usage
-    ? {
-        input: data.usage.prompt_tokens ?? 0,
-        output: data.usage.completion_tokens ?? 0,
-        total: data.usage.total_tokens ?? (data.usage.prompt_tokens ?? 0) + (data.usage.completion_tokens ?? 0),
-      }
-    : undefined;
-
-  return { text, usage };
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY_MS = 500;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const result = await doFetch();
+    if (result.text.length > 0) return result;
+    if (attempt < MAX_RETRIES) {
+      console.warn(`[ClawXrouter] Empty response from model (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${RETRY_DELAY_MS}ms…`);
+      await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+    }
+  }
+  return { text: "", usage: undefined };
 }
 
-async function consumeSSEStream(
-  body: ReadableStream<Uint8Array>,
-): Promise<ChatCompletionResult> {
-  const decoder = new TextDecoder();
-  const reader = body.getReader();
-  let textParts: string[] = [];
+/**
+ * Parse SSE text that was fully buffered via response.text().
+ * Avoids ReadableStream.getReader() which is unreliable in Worker threads.
+ */
+function parseSSEText(raw: string): ChatCompletionResult {
+  const textParts: string[] = [];
   let usage: LlmUsageInfo | undefined;
-  let buffer = "";
 
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (payload === "[DONE]") continue;
 
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const payload = trimmed.slice(5).trim();
-        if (payload === "[DONE]") continue;
-
-        try {
-          const chunk = JSON.parse(payload) as {
-            choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
-            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-          };
-          const delta = chunk.choices?.[0]?.delta;
-          if (delta?.content) {
-            textParts.push(delta.content);
-          }
-          if (chunk.usage) {
-            usage = {
-              input: chunk.usage.prompt_tokens ?? 0,
-              output: chunk.usage.completion_tokens ?? 0,
-              total: chunk.usage.total_tokens ?? 0,
-            };
-          }
-        } catch {
-          // skip malformed SSE chunks
-        }
+    try {
+      const chunk = JSON.parse(payload) as {
+        choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+      const delta = chunk.choices?.[0]?.delta;
+      if (delta?.content) {
+        textParts.push(delta.content);
       }
+      if (chunk.usage) {
+        usage = {
+          input: chunk.usage.prompt_tokens ?? 0,
+          output: chunk.usage.completion_tokens ?? 0,
+          total: chunk.usage.total_tokens ?? 0,
+        };
+      }
+    } catch {
+      // skip malformed SSE chunks
     }
-  } finally {
-    reader.releaseLock();
   }
 
   let text = textParts.join("");
@@ -668,7 +670,6 @@ function parseModelResponse(response: string): {
   confidence?: number;
 } {
   try {
-    // Try to find JSON in the response
     const jsonMatch = response.match(/\{[\s\S]*?\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]) as {

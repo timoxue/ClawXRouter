@@ -5,7 +5,7 @@
  * synchronously so that the `tool_result_persist` hook (sync-only) can desensitize
  * S2 tool results before they enter the persisted transcript.
  *
- * Timeout (30s) gracefully falls back to a failed result, leaving the caller
+ * Timeout (45s) gracefully falls back to a failed result, leaving the caller
  * to decide whether to pass content through or apply regex-only redaction.
  */
 
@@ -28,7 +28,7 @@ function getSyncDesensitize() {
   if (!_syncDesensitize) {
     _syncDesensitize = createSyncFn<(content: string, config: PrivacyConfig, sessionKey?: string) => SyncDesensitizeResult>(
       workerPath,
-      { timeout: 30_000, execArgv: ["--import", loaderPath] },
+      { timeout: 45_000, execArgv: ["--import", loaderPath] },
     );
   }
   return _syncDesensitize;

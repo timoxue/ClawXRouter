@@ -763,16 +763,11 @@ export function registerHooks(api: OpenClawPluginApi): void {
       if (wasRedacted) {
         if (!detectedSensitive) markSessionAsPrivate(sessionKey, "S2");
         stashDesensitizedToolResult(textContent, redacted);
-        api.logger.info(`[ClawXrouter] PII-redacted tool result for transcript (tool=${ctx.toolName ?? "unknown"})`);
         const modified = replaceMessageText(msg, redacted);
         if (modified) return { message: modified };
       }
 
       // ── Sync LLM detection via worker thread ──
-      // Rules cover keywords/regex but miss semantic sensitivity.
-      // synckit blocks the main thread (via Atomics.wait) for the LLM
-      // inference on a Worker, letting us use the result before returning.
-      // Timeout (20s) gracefully falls back to rules-only result.
       if (privacyConfig.localModel?.enabled && ruleCheck.level !== "S3") {
         const llmResult = syncDetectByLocalModel(
           { checkpoint: "onToolCallExecuted", toolName: ctx.toolName, toolResult: textContent, sessionKey },
@@ -831,9 +826,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
             if (modified) return { message: modified };
           }
 
-          // LLM-elevated S2: modify the persisted transcript message.
-          // If LLM desensitization succeeded, use it; otherwise fall back
-          // to regex redaction so PII doesn't leak to the cloud unmodified.
           const s2Content = llmDesensitized ?? redactSensitiveInfo(textContent, getLiveConfig().redaction);
           if (s2Content !== textContent) {
             stashDesensitizedToolResult(textContent, s2Content);
@@ -1014,31 +1006,6 @@ export function registerHooks(api: OpenClawPluginApi): void {
     try {
       const sessionKey = resolveHookSessionKey(ctx) || event.sessionId || "";
       const routeLevel = getSessionRouteLevel(sessionKey);
-
-      // ── DIAGNOSTIC: dump actual message content going to the LLM ──
-      if (Array.isArray(event.historyMessages)) {
-        for (let i = 0; i < event.historyMessages.length; i++) {
-          const m = event.historyMessages[i] as Record<string, unknown> | undefined;
-          if (!m) continue;
-          const role = m.role as string | undefined;
-          if (role === "toolResult" || role === "tool") {
-            const raw = typeof m.content === "string"
-              ? m.content
-              : Array.isArray(m.content)
-                ? (m.content as Array<Record<string, unknown>>)
-                    .filter((p) => p.type === "text")
-                    .map((p) => p.text as string)
-                    .join("")
-                : JSON.stringify(m.content);
-            const first500 = raw.slice(0, 500);
-            const hasPII = /何涛|张伟|李强|王芳|刘洋|陈明|林峰|赵磊|周杰|吴敏|孙浩|马丽/.test(raw);
-            const hasRedacted = raw.includes("[REDACTED:");
-            api.logger.warn(
-              `[ClawXrouter][DIAG-LLM-INPUT] msg[${i}] role=${role} hasPII=${hasPII} hasRedacted=${hasRedacted} len=${raw.length} provider=${event.provider} model=${event.model} sample="${first500}"`,
-            );
-          }
-        }
-      }
 
       if (routeLevel === "S3") return;
 

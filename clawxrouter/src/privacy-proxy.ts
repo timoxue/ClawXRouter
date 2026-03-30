@@ -1,7 +1,8 @@
 import * as http from "node:http";
 import { redactSensitiveInfo } from "./utils.js";
 import { getLiveConfig } from "./live-config.js";
-import { lookupDesensitizedToolResult } from "./session-state.js";
+import { lookupDesensitizedToolResult, stashDesensitizedToolResult } from "./session-state.js";
+import { desensitizeWithLocalModel } from "./local-model.js";
 
 // ── Marker protocol ──
 
@@ -427,6 +428,22 @@ async function tryStreamUpstream(
   return true;
 }
 
+// ── Tool result PII likelihood heuristic ──
+
+const SAFE_TOOL_RESULT_PATTERNS = [
+  /^\s*\{\s*"(?:status|error|result)":/,           // JSON error / status objects
+  /^\s*#\s+\S+\.md\b/,                             // Markdown file headers (memory files)
+  /^```[\w-]*\n/,                                   // Code fences
+  /^\s*(?:ENOENT|EACCES|EPERM|EISDIR|ENOTDIR)\b/,  // File system errors
+];
+
+const MAX_LLM_DESENSITIZE_TASKS = 4;
+
+function looksLikeSafeToolResult(content: string): boolean {
+  const head = content.slice(0, 120);
+  return SAFE_TOOL_RESULT_PATTERNS.some((re) => re.test(head));
+}
+
 // ── Proxy server ──
 
 export async function startPrivacyProxy(
@@ -467,20 +484,28 @@ export async function startPrivacyProxy(
 
       // Step 2b: Defense-in-depth — PII redaction on all non-system messages.
       //
-      // Two layers:
-      //   (a) Cached LLM desensitization: tool_result_persist stashed a
-      //       semantically desensitized version (covers names, addresses, etc.)
+      // Three layers:
+      //   (a) Cached LLM desensitization: tool_result_persist or prior proxy
+      //       call stashed a semantically desensitized version
       //   (b) Rule-based regex redaction: catches structured PII patterns
-      //       (phone, email, SSN, etc.) as a universal fallback.
+      //       (phone, email, SSN, etc.) as a universal fallback
+      //   (c) Async LLM desensitization: for tool results that missed the
+      //       cache — needed because pi-coding-agent's read fast-path
+      //       bypasses the tool_result_persist hook entirely
       //
       // System messages are excluded to avoid corrupting security instructions.
       const redactionOpts = getLiveConfig().redaction;
+      const privacyConfig = getLiveConfig();
       const allMessages = (parsed.messages ?? parsed.contents ?? []) as Array<Record<string, unknown>>;
+
+      // Collect async LLM desensitization tasks so they run concurrently
+      const llmTasks: Array<{ msg: Record<string, unknown>; rawContent: string }> = [];
+
       for (const msg of allMessages) {
         const role = String(msg.role ?? "").toLowerCase();
         if (role === "system") continue;
 
-        // (a) Try cached LLM-desensitized version from tool_result_persist
+        // (a) Try cached LLM-desensitized version
         if (typeof msg.content === "string") {
           const cached = lookupDesensitizedToolResult(msg.content);
           if (cached) {
@@ -521,6 +546,9 @@ export async function startPrivacyProxy(
           }
         }
 
+        // Capture raw content BEFORE regex, for correct cache key in step (c)
+        const rawContent = typeof msg.content === "string" ? msg.content : undefined;
+
         // (b) Regex-based PII redaction fallback
         if (typeof msg.content === "string") {
           const redacted = redactSensitiveInfo(msg.content, redactionOpts);
@@ -548,6 +576,45 @@ export async function startPrivacyProxy(
                 log.info("[ClawXrouter Proxy] Defense-in-depth: rule-based PII redaction applied to Google part");
               }
             }
+          }
+        }
+
+        // (c) Queue LLM desensitization for tool results on cache miss.
+        // pi-coding-agent's read fast-path bypasses tool_result_persist,
+        // so ALL tool results may arrive here un-desensitized regardless
+        // of language. Uses rawContent (pre-regex) for LLM input and cache key.
+        //
+        // Skip content that is very unlikely to contain user PII:
+        //  - too short (<80 chars) to hold meaningful PII context
+        //  - JSON error objects (tool failures, ENOENT, etc.)
+        //  - regex already substantially modified it (regex handled it)
+        if (role === "tool" && rawContent && rawContent.length > 80
+            && privacyConfig.localModel?.enabled
+            && !looksLikeSafeToolResult(rawContent)
+            && rawContent === (msg.content as string)) {
+          llmTasks.push({ msg, rawContent });
+        }
+      }
+
+      // Run LLM desensitization tasks concurrently (capped to avoid rate limits)
+      if (llmTasks.length > 0) {
+        const capped = llmTasks.slice(0, MAX_LLM_DESENSITIZE_TASKS);
+        if (llmTasks.length > MAX_LLM_DESENSITIZE_TASKS) {
+          log.warn(`[ClawXrouter Proxy] LLM desensitize: ${llmTasks.length} tasks, capped to ${MAX_LLM_DESENSITIZE_TASKS}`);
+        }
+        const results = await Promise.allSettled(
+          capped.map(async ({ msg, rawContent }) => {
+            const result = await desensitizeWithLocalModel(rawContent, privacyConfig);
+            if (result.wasModelUsed && !result.failed && result.desensitized !== rawContent) {
+              stashDesensitizedToolResult(rawContent, result.desensitized);
+              msg.content = result.desensitized;
+              log.info(`[ClawXrouter Proxy] Async LLM PII extraction applied (len=${rawContent.length}→${result.desensitized.length})`);
+            }
+          }),
+        );
+        for (const r of results) {
+          if (r.status === "rejected") {
+            log.warn(`[ClawXrouter Proxy] Async LLM desensitization failed: ${String(r.reason)}`);
           }
         }
       }
