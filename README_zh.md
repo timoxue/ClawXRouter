@@ -84,7 +84,7 @@ AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落�
 # 前置条件：已安装 OpenClaw，处于OpenClaw路径下
 
 # 通过 npm 安装（推荐）
-pnpm add -w @openbmb/clawxrouter
+node openclaw.mjs plugins install @openbmb/clawxrouter
 
 # 或从 ClawHub 安装
 openclaw plugins install clawhub:clawxrouter

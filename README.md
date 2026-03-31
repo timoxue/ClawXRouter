@@ -84,7 +84,7 @@ Both routing systems run in the same composable pipeline: the edge-side dual eng
 # Prerequisites: OpenClaw is already installed, and you are in the OpenClaw path
 
 # Install via npm (recommended)
-pnpm add -w @openbmb/clawxrouter
+node openclaw.mjs plugins install @openbmb/clawxrouter
 
 # Or install from ClawHub
 openclaw plugins install clawhub:clawxrouter
