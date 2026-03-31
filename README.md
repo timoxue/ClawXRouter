@@ -48,7 +48,7 @@ Secure · Efficient · Balanced
 
 ## 💡 About ClawXRouter
 
-ClawXRouter is an **Edge-Cloud Collaborative AI Agent Routing Plugin**, jointly developed by [THUNLP (Tsinghua University)](https://nlp.csai.tsinghua.edu.cn), [Renmin University of China](http://ai.ruc.edu.cn/), [AI9Stars](https://github.com/AI9Stars), [ModelBest](https://modelbest.cn/en), and [OpenBMB](https://www.openbmb.cn/home), built on top of [OpenClaw](https://github.com/openclaw/openclaw).
+ClawXRouter is an **Edge-Cloud Collaborative AI Agent Routing Plugin**, jointly developed by [THUNLP (Tsinghua University)](https://nlp.csai.tsinghua.edu.cn), [Renmin University of China](http://ai.ruc.edu.cn/), [AI9Stars](https://github.com/AI9Stars), [ModelBest](https://modelbest.cn/en), and [OpenBMB](https://www.openbmb.cn/home), built on top of [OpenClaw](https://github.com/openclaw/openclaw), based on [EdgeClaw](https://github.com/openbmb/Edgeclaw).
 
 AI Agents are profoundly changing how developers work every day. However, during real-world deployment, the current Agent usage patterns expose three major problems: **"afraid to use" the cloud** (privacy leakage), **"can't afford" the cloud** (even simple tasks burn expensive tokens), and **"can't rely on" the edge** (local models can't handle hard tasks).
 
@@ -583,6 +583,7 @@ If this project helps your research or work, please give us a ⭐!
 
 ### Dependencies
 
+- [Edgeclaw](https://github.com/openbmb/Edgeclaw) — Edge-Cloud Collaborative AI Agent Framework
 - [OpenClaw](https://github.com/openclaw/openclaw) — Base AI assistant framework
 - [MiniCPM](https://github.com/OpenBMB/MiniCPM) — Recommended local detection model
 - [Ollama](https://ollama.ai) — Recommended local inference backend

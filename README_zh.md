@@ -48,7 +48,7 @@
 
 ## 💡 关于 ClawXRouter
 
-ClawXRouter 是一个**端云协同的 AI 智能体路由插件**，由 [THUNLP（清华大学）](https://nlp.csai.tsinghua.edu.cn)、[中国人民大学](http://ai.ruc.edu.cn/)、[AI9Stars](https://github.com/AI9Stars)、[面壁智能（ModelBest）](https://modelbest.cn/en) 和 [OpenBMB](https://www.openbmb.cn/home) 联合开发，构建于 [OpenClaw](https://github.com/openclaw/openclaw) 之上。
+ClawXRouter 是一个**端云协同的 AI 智能体路由插件**，由 [THUNLP（清华大学）](https://nlp.csai.tsinghua.edu.cn)、[中国人民大学](http://ai.ruc.edu.cn/)、[AI9Stars](https://github.com/AI9Stars)、[面壁智能（ModelBest）](https://modelbest.cn/en) 和 [OpenBMB](https://www.openbmb.cn/home) 联合开发，构建于 [OpenClaw](https://github.com/openclaw/openclaw) 之上，根植于[EdgeClaw](https://github.com/openbmb/Edgeclaw)。
 
 AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落地过程中，当前的 Agent 使用模式暴露出三大突出问题：**云侧不敢用**（隐私泄露）、**云侧用不起**（简单任务也烧贵 token）、**端侧用不好**（本地模型干不了硬活）。
 
@@ -581,6 +581,7 @@ clawxrouter/
 
 ### 依赖项目
 
+- [EdgeClaw](https://github.com/openbmb/Edgeclaw) — 端云协同AI智能体框架
 - [OpenClaw](https://github.com/openclaw/openclaw) — 基础 AI 助手框架
 - [MiniCPM](https://github.com/OpenBMB/MiniCPM) — 推荐的本地检测模型
 - [Ollama](https://ollama.ai) — 推荐的本地推理后端
