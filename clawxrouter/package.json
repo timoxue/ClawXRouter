@@ -1,6 +1,6 @@
 {
   "name": "ClawXRouter",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "description": "Edge-cloud collaborative routing plugin that keeps sensitive data local and routes tasks to cost-effective models — protects user privacy by classifying requests into three safety levels and redacting PII before any cloud forwarding",
   "type": "module",
   "main": "./index.ts",
