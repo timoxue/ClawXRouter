@@ -81,10 +81,10 @@ AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落�
 ### 安装
 
 ```bash
-# 前置条件：已安装 OpenClaw
+# 前置条件：已安装 OpenClaw，处于OpenClaw路径下
 
 # 通过 npm 安装（推荐）
-npm install -g @openbmb/clawxrouter
+pnpm add -w @openbmb/clawxrouter
 
 # 或从 ClawHub 安装
 openclaw plugins install clawhub:clawxrouter
