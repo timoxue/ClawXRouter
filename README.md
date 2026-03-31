@@ -50,13 +50,7 @@ Secure · Efficient · Balanced
 
 ClawXRouter is an **Edge-Cloud Collaborative AI Agent Routing Plugin**, jointly developed by [THUNLP (Tsinghua University)](https://nlp.csai.tsinghua.edu.cn), [Renmin University of China](http://ai.ruc.edu.cn/), [AI9Stars](https://github.com/AI9Stars), [ModelBest](https://modelbest.cn/en), and [OpenBMB](https://www.openbmb.cn/home), built on top of [OpenClaw](https://github.com/openclaw/openclaw).
 
-AI Agents are profoundly changing how developers work every day. However, during real-world deployment, the current Agent usage patterns expose three major problems:
-
-- **"Afraid to use" the cloud** — When an Agent analyzes a customer data sheet, names, phone numbers, and ID numbers are sent to the cloud along with the context. A single data analysis session exposes customer privacy to third-party servers — the data leakage risk is unacceptable.
-- **"Can't afford" the cloud** — A large number of simple tasks (e.g., using grep to find a function call) are processed by expensive top-tier models. Most tokens are spent on tasks that cheaper models could easily handle.
-- **"Can't rely on" the edge** — Local models are limited by compute power and parameter scale, struggling with complex reasoning, multi-file refactoring, and other difficult tasks. Simple data summarization and format conversion work fine, but multi-dimensional cross-analysis and anomaly detection are beyond their reach — the edge alone cannot meet real-world needs.
-
-Afraid to use the cloud, can't afford the cloud, can't rely on the edge — **edge-cloud collaboration is the optimal solution**. The edge agent is like a personal physician, familiar with user habits, preferences, and private data, handling common issues directly; the cloud agent is like a specialist, with outstanding expertise but who shouldn't have access to the patient's complete private information. Effective collaboration isn't about replacing one with the other, but having the personal physician organize the necessary medical information and coordinate with the right specialist. The key to making this collaboration work is one core question: **Which path should each request take?** This is exactly the problem that a routing mechanism solves.
+AI Agents are profoundly changing how developers work every day. However, during real-world deployment, the current Agent usage patterns expose three major problems: **"afraid to use" the cloud** (privacy leakage), **"can't afford" the cloud** (even simple tasks burn expensive tokens), and **"can't rely on" the edge** (local models can't handle hard tasks).
 
 To address these three pain points, ClawXRouter provides corresponding solutions:
 
@@ -89,10 +83,10 @@ Both routing systems run in the same composable pipeline: the edge-side dual eng
 ```bash
 # Prerequisites: OpenClaw is already installed
 
-# install via npm (recommended)
+# Install via npm (recommended)
 npm install -g @openbmb/clawxrouter
 
-# Or install from ClawHub 
+# Or install from ClawHub
 openclaw plugins install clawhub:clawxrouter
 
 # (Optional) Install local inference backend
@@ -106,6 +100,8 @@ ollama serve
 openclaw gateway
 # ClawXRouter Ready! Dashboard → http://127.0.0.1:18789/plugins/clawxrouter/stats
 ```
+
+Done. Every request now automatically takes the optimal path.
 
 ---
 
@@ -130,7 +126,7 @@ Routing effectiveness validated using [PinchBench](https://pinchbench.com) (23 O
 | **ClawX Routing (5-model mix)** | **93.2% / 89.6%** | **$2.36** |
 | All Sonnet 4.6 | 86.9% / 79.2% | $5.63 |
 
-> **58% cost savings with 6.3% higher scores.** See the [PinchBench official leaderboard](https://pinchbench.com) for details.
+> **58% cost savings with 6.3% higher scores.**
 
 ---
 
@@ -343,7 +339,7 @@ Modify the Markdown files under `clawxrouter/prompts/`:
 
 ---
 
-## 🏛️ Design Overview
+## 🏛️ How It Works
 
 ### 🔒 Three-Level Privacy Routing
 
@@ -364,42 +360,24 @@ The core concern behind "afraid to use" is that even in common scenarios like co
 | **Rule Detector**    | Keyword + regex matching     | ~0ms    | Known patterns: API Keys, DB connection strings, PEM key headers |
 | **Local LLM Detector** | Semantic understanding (runs on local small model) | ~1-2s | Contextual reasoning: "Help me analyze this payroll sheet", Chinese addresses |
 
-The rule engine covers known explicit patterns with extreme speed; the local LLM fills the semantic understanding gap, achieving higher recall on long-tail scenarios that rules cannot cover. The two engines are flexibly combined per scenario via `checkpoints` configuration, with built-in short-circuit optimization — when rules already determine S3, LLM is skipped (the result can't be higher), taking the strictest result.
+The two engines are flexibly combined per scenario via `checkpoints` configuration, with built-in short-circuit optimization — when rules already determine S3, LLM is skipped (the result can't be higher), taking the strictest result.
 
 #### S2 Data Flow: Redact & Forward — Use It Effectively
 
 ```
 User Message (containing PII)
-    │
-    ▼
-Local LLM Detection → S2
-    │
-    ▼
-Local LLM Extracts PII → JSON Array
-    │
-    ▼
-Programmatic PII Replacement → [REDACTED:PHONE], [REDACTED:ADDRESS]
-    │
-    ▼
-Privacy Proxy (localhost:8403)
-    ├── Strip PII markers
-    ├── Forward to cloud model
-    └── Pass through response (supports SSE streaming)
+    → Local LLM detects S2, extracts PII → JSON array
+    → Programmatic replacement → [REDACTED:PHONE], [REDACTED:ADDRESS]
+    → Privacy Proxy (localhost:8403) → Strip markers → Forward to cloud
 ```
 
 #### S3 Data Flow: Fully Local Processing — Use It with Confidence
 
 ```
 User Message (containing confidential data)
-    │
-    ▼
-Detection → S3
-    │
-    ▼
-Forward to Local Guard Agent
-    ├── Uses local LLM (Ollama / vLLM)
-    ├── Full data visible, all-local inference
-    └── Cloud-side history only receives 🔒 placeholder
+    → Detected as S3
+    → Forward to local Guard Agent (Ollama / vLLM)
+    → Cloud-side history only receives 🔒 placeholder
 ```
 
 #### Dual-Track Memory & Dual-Track Sessions
@@ -499,8 +477,6 @@ User Message
      │         │ │Forward) │ │Routing) │
      └─────────┘ └─────────┘ └─────────┘
 ```
-
-**Design Philosophy**: Precondition — **ensure security**; Optimization objective — **optimal cost**. Let the right model do the right job; let the edge and cloud each play to their strengths.
 
 #### Decision Merge Rules
 

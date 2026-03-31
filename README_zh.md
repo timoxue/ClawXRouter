@@ -36,7 +36,7 @@
 - [📦 快速开始](#-快速开始)
 - [📈 性价比路由：4折价格超越Sonnet！](#-性价比路由4折价格超越sonnet)
 - [🔧 自定义配置](#-自定义配置)
-- [🔌 支持的边缘 Provider](#-支持的边缘-provider)
+- [🔌 支持的端侧 Provider](#-支持的端侧-provider)
 - [🔒 三级隐私路由](#-三级隐私路由)
 - [💰 性价比感知路由](#-性价比感知路由)
 - [🚀 可组合路由管线](#-可组合路由管线)
@@ -50,13 +50,7 @@
 
 ClawXRouter 是一个**端云协同的 AI 智能体路由插件**，由 [THUNLP（清华大学）](https://nlp.csai.tsinghua.edu.cn)、[中国人民大学](http://ai.ruc.edu.cn/)、[AI9Stars](https://github.com/AI9Stars)、[面壁智能（ModelBest）](https://modelbest.cn/en) 和 [OpenBMB](https://www.openbmb.cn/home) 联合开发，构建于 [OpenClaw](https://github.com/openclaw/openclaw) 之上。
 
-AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落地过程中，当前的 Agent 使用模式暴露出三大突出问题：
-
-- **云侧"不敢用"**——让 Agent 分析一份客户数据表，里面的姓名、手机号、身份证号随上下文一起发到了云端，一次数据分析客户隐私就到了第三方服务器上，数据泄露风险难以接受
-- **云侧"用不起"**——大量简单任务（如用 grep 查找一个函数调用的位置）也被昂贵的顶级模型处理，大部分 token 花在了便宜模型即可解决的简单任务上
-- **端侧"用不好"**——本地模型受限于算力与参数规模，面对复杂推理、多文件重构等高难度任务力不从心；简单的数据汇总、格式转换能用，涉及多维度交叉分析和异常检测就不够了，单靠端侧无法满足实际需求
-
-云侧不敢用、用不起，端侧用不好——**端云协同才是最优解**。端侧智能体就像用户的保健医生，熟悉用户的习惯、偏好与隐私数据，常见问题直接处置；云侧智能体就像门诊专家，专业能力突出但不应接触患者的完整隐私。有效的协作不是让两者互相替代，而是由保健医生整理好必要的病情信息，对接合适的专科专家协同诊治。而要让这套协同真正运转起来，关键在于一个核心问题：**每条请求该走哪条路？** 这正是路由机制要解决的问题。
+AI Agent 正在深刻改变开发者的日常工作方式，然而在实际落地过程中，当前的 Agent 使用模式暴露出三大突出问题：**云侧不敢用**（隐私泄露）、**云侧用不起**（简单任务也烧贵 token）、**端侧用不好**（本地模型干不了硬活）。
 
 针对上述三大痛点，ClawXRouter 给出对应的解法：
 
@@ -107,6 +101,8 @@ openclaw gateway
 # ClawXRouter Ready! Dashboard → http://127.0.0.1:18789/plugins/clawxrouter/stats
 ```
 
+完成。每条请求现在会自动走最优路径。
+
 ---
 
 ## 📈 性价比路由：4折价格超越Sonnet！
@@ -130,7 +126,7 @@ openclaw gateway
 | **ClawX 路由（5 模型混合）** | **93.2% / 89.6%** | **$2.36** |
 | 全部用 Sonnet 4.6 | 86.9% / 79.2% | $5.63 |
 
-> **省 58% 的钱，分数还高 6.3%。** 详见 [PinchBench 官方排行榜](https://pinchbench.com)。
+> **省 58% 的钱，分数还高 6.3%。**
 
 ---
 
@@ -191,7 +187,6 @@ openclaw gateway
 | 路由器 | 可编辑 Prompt | 位置 |
 |--------|-------------|------|
 | Privacy Router | `detection-system` | 卡片内直接展示 |
-| Privacy Router | `pii-extraction` | Advanced Configuration 内 |
 | Cost-Optimizer | `token-saver-judge` | Cost-Optimizer 卡片内 |
 
 直接编辑文本框，**Save** 即时生效，**Reset** 恢复默认。
@@ -330,7 +325,7 @@ const myRouter: ClawXrouterRouter = {
 | `detection-system.md`   | S1/S2/S3 分类规则 |
 | `token-saver-judge.md`  | 任务复杂度分类    |
 
-### 🔌 支持的边缘 Provider
+### 🔌 支持的端侧 Provider
 
 | Provider | API 类型 | 配置 `type` |
 |----------|---------|-------------|
@@ -344,7 +339,7 @@ const myRouter: ClawXrouterRouter = {
 
 ---
 
-## 🏛️ 设计介绍
+## 🏛️ 工作原理
 
 ### 🔒 三级隐私路由
 
@@ -365,42 +360,24 @@ const myRouter: ClawXrouterRouter = {
 | **规则检测器**      | 关键词 + 正则匹配          | ~0ms  | 已知模式：API Key、数据库连接串、PEM 密钥头 |
 | **本地 LLM 检测器** | 语义理解（跑在本地小模型） | ~1-2s | 上下文推理："帮我分析这张工资单"、中文地址  |
 
-规则引擎覆盖已知的明确模式，速度极快；本地 LLM 补齐语义理解的缺口，对规则无法覆盖的长尾场景有更高的召回率。两个引擎通过 `checkpoints` 配置按场景灵活组合，且内置短路优化——规则已判定 S3 时跳过 LLM（结果不可能更高），取最严格的结果。
+两个引擎通过 `checkpoints` 配置按场景灵活组合，且内置短路优化——规则已判定 S3 时跳过 LLM（结果不可能更高），取最严格的结果。
 
 #### S2 数据流：脱敏转发——用得好
 
 ```
-User Message (含 PII)
-    │
-    ▼
-本地 LLM 检测 → S2
-    │
-    ▼
-本地 LLM 提取 PII → JSON 数组
-    │
-    ▼
-编程替换 PII → [REDACTED:PHONE], [REDACTED:ADDRESS]
-    │
-    ▼
-Privacy Proxy (localhost:8403)
-    ├── 剥离 PII 标记
-    ├── 转发到云侧模型
-    └── 透传响应 (支持 SSE streaming)
+用户消息（含 PII）
+    → 本地 LLM 检测 S2，提取 PII → JSON 数组
+    → 编程替换 → [REDACTED:PHONE], [REDACTED:ADDRESS]
+    → Privacy Proxy (localhost:8403) → 剥离标记 → 转发云端
 ```
 
 #### S3 数据流：完全本地处理——敢用
 
 ```
-User Message (含私密数据)
-    │
-    ▼
-检测 → S3
-    │
-    ▼
-转发到本地 Guard Agent
-    ├── 使用本地 LLM（Ollama / vLLM）
-    ├── 完整数据可见，全本地推理
-    └── 云侧历史只写入 🔒 占位符
+用户消息（含私密数据）
+    → 检测为 S3
+    → 转发本地 Guard Agent（Ollama / vLLM）
+    → 云侧历史只写入 🔒 占位符
 ```
 
 #### 双轨记忆 & 双轨会话
@@ -498,8 +475,6 @@ Prompt 哈希缓存（SHA-256，TTL 5 分钟），相同请求不重复 Judge，
      │         │ │  转发)   │ │  路由)   │
      └─────────┘ └─────────┘ └─────────┘
 ```
-
-**设计哲学**：前提条件——**保障安全**，优化目标——**最优成本**。让合适的模型做合适的事，让端侧和云侧各尽其能。
 
 #### 决策合并规则
 
