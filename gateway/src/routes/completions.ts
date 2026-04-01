@@ -7,6 +7,8 @@ import { getOrCreateSession, updateSession } from "../session/memory-store.js";
 import { redactSensitiveInfo } from "../../../clawxrouter/src/utils.js";
 import type { GatewayConfig, CompletionsBody, UpstreamConfig } from "../types.js";
 
+const DEFAULT_TIMEOUT_SEC = 120;
+
 export default async function completionsRoute(
   fastify: FastifyInstance,
   opts: { config: GatewayConfig }
@@ -51,7 +53,14 @@ export default async function completionsRoute(
             },
           });
         }
-        return forwardRequest(reply, localUpstream, body);
+        const timeoutSec = config.loadBalancer.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
+        const localResult = await forwardRequest(localUpstream, body, timeoutSec);
+        if (localResult.type === "error") {
+          return reply.code(502).send({
+            error: { message: localResult.reason, type: "gateway_error", code: "local_model_error" },
+          });
+        }
+        return sendResponse(reply, localResult.response, body);
       }
 
       // ── 3. S2: redact PII before forwarding ────────────────────────────
@@ -62,9 +71,11 @@ export default async function completionsRoute(
       }
 
       // ── 4. Load-balance: select upstream ───────────────────────────────
+      // Only select cloud upstreams for S1/S2; local upstreams reserved for S3
       const healthyIds = getHealthyIds();
+      const cloudUpstreams = config.upstreams.filter((u) => (u.role ?? "cloud") === "cloud");
       const upstream = selectUpstream(
-        config.upstreams,
+        cloudUpstreams,
         body.model,
         config.loadBalancer.strategy,
         healthyIds
@@ -82,11 +93,42 @@ export default async function completionsRoute(
 
       fastify.log.info(`[${tenant.tenantId}] → upstream: ${upstream.id}`);
 
-      // ── 5. Forward ──────────────────────────────────────────────────────
-      return forwardRequest(reply, upstream, forwardBody, (err) => {
-        fastify.log.error(`[${tenant.tenantId}] Upstream ${upstream.id} error: ${err}`);
+      const timeoutSec = config.loadBalancer.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
+
+      // ── 5. Forward (with one retry on a different upstream) ─────────────
+      const tried = new Set<string>([upstream.id]);
+      const result = await forwardRequest(upstream, forwardBody, timeoutSec);
+
+      if (result.type === "error") {
+        fastify.log.error(`[${tenant.tenantId}] Upstream ${upstream.id} failed: ${result.reason}`);
         markUnhealthy(upstream.id);
-      });
+
+        // Retry once with a different healthy upstream
+        const fallback = selectUpstream(
+          cloudUpstreams.filter((u) => !tried.has(u.id)),
+          body.model,
+          config.loadBalancer.strategy,
+          getHealthyIds()
+        );
+
+        if (fallback) {
+          fastify.log.warn(`[${tenant.tenantId}] Retrying with fallback upstream: ${fallback.id}`);
+          const retry = await forwardRequest(fallback, forwardBody, timeoutSec);
+          if (retry.type === "error") {
+            markUnhealthy(fallback.id);
+            return reply.code(502).send({
+              error: { message: retry.reason, type: "gateway_error", code: "upstream_error" },
+            });
+          }
+          return sendResponse(reply, retry.response, forwardBody);
+        }
+
+        return reply.code(502).send({
+          error: { message: result.reason, type: "gateway_error", code: "upstream_error" },
+        });
+      }
+
+      return sendResponse(reply, result.response, forwardBody);
     }
   );
 }
@@ -117,25 +159,29 @@ function redactMessages(
 }
 
 function getLocalUpstream(upstreams: UpstreamConfig[]): UpstreamConfig | null {
-  // Prefer upstreams tagged as local or with localhost/127 baseUrl
   return (
+    upstreams.find((u) => u.enabled && u.role === "local") ??
+    // Fallback heuristic for configs without explicit role
     upstreams.find(
       (u) =>
         u.enabled &&
         (u.baseUrl.includes("localhost") ||
           u.baseUrl.includes("127.0.0.1") ||
-          u.baseUrl.includes("ollama") ||
           u.provider === "openai-compatible")
-    ) ?? null
+    ) ??
+    null
   );
 }
 
+type ForwardResult =
+  | { type: "ok"; response: Response }
+  | { type: "error"; reason: string };
+
 async function forwardRequest(
-  reply: FastifyReply,
   upstream: UpstreamConfig,
   body: CompletionsBody,
-  onError?: (err: unknown) => void
-): Promise<void> {
+  timeoutSec: number
+): Promise<ForwardResult> {
   const url = `${upstream.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
   const headers = buildUpstreamHeaders(upstream);
 
@@ -145,53 +191,50 @@ async function forwardRequest(
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutSec * 1000),
       // @ts-ignore — Node 18+ supports this
       duplex: "half",
     });
   } catch (err) {
-    onError?.(err);
-    reply.code(502).send({
-      error: {
-        message: `Upstream connection failed: ${String(err)}`,
-        type: "gateway_error",
-        code: "upstream_connection_failed",
-      },
-    });
-    return;
+    const reason = err instanceof Error && err.name === "TimeoutError"
+      ? `Upstream ${upstream.id} timed out after ${timeoutSec}s`
+      : `Upstream ${upstream.id} connection failed: ${String(err)}`;
+    return { type: "error", reason };
   }
 
-  if (!response.ok && response.status >= 500) {
-    onError?.(new Error(`HTTP ${response.status}`));
+  // Treat 5xx as retryable errors
+  if (response.status >= 500) {
+    return { type: "error", reason: `Upstream ${upstream.id} returned HTTP ${response.status}` };
   }
 
-  // Forward status and headers
+  return { type: "ok", response };
+}
+
+async function sendResponse(
+  reply: FastifyReply,
+  response: Response,
+  body: CompletionsBody
+): Promise<void> {
   reply.code(response.status);
+  reply.header("content-type", response.headers.get("content-type") ?? "application/json");
 
-  const contentType = response.headers.get("content-type") ?? "application/json";
-  reply.header("content-type", contentType);
-
-  // Copy other relevant headers
-  for (const header of ["x-request-id", "retry-after", "x-ratelimit-limit-requests"]) {
-    const val = response.headers.get(header);
-    if (val) reply.header(header, val);
+  for (const h of ["x-request-id", "retry-after", "x-ratelimit-limit-requests", "x-ratelimit-remaining-requests"]) {
+    const val = response.headers.get(h);
+    if (val) reply.header(h, val);
   }
 
   if (!response.body) {
-    const text = await response.text();
-    reply.send(text);
+    reply.send(await response.text());
     return;
   }
 
-  // Stream: pipe upstream SSE to client
   if (body.stream) {
     reply.header("cache-control", "no-cache");
     reply.header("connection", "keep-alive");
-    // Convert Web ReadableStream → Node Readable for Fastify
     const nodeStream = Readable.fromWeb(response.body as import("stream/web").ReadableStream);
     reply.send(nodeStream);
   } else {
-    const data = await response.json();
-    reply.send(data);
+    reply.send(await response.json());
   }
 }
 

@@ -18,6 +18,7 @@
       "apiKey": "sk-ant-YOUR_KEY_HERE",
       "models": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
       "weight": 3,
+      "role": "cloud",
       "enabled": true
     },
     {
@@ -27,6 +28,7 @@
       "apiKey": "sk-YOUR_KEY_HERE",
       "models": ["gpt-4o", "gpt-4o-mini"],
       "weight": 2,
+      "role": "cloud",
       "enabled": false
     },
     {
@@ -36,13 +38,15 @@
       "apiKey": "",
       "models": ["*"],
       "weight": 1,
+      "role": "local",
       "enabled": false
     }
   ],
   "loadBalancer": {
     "strategy": "weighted-round-robin",
+    "timeoutSec": 120,
     "healthCheck": {
-      "enabled": false,
+      "enabled": true,
       "intervalSec": 30,
       "timeoutSec": 5
     }

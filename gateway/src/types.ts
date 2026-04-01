@@ -9,6 +9,11 @@ export type UpstreamConfig = {
   models: string[];
   weight: number;
   enabled: boolean;
+  /**
+   * "local"  → used for S3 confidential requests (Ollama, vLLM, etc.)
+   * "cloud"  → used for S1/S2 requests (default when omitted)
+   */
+  role?: "local" | "cloud";
 };
 
 export type LoadBalancerStrategy = "round-robin" | "weighted-round-robin" | "least-connections";
@@ -25,6 +30,8 @@ export type GatewayConfig = {
   upstreams: UpstreamConfig[];
   loadBalancer: {
     strategy: LoadBalancerStrategy;
+    /** Timeout in seconds for each upstream request. Default: 120 */
+    timeoutSec?: number;
     healthCheck: {
       enabled: boolean;
       intervalSec: number;
