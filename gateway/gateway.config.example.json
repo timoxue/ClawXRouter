@@ -1,0 +1,75 @@
+{
+  "server": {
+    "port": 7080,
+    "host": "0.0.0.0"
+  },
+  "auth": {
+    "enabled": true,
+    "apiKeys": {
+      "gw-team-a-replace-me": { "tenantId": "team-a", "name": "Team A" },
+      "gw-team-b-replace-me": { "tenantId": "team-b", "name": "Team B" }
+    }
+  },
+  "upstreams": [
+    {
+      "id": "anthropic-primary",
+      "provider": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "apiKey": "sk-ant-YOUR_KEY_HERE",
+      "models": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
+      "weight": 3,
+      "enabled": true
+    },
+    {
+      "id": "openai-backup",
+      "provider": "openai",
+      "baseUrl": "https://api.openai.com",
+      "apiKey": "sk-YOUR_KEY_HERE",
+      "models": ["gpt-4o", "gpt-4o-mini"],
+      "weight": 2,
+      "enabled": false
+    },
+    {
+      "id": "local-ollama",
+      "provider": "openai-compatible",
+      "baseUrl": "http://localhost:11434",
+      "apiKey": "",
+      "models": ["*"],
+      "weight": 1,
+      "enabled": false
+    }
+  ],
+  "loadBalancer": {
+    "strategy": "weighted-round-robin",
+    "healthCheck": {
+      "enabled": false,
+      "intervalSec": 30,
+      "timeoutSec": 5
+    }
+  },
+  "privacy": {
+    "enabled": true,
+    "s2Policy": "proxy",
+    "checkpoints": {
+      "onUserMessage": ["ruleDetector"],
+      "onToolCallProposed": ["ruleDetector"],
+      "onToolCallExecuted": ["ruleDetector"]
+    },
+    "rules": {
+      "keywords": {
+        "S2": ["password", "api_key", "secret", "token", "credential"],
+        "S3": ["ssh", "id_rsa", "private_key", ".pem", ".key", ".env"]
+      },
+      "patterns": {
+        "S2": ["\\b(?:sk|key|token)-[A-Za-z0-9]{16,}\\b"],
+        "S3": ["-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"]
+      }
+    },
+    "localModel": {
+      "enabled": false,
+      "type": "openai-compatible",
+      "endpoint": "http://localhost:11434",
+      "model": "openbmb/minicpm4.1"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+gateway.config.json
+dist/
+*.local.json
