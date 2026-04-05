@@ -1,0 +1,11 @@
+{
+  "name": "clawxrouter-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "synckit": "^0.11.12",
+    "tsx": "^4.21.0"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+gateway.config.json
+containers.json
+clawx.db
+clawx.db-shm
+clawx.db-wal
+dist/
+*.local.json

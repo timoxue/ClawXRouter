@@ -14,7 +14,7 @@ const lastSeenCache = new Map<string, number>();
 
 function flushLastSeen(): void {
   if (lastSeenCache.size === 0) return;
-  const stmt = db.prepare("UPDATE containers SET last_seen_at = ? WHERE container_id = ?");
+  const stmt = db.prepare("UPDATE containers SET last_seen_at = ? WHERE api_key = ?");
   const flush = db.transaction(() => {
     for (const [id, ts] of lastSeenCache) stmt.run(ts, id);
   });

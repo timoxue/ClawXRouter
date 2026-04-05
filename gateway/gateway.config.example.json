@@ -1,0 +1,83 @@
+{
+  "server": {
+    "port": 8070,
+    "host": "0.0.0.0"
+  },
+  "adminAuth": {
+    "username": "admin",
+    "password": "changeme"
+  },
+  "auth": {
+    "enabled": true,
+    "apiKeys": {
+      "gw-team-a-replace-me": { "tenantId": "team-a", "name": "Team A" },
+      "gw-team-b-replace-me": { "tenantId": "team-b", "name": "Team B" }
+    }
+  },
+  "upstreams": [
+    {
+      "id": "anthropic-primary",
+      "provider": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "apiKey": "sk-ant-YOUR_KEY_HERE",
+      "models": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
+      "weight": 3,
+      "role": "cloud",
+      "enabled": true
+    },
+    {
+      "id": "openai-backup",
+      "provider": "openai",
+      "baseUrl": "https://api.openai.com",
+      "apiKey": "sk-YOUR_KEY_HERE",
+      "models": ["gpt-4o", "gpt-4o-mini"],
+      "weight": 2,
+      "role": "cloud",
+      "enabled": false
+    },
+    {
+      "id": "local-ollama",
+      "provider": "openai-compatible",
+      "baseUrl": "http://localhost:11434",
+      "apiKey": "",
+      "models": ["*"],
+      "weight": 1,
+      "role": "local",
+      "enabled": false
+    }
+  ],
+  "loadBalancer": {
+    "strategy": "weighted-round-robin",
+    "timeoutSec": 120,
+    "healthCheck": {
+      "enabled": true,
+      "intervalSec": 30,
+      "timeoutSec": 5
+    }
+  },
+  "privacy": {
+    "enabled": true,
+    "s2Policy": "proxy",
+    "checkpoints": {
+      "onUserMessage": ["ruleDetector"],
+      "onToolCallProposed": ["ruleDetector"],
+      "onToolCallExecuted": ["ruleDetector"]
+    },
+    "rules": {
+      "keywords": {
+        "S2": ["password", "api_key", "secret", "token", "credential"],
+        "S3": ["ssh", "id_rsa", "private_key", ".pem", ".key", ".env"]
+      },
+      "patterns": {
+        "S2": ["\\b(?:sk|key|token)-[A-Za-z0-9]{16,}\\b"],
+        "S3": ["-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"]
+      }
+    },
+    "localModel": {
+      "enabled": false,
+      "type": "openai-compatible",
+      "endpoint": "http://localhost:11434",
+      "model": "openbmb/minicpm4.1"
+    }
+  }
+}
