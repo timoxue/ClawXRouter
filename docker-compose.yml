@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  # ── ClawX Gateway ────────────────────────────────────────────────────────
+  clawx-gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: clawx-gateway
+    restart: unless-stopped
+    ports:
+      - "8070:8070"
+    volumes:
+      - ./gateway/gateway.config.json:/app/gateway/gateway.config.json:ro
+      - clawx-db:/app/gateway/data
+    environment:
+      - LOG_LEVEL=info
+      - CLAWX_DB_PATH=/app/gateway/data/clawx.db
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8070/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── OpenClaw Containers ───────────────────────────────────────────────────
+  # 启动 20 个实例：docker compose up --scale openclaw=20 -d
+  openclaw:
+    image: openclaw/openclaw:latest   # 替换为你实际的镜像
+    restart: unless-stopped
+    depends_on:
+      clawx-gateway:
+        condition: service_healthy
+    environment:
+      - OPENCLAW_PROVIDER_BASE_URL=http://clawx-gateway:8070/v1
+      - OPENCLAW_PROVIDER_API_KEY=gw-team-a-replace-me
+      - OPENCLAW_DEFAULT_MODEL=claude-sonnet-4-6
+
+volumes:
+  clawx-db:

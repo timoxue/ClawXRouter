@@ -1,0 +1,9 @@
+node_modules
+gateway/node_modules
+gateway/dist
+gateway/clawx.db
+gateway/clawx.db-shm
+gateway/clawx.db-wal
+gateway/containers.json
+.git
+*.md
