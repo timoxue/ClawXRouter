@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { FastifyRequest, FastifyReply } from "fastify";
-import type { GatewayConfig } from "../types.js";
+import { loadConfig } from "../config/store.js";
 
 const COOKIE_NAME = "clawx_admin";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
@@ -34,14 +34,14 @@ function verifySessionCookie(cookieHeader: string | undefined, secret: string): 
   return mac === sign(username, expiry, secret);
 }
 
-export function createAdminAuthHook(config: GatewayConfig) {
+export function createAdminAuthHook() {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (!req.url.startsWith("/admin/")) return;
     // Login/logout pages handle their own auth
     if (req.url === "/admin/login" || req.url.startsWith("/admin/login?")) return;
     if (req.url === "/admin/logout") return;
 
-    const secret = config.adminAuth?.password ?? "changeme";
+    const secret = loadConfig().adminAuth?.password ?? "changeme";
     if (!verifySessionCookie(req.headers.cookie, secret)) {
       reply.redirect(`/admin/login?next=${encodeURIComponent(req.url)}`);
     }

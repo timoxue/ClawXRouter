@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { GatewayConfig, UpstreamConfig } from "../types.js";
 import { getAllHealth, registerUpstream, unregisterUpstream } from "../load-balancer/health-check.js";
 import { getAllSessions, getSessionCount } from "../session/memory-store.js";
@@ -9,14 +9,20 @@ import { registerContainer, getAllContainers, removeContainer, isOnline } from "
 
 export default async function adminRoute(
   fastify: FastifyInstance,
-  opts: { config: GatewayConfig }
+  _opts: { config: GatewayConfig }
 ) {
-  const { config } = opts;
-
   /** Container self-registration — no auth required */
   fastify.post<{ Body: { username: string; type: string; version: string } }>(
     "/gateway/register",
-    async (req, reply) => {
+    async (req: FastifyRequest<{ Body: { username: string; type: string; version: string } }>, reply) => {
+      const registration = loadConfig().registration;
+      if (registration?.enabled) {
+        const token = (req.headers["x-registration-token"] as string | undefined)?.trim();
+        if (!token || token !== registration.token) {
+          return reply.code(401).send({ error: "Invalid registration token" });
+        }
+      }
+
       const { username, type, version } = req.body ?? {};
       if (!username || !type) {
         return reply.code(400).send({ error: "username and type are required" });
@@ -128,6 +134,9 @@ export default async function adminRoute(
     const cfg = loadConfig();
     const safe = {
       ...cfg,
+      registration: cfg.registration
+        ? { ...cfg.registration, token: "****" }
+        : undefined,
       adminAuth: cfg.adminAuth ? { username: cfg.adminAuth.username, password: "****" } : undefined,
       auth: {
         ...cfg.auth,

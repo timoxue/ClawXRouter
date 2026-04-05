@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { GatewayConfig, TenantContext } from "../types.js";
 import { lookupByApiKey, touchContainer } from "../container-registry.js";
+import { loadConfig } from "../config/store.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -8,8 +9,10 @@ declare module "fastify" {
   }
 }
 
-export function createAuthMiddleware(config: GatewayConfig) {
+export function createAuthMiddleware() {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const config = loadConfig() as GatewayConfig;
+
     // Skip auth for admin routes that serve their own auth
     if (req.url.startsWith("/admin/") || req.url === "/" || req.url === "/health" || req.url === "/gateway/register") {
       req.tenant = { tenantId: "system", name: "System", apiKey: "" };

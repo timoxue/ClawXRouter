@@ -37,6 +37,10 @@ export type GatewayConfig = {
     enabled: boolean;
     apiKeys: Record<string, { tenantId: string; name: string }>;
   };
+  registration?: {
+    enabled: boolean;
+    token: string;
+  };
   upstreams: UpstreamConfig[];
   loadBalancer: {
     strategy: LoadBalancerStrategy;

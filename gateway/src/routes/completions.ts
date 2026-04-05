@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { Readable } from "node:stream";
 import { detectPrivacy } from "../middleware/privacy.js";
-import { selectUpstream } from "../load-balancer/strategies.js";
+import { beginRequest, endRequest, selectUpstream } from "../load-balancer/strategies.js";
 import { getHealthyIds, markUnhealthy } from "../load-balancer/health-check.js";
 import { getOrCreateSession, updateSession } from "../session/memory-store.js";
+import { loadConfig } from "../config/store.js";
 import { redactSensitiveInfo } from "../../../clawxrouter/src/utils.js";
 import type { GatewayConfig, CompletionsBody, UpstreamConfig } from "../types.js";
 
@@ -11,14 +12,13 @@ const DEFAULT_TIMEOUT_SEC = 120;
 
 export default async function completionsRoute(
   fastify: FastifyInstance,
-  opts: { config: GatewayConfig }
+  _opts: { config: GatewayConfig }
 ) {
-  const { config } = opts;
-
   fastify.post<{ Body: CompletionsBody }>(
     "/v1/chat/completions",
     { config: { rawBody: false } },
     async (req: FastifyRequest<{ Body: CompletionsBody }>, reply: FastifyReply) => {
+      const config = loadConfig();
       const body = req.body;
       const tenant = req.tenant;
       const sessionKey = `${tenant.tenantId}:${body.model}`;
@@ -54,7 +54,7 @@ export default async function completionsRoute(
           });
         }
         const timeoutSec = config.loadBalancer.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
-        const localResult = await forwardRequest(localUpstream, body, timeoutSec);
+        const localResult = await forwardWithTracking(localUpstream, body, timeoutSec);
         if (localResult.type === "error") {
           return reply.code(502).send({
             error: { message: localResult.reason, type: "gateway_error", code: "local_model_error" },
@@ -71,12 +71,13 @@ export default async function completionsRoute(
       }
 
       // ── 4. Load-balance: select upstream ───────────────────────────────
-      // All upstreams are eligible for S1/S2; participation is controlled by their `models` list.
-      // S3 requests already returned early above, so local upstreams with gw-default in their
-      // models list will be included in round-robin alongside cloud upstreams.
+      // S1/S2 requests go to cloud upstreams by default.
+      // If no cloud upstream is enabled/healthy, we fall back to all upstreams for availability.
       const healthyIds = getHealthyIds();
+      const cloudPreferred = config.upstreams.filter((u) => (u.role ?? "cloud") !== "local");
+      const selectionPool = cloudPreferred.length > 0 ? cloudPreferred : config.upstreams;
       const upstream = selectUpstream(
-        config.upstreams,
+        selectionPool,
         body.model,
         config.loadBalancer.strategy,
         healthyIds
@@ -103,15 +104,16 @@ export default async function completionsRoute(
 
       // ── 5. Forward (with one retry on a different upstream) ─────────────
       const tried = new Set<string>([upstream.id]);
-      const result = await forwardRequest(upstream, forwardBody, timeoutSec);
+      const result = await forwardWithTracking(upstream, forwardBody, timeoutSec);
 
       if (result.type === "error") {
         fastify.log.error(`[${tenant.tenantId}] Upstream ${upstream.id} failed: ${result.reason}`);
         markUnhealthy(upstream.id);
 
         // Retry once with a different healthy upstream
+        const fallbackPool = selectionPool.filter((u) => !tried.has(u.id));
         const fallback = selectUpstream(
-          config.upstreams.filter((u) => !tried.has(u.id)),
+          fallbackPool,
           body.model,
           config.loadBalancer.strategy,
           getHealthyIds()
@@ -122,7 +124,7 @@ export default async function completionsRoute(
           const fallbackBody = fallback.modelAlias?.[body.model]
             ? { ...forwardBody, model: fallback.modelAlias[body.model] }
             : forwardBody;
-          const retry = await forwardRequest(fallback, fallbackBody, timeoutSec);
+          const retry = await forwardWithTracking(fallback, fallbackBody, timeoutSec);
           if (retry.type === "error") {
             markUnhealthy(fallback.id);
             return reply.code(502).send({
@@ -185,6 +187,19 @@ function getLocalUpstream(upstreams: UpstreamConfig[]): UpstreamConfig | null {
 type ForwardResult =
   | { type: "ok"; response: Response }
   | { type: "error"; reason: string };
+
+async function forwardWithTracking(
+  upstream: UpstreamConfig,
+  body: CompletionsBody,
+  timeoutSec: number
+): Promise<ForwardResult> {
+  beginRequest(upstream.id);
+  try {
+    return await forwardRequest(upstream, body, timeoutSec);
+  } finally {
+    endRequest(upstream.id);
+  }
+}
 
 async function forwardRequest(
   upstream: UpstreamConfig,

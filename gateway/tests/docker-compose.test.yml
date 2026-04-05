@@ -1,0 +1,58 @@
+services:
+  mock-a:
+    image: docker.1ms.run/library/node:22-alpine
+    container_name: mock-a
+    working_dir: /app
+    command: ["node", "mock-upstream.mjs"]
+    environment:
+      - UPSTREAM_ID=cloud-a
+      - PORT=19091
+      - DELAY_MS=0
+    volumes:
+      - ../tests/mock-upstream.mjs:/app/mock-upstream.mjs:ro
+
+  mock-b:
+    image: docker.1ms.run/library/node:22-alpine
+    container_name: mock-b
+    working_dir: /app
+    command: ["node", "mock-upstream.mjs"]
+    environment:
+      - UPSTREAM_ID=cloud-b
+      - PORT=19092
+      - DELAY_MS=1000
+    volumes:
+      - ../tests/mock-upstream.mjs:/app/mock-upstream.mjs:ro
+
+  mock-c:
+    image: docker.1ms.run/library/node:22-alpine
+    container_name: mock-c
+    working_dir: /app
+    command: ["node", "mock-upstream.mjs"]
+    environment:
+      - UPSTREAM_ID=local-c
+      - PORT=19093
+      - DELAY_MS=0
+    volumes:
+      - ../tests/mock-upstream.mjs:/app/mock-upstream.mjs:ro
+
+  gateway-test:
+    build:
+      context: ../..
+      dockerfile: gateway/Dockerfile
+    container_name: clawx-gateway-test
+    depends_on:
+      - mock-a
+      - mock-b
+      - mock-c
+    ports:
+      - "18070:8070"
+    environment:
+      - LOG_LEVEL=info
+      - CLAWX_GATEWAY_CONFIG=/app/gateway/gateway.config.json
+      - CLAWX_DB_PATH=/app/gateway/data/clawx.db
+    volumes:
+      - ../tests/gateway.config.docker.test.json:/app/gateway/gateway.config.json:ro
+      - clawx-db-test:/app/gateway/data
+
+volumes:
+  clawx-db-test:

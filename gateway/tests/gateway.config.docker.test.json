@@ -1,0 +1,125 @@
+{
+    "server":  {
+                   "port":  8070,
+                   "host":  "0.0.0.0"
+               },
+    "adminAuth":  {
+                      "username":  "admin",
+                      "password":  "admin123"
+                  },
+    "auth":  {
+                 "enabled":  true,
+                 "apiKeys":  {
+                                 "gw-static-test-key":  {
+                                                            "tenantId":  "static",
+                                                            "name":  "Static"
+                                                        }
+                             }
+             },
+    "registration":  {
+                         "enabled":  true,
+                         "token":  "reg-test-token"
+                     },
+    "upstreams":  [
+                      {
+                          "id":  "cloud-a",
+                          "provider":  "openai-compatible",
+                          "baseUrl":  "http://mock-a:19091",
+                          "apiKey":  "",
+                          "models":  [
+                                         "gw-default"
+                                     ],
+                          "modelAlias":  {
+                                             "gw-default":  "model-a"
+                                         },
+                          "weight":  1,
+                          "role":  "cloud",
+                          "enabled":  true
+                      },
+                      {
+                          "id":  "cloud-b",
+                          "provider":  "openai-compatible",
+                          "baseUrl":  "http://mock-b:19092",
+                          "apiKey":  "",
+                          "models":  [
+                                         "gw-default"
+                                     ],
+                          "modelAlias":  {
+                                             "gw-default":  "model-b"
+                                         },
+                          "weight":  3,
+                          "role":  "cloud",
+                          "enabled":  true
+                      },
+                      {
+                          "id":  "local-c",
+                          "provider":  "openai-compatible",
+                          "baseUrl":  "http://mock-c:19093",
+                          "apiKey":  "",
+                          "models":  [
+                                         "*"
+                                     ],
+                          "weight":  1,
+                          "role":  "local",
+                          "enabled":  true
+                      }
+                  ],
+    "loadBalancer":  {
+                         "strategy":  "least-connections",
+                         "timeoutSec":  10,
+                         "healthCheck":  {
+                                             "enabled":  true,
+                                             "intervalSec":  5,
+                                             "timeoutSec":  2
+                                         }
+                     },
+    "privacy":  {
+                    "enabled":  true,
+                    "s2Policy":  "proxy",
+                    "redaction":  {
+                                      "internalIp":  true,
+                                      "email":  true,
+                                      "envVar":  true,
+                                      "creditCard":  true
+                                  },
+                    "rules":  {
+                                  "keywords":  {
+                                                   "S2":  [
+                                                              "password",
+                                                              "api_key",
+                                                              "token"
+                                                          ],
+                                                   "S3":  [
+                                                              "private_key",
+                                                              "id_rsa",
+                                                              ".pem"
+                                                          ]
+                                               },
+                                  "patterns":  {
+                                                   "S2":  [
+                                                              "\\b(?:sk|key|token)-[A-Za-z0-9]{16,}\\b"
+                                                          ],
+                                                   "S3":  [
+                                                              "-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+                                                          ]
+                                               }
+                              },
+                    "checkpoints":  {
+                                        "onUserMessage":  [
+                                                              "ruleDetector"
+                                                          ],
+                                        "onToolCallProposed":  [
+                                                                   "ruleDetector"
+                                                               ],
+                                        "onToolCallExecuted":  [
+                                                                   "ruleDetector"
+                                                               ]
+                                    },
+                    "localModel":  {
+                                       "enabled":  false,
+                                       "type":  "openai-compatible",
+                                       "endpoint":  "http://localhost:11434",
+                                       "model":  "mock-local"
+                                   }
+                }
+}

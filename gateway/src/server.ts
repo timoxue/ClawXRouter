@@ -44,8 +44,8 @@ async function main() {
     }
   );
 
-  fastify.addHook("preHandler", createAdminAuthHook(config));
-  fastify.addHook("preHandler", createAuthMiddleware(config));
+  fastify.addHook("preHandler", createAdminAuthHook());
+  fastify.addHook("preHandler", createAuthMiddleware());
 
   await fastify.register(completionsRoute, { config });
   await fastify.register(modelsRoute, { config });

@@ -14,6 +14,10 @@
       "gw-team-b-replace-me": { "tenantId": "team-b", "name": "Team B" }
     }
   },
+  "registration": {
+    "enabled": false,
+    "token": "replace-with-strong-registration-token"
+  },
   "upstreams": [
     {
       "id": "anthropic-primary",
