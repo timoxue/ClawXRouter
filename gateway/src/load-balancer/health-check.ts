@@ -1,4 +1,5 @@
 import type { UpstreamConfig, UpstreamHealth } from "../types.js";
+import { buildOpenAIEndpoint } from "../utils/upstream-url.js";
 
 const healthMap = new Map<string, UpstreamHealth>();
 
@@ -73,7 +74,8 @@ export function startHealthChecks(
           ? { "x-api-key": u.apiKey, "anthropic-version": "2023-06-01" }
           : { Authorization: `Bearer ${u.apiKey}` };
 
-      const res = await fetch(`${u.baseUrl}/v1/models`, {
+      const probeUrl = buildOpenAIEndpoint(u.baseUrl, "models");
+      const res = await fetch(probeUrl, {
         headers,
         signal: AbortSignal.timeout(timeoutSec * 1000),
       });

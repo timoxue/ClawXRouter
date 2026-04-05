@@ -1,6 +1,6 @@
 services:
   mock-a:
-    image: docker.1ms.run/library/node:22-alpine
+    image: node:22-alpine
     container_name: mock-a
     working_dir: /app
     command: ["node", "mock-upstream.mjs"]
@@ -12,7 +12,7 @@ services:
       - ../tests/mock-upstream.mjs:/app/mock-upstream.mjs:ro
 
   mock-b:
-    image: docker.1ms.run/library/node:22-alpine
+    image: node:22-alpine
     container_name: mock-b
     working_dir: /app
     command: ["node", "mock-upstream.mjs"]
@@ -24,7 +24,7 @@ services:
       - ../tests/mock-upstream.mjs:/app/mock-upstream.mjs:ro
 
   mock-c:
-    image: docker.1ms.run/library/node:22-alpine
+    image: node:22-alpine
     container_name: mock-c
     working_dir: /app
     command: ["node", "mock-upstream.mjs"]
@@ -39,6 +39,8 @@ services:
     build:
       context: ../..
       dockerfile: gateway/Dockerfile
+      args:
+        NODE_IMAGE: node:22-alpine
     container_name: clawx-gateway-test
     depends_on:
       - mock-a

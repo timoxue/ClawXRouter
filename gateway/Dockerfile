@@ -1,4 +1,5 @@
-FROM docker.1ms.run/library/node:22-alpine
+ARG NODE_IMAGE=docker.1ms.run/library/node:22-alpine
+FROM ${NODE_IMAGE}
 
 WORKDIR /app
 

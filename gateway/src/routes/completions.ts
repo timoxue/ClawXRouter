@@ -5,6 +5,7 @@ import { beginRequest, endRequest, selectUpstream } from "../load-balancer/strat
 import { getHealthyIds, markUnhealthy } from "../load-balancer/health-check.js";
 import { getOrCreateSession, updateSession } from "../session/memory-store.js";
 import { loadConfig } from "../config/store.js";
+import { buildOpenAIEndpoint } from "../utils/upstream-url.js";
 import { redactSensitiveInfo } from "../../../clawxrouter/src/utils.js";
 import type { GatewayConfig, CompletionsBody, UpstreamConfig } from "../types.js";
 
@@ -177,8 +178,7 @@ function getLocalUpstream(upstreams: UpstreamConfig[]): UpstreamConfig | null {
       (u) =>
         u.enabled &&
         (u.baseUrl.includes("localhost") ||
-          u.baseUrl.includes("127.0.0.1") ||
-          u.provider === "openai-compatible")
+          u.baseUrl.includes("127.0.0.1"))
     ) ??
     null
   );
@@ -206,7 +206,7 @@ async function forwardRequest(
   body: CompletionsBody,
   timeoutSec: number
 ): Promise<ForwardResult> {
-  const url = `${upstream.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+  const url = buildOpenAIEndpoint(upstream.baseUrl, "chat/completions");
   const headers = buildUpstreamHeaders(upstream);
 
   let response: Response;

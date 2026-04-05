@@ -65,7 +65,7 @@
                       }
                   ],
     "loadBalancer":  {
-                         "strategy":  "least-connections",
+                         "strategy":  "round-robin",
                          "timeoutSec":  10,
                          "healthCheck":  {
                                              "enabled":  true,

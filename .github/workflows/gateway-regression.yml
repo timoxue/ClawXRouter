@@ -1,0 +1,44 @@
+name: Gateway Regression
+
+on:
+  pull_request:
+    paths:
+      - 'gateway/**'
+      - 'clawxrouter/src/**'
+      - '.github/workflows/gateway-regression.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'gateway/**'
+      - 'clawxrouter/src/**'
+      - '.github/workflows/gateway-regression.yml'
+
+jobs:
+  gateway-regression:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build and Start Test Stack
+        run: docker compose -f gateway/tests/docker-compose.test.yml up --build -d
+
+      - name: Run Gateway Regression
+        run: node gateway/tests/run-regression.mjs
+
+      - name: Dump Docker Logs on Failure
+        if: failure()
+        run: |
+          docker compose -f gateway/tests/docker-compose.test.yml ps
+          docker compose -f gateway/tests/docker-compose.test.yml logs --tail=300
+
+      - name: Teardown Test Stack
+        if: always()
+        run: docker compose -f gateway/tests/docker-compose.test.yml down -v
